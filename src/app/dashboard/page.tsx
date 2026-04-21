@@ -8,6 +8,7 @@ import {
   BarChart, Bar, CartesianGrid, PieChart, Pie, Cell, Legend
 } from "recharts"
 import { CheckCircle2, Clock, Ban, ListTodo, TrendingUp, TrendingDown, Wallet, ArrowUpRight } from "lucide-react"
+import MotivationBanner from "@/components/layout/MotivationBanner"
 
 const PIE_COLORS = ["#6b7280", "#b45309", "#2d6a4f", "#c0392b"]
 
@@ -133,6 +134,8 @@ export default function HomePage() {
           </div>
         ))}
       </div>
+
+      <MotivationBanner page="home" />
 
       {/* Charts row */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
