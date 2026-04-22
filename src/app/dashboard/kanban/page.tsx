@@ -28,6 +28,14 @@ const PRIO_BG: Record<string, string> = {
 }
 
 const EMPTY: Partial<KanbanTask> = { title: "", description: "", status: "todo", priority: "medium", tags: [] }
+
+const PRESET_TAGS = [
+  { label: "Supporting PHI",   color: "#1e40af", bg: "#dbeafe" },
+  { label: "Supporting Lokal", color: "#065f46", bg: "#d1fae5" },
+  { label: "Discuss",          color: "#92400e", bg: "#fef3c7" },
+  { label: "Document",         color: "#5b21b6", bg: "#ede9fe" },
+  { label: "Weekly Task",      color: "#9f1239", bg: "#ffe4e6" },
+]
 type TabView = "board" | "calendar"
 type ColKey = "todo" | "inprogress" | "done" | "blocked"
 
@@ -53,7 +61,6 @@ export default function KanbanPage() {
   const [tab, setTab]               = useState<TabView>("board")
   const [modal, setModal]           = useState(false)
   const [form, setForm]             = useState({ ...EMPTY, date })
-  const [tagInput, setTagInput]     = useState("")
   const [saving, setSaving]         = useState(false)
   const [dragging, setDragging]     = useState<string | null>(null)
   const [calYear, setCalYear]       = useState(new Date().getFullYear())
@@ -123,12 +130,6 @@ export default function KanbanPage() {
     }).eq("id", taskId)
     loadBoard()
     if (tab === "calendar") loadCalendar()
-  }
-
-  const addTag = () => {
-    if (!tagInput.trim()) return
-    setForm(f => ({ ...f, tags: [...(f.tags || []), tagInput.trim()] }))
-    setTagInput("")
   }
 
   // ── Generate Daily Report ─────────────────────────────────
@@ -322,9 +323,14 @@ ${todoList}`
                         </div>
                         {(task.tags?.length || 0) > 0 && (
                           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "8px" }}>
-                            {task.tags?.map(tag => (
-                              <span key={tag} style={{ fontSize: "10px", padding: "1px 7px", borderRadius: "99px", background: "var(--accent-muted)", color: "var(--accent)" }}>#{tag}</span>
-                            ))}
+                            {task.tags?.map(tag => {
+                              const preset = PRESET_TAGS.find(p => p.label === tag)
+                              return (
+                                <span key={tag} style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "99px", fontWeight: 600, background: preset?.bg || "var(--accent-muted)", color: preset?.color || "var(--accent)" }}>
+                                  {tag}
+                                </span>
+                              )
+                            })}
                           </div>
                         )}
                         <div style={{ display: "flex", gap: "4px", marginTop: "10px", flexWrap: "wrap" }}>
@@ -514,21 +520,33 @@ ${todoList}`
                 </div>
               </div>
               <div>
-                <div className="label" style={{ marginBottom: "6px" }}>Tags</div>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <input className="input" placeholder="Tambah tag..." value={tagInput} onChange={e => setTagInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addTag()} />
-                  <button className="btn btn-ghost" type="button" onClick={addTag}><Plus size={14} /></button>
+                <div className="label" style={{ marginBottom: "8px" }}>Tags</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                  {PRESET_TAGS.map(tag => {
+                    const active = form.tags?.includes(tag.label)
+                    return (
+                      <button key={tag.label} type="button"
+                        onClick={() => setForm(f => ({
+                          ...f,
+                          tags: active
+                            ? f.tags?.filter(t => t !== tag.label)
+                            : [...(f.tags || []), tag.label]
+                        }))}
+                        style={{
+                          padding: "5px 12px", borderRadius: "99px", cursor: "pointer",
+                          fontSize: "12px", fontWeight: 600,
+                          fontFamily: "'Plus Jakarta Sans', sans-serif",
+                          border: `1.5px solid ${active ? tag.color : tag.color + "40"}`,
+                          background: active ? tag.bg : "transparent",
+                          color: active ? tag.color : "var(--text3)",
+                          transition: "all 0.15s",
+                          transform: active ? "scale(1.03)" : "scale(1)",
+                        }}>
+                        {active ? "✓ " : ""}{tag.label}
+                      </button>
+                    )
+                  })}
                 </div>
-                {(form.tags?.length || 0) > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
-                    {form.tags?.map(tag => (
-                      <span key={tag} style={{ background: "var(--accent-muted)", color: "var(--accent)", fontSize: "12px", padding: "2px 9px", borderRadius: "99px", cursor: "pointer" }}
-                        onClick={() => setForm(f => ({ ...f, tags: f.tags?.filter(t => t !== tag) }))}>
-                        #{tag} ×
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
               <div style={{ display: "flex", gap: "10px" }}>
                 <button className="btn btn-ghost" onClick={() => setModal(false)} style={{ flex: 1 }}>Batal</button>

@@ -1,0 +1,21 @@
+{
+  "name": "Elite Global",
+  "short_name": "Elite Global",
+  "description": "Personal Productivity Dashboard",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#f5f5f2",
+  "theme_color": "#2d6a4f",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "32x32",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
