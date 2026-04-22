@@ -178,30 +178,45 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
     setIsGenerating(false)
   }
 
-  // ── Upload referensi dokumen ───────────────────────────────────
+  // ── Upload referensi dokumen (multiple files) ────────────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
     setUploadingDoc(true)
 
-    // Baca file sebagai text
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      const content = ev.target?.result as string
+    let successCount = 0
+    let failCount = 0
 
-      // Simpan ke ai_context dengan category = reference_doc
-      await supabase.from("ai_context").insert([{
-        name: file.name.replace(/\.[^.]+$/, ""),
-        description: `Uploaded reference document`,
-        content: content.slice(0, 8000), // limit 8000 chars
-        category: "reference_doc",
-      }])
-
-      load()
-      setUploadingDoc(false)
-      alert(`✅ "${file.name}" berhasil diupload sebagai referensi AI!`)
+    for (const file of files) {
+      await new Promise<void>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = async (ev) => {
+          try {
+            const text = ev.target?.result as string
+            await supabase.from("ai_context").insert([{
+              name: file.name.replace(/\.[^.]+$/, ""),
+              description: "Uploaded reference document",
+              content: text.slice(0, 8000),
+              category: "reference_doc",
+            }])
+            successCount++
+          } catch {
+            failCount++
+          }
+          resolve()
+        }
+        reader.onerror = () => { failCount++; resolve() }
+        reader.readAsText(file)
+      })
     }
-    reader.readAsText(file)
+
+    await load()
+    setUploadingDoc(false)
+    if (failCount === 0) {
+      alert(`✅ ${successCount} file berhasil diupload sebagai referensi AI!`)
+    } else {
+      alert(`✅ ${successCount} berhasil, ❌ ${failCount} gagal.`)
+    }
     e.target.value = ""
   }
 
@@ -267,9 +282,9 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
 
           {/* Upload button */}
           <div style={{ marginBottom: "16px" }}>
-            <input ref={fileInputRef} type="file" accept=".txt" style={{ display: "none" }} onChange={handleFileUpload} />
+            <input ref={fileInputRef} type="file" accept=".txt" multiple style={{ display: "none" }} onChange={handleFileUpload} />
             <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} disabled={uploadingDoc}>
-              {uploadingDoc ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={14} /> Upload Dokumen Referensi (.txt)</>}
+              {uploadingDoc ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={14} /> Upload Dokumen Referensi (.txt) — bisa pilih banyak</>}
             </button>
           </div>
 

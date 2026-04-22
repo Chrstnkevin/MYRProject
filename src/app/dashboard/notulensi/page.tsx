@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { Plus, FileText, Trash2, X, ChevronRight, Check, MapPin, Clock, Users } from "lucide-react"
+import { Plus, FileText, Trash2, X, ChevronRight, Check, MapPin, Clock, Users, Upload, RefreshCw } from "lucide-react"
+import { useRef } from "react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 // ── Types ──────────────────────────────────────────────────────
@@ -59,6 +60,10 @@ export default function NotulensiPage() {
   const [attendeeInput, setAttendeeInput] = useState("")
   const [saving, setSaving]   = useState(false)
   const [numAttendees, setNumAttendees] = useState(1)
+  const [uploading, setUploading]     = useState(false)
+  const [parseError, setParseError]   = useState("")
+  const [uploadQueue, setUploadQueue] = useState<string[]>([])  // list nama file dalam antrian
+  const fileInputRef                  = useRef<HTMLInputElement>(null)
 
   const load = async () => {
     const { data } = await supabase.from("notulensi").select("*").order("date", { ascending: false })
@@ -94,6 +99,115 @@ export default function NotulensiPage() {
     setSelected(s => s?.id === noteId ? { ...s, action_items: updated } : s)
   }
 
+
+  // ── Handle multiple file upload — process one by one ──────────
+  const handleMultipleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    e.target.value = ""
+    if (files.length === 1) {
+      parseTxtToForm(files[0])
+      return
+    }
+    // Multiple: show queue info and process first
+    setUploadQueue(files.map(f => f.name))
+    parseTxtToForm(files[0], files.slice(1))
+  }
+
+  // ── Parse .txt file to notulensi form ────────────────────────
+  const parseTxtToForm = async (file: File, remaining: File[] = []) => {
+    setUploading(true)
+    setParseError("")
+    try {
+      const text = await file.text()
+      const lines = text.split("\n")
+
+      const get = (label: string) => {
+        const line = lines.find(l => l.toLowerCase().startsWith(label.toLowerCase() + ":"))
+        return line ? line.slice(label.length + 1).trim() : ""
+      }
+
+      const getSection = (startLabel: string, endLabels: string[]): string => {
+        const startIdx = lines.findIndex(l => l.toLowerCase().includes(startLabel.toLowerCase()))
+        if (startIdx === -1) return ""
+        let endIdx = lines.length
+        for (const end of endLabels) {
+          const idx = lines.findIndex((l, i) => i > startIdx && l.toLowerCase().includes(end.toLowerCase()))
+          if (idx !== -1 && idx < endIdx) endIdx = idx
+        }
+        return lines.slice(startIdx + 1, endIdx)
+          .filter(l => l.trim())
+          .map(l => l.replace(/^[-*•\d+\.]+\s*/, "").trim())
+          .filter(Boolean)
+          .join("\n")
+      }
+
+      const getBullets = (startLabel: string, endLabels: string[]): MainPoint[] => {
+        const section = getSection(startLabel, endLabels)
+        return section.split("\n").filter(Boolean).map(text => ({ id: crypto.randomUUID(), text }))
+      }
+
+      // Parse action items section
+      const getActionItems = (): ActionRow[] => {
+        const startIdx = lines.findIndex(l => l.toLowerCase().includes("action item"))
+        if (startIdx === -1) return [{ id: crypto.randomUUID(), text: "", pic: "", deadline: "", done: false }]
+        const rows: ActionRow[] = []
+        for (let i = startIdx + 1; i < lines.length; i++) {
+          const l = lines[i].trim()
+          if (!l) continue
+          if (l.toLowerCase().includes("catatan tambahan")) break
+          // Try parse format: "- Teks | PIC: xxx | Deadline: xxx"
+          const cleaned = l.replace(/^[-*•\d+\.]+\s*/, "")
+          const picMatch = cleaned.match(/pic[:\s]+([^|\n]+)/i)
+          const dlMatch  = cleaned.match(/deadline[:\s]+([^|\n]+)/i)
+          const textPart = cleaned.split(/\|/)[0].replace(/pic[:\s]+.*/i,"").replace(/deadline[:\s]+.*/i,"").trim()
+          rows.push({
+            id: crypto.randomUUID(),
+            text: textPart || cleaned,
+            pic: picMatch?.[1]?.trim() || "",
+            deadline: dlMatch?.[1]?.trim() || "",
+            done: false,
+          })
+        }
+        return rows.length > 0 ? rows : [{ id: crypto.randomUUID(), text: "", pic: "", deadline: "", done: false }]
+      }
+
+      const parsed = {
+        title:     get("judul") || get("title") || file.name.replace(/\.txt$/, ""),
+        date:      (() => {
+          const raw = get("tanggal") || get("date")
+          if (!raw) return new Date().toISOString().split("T")[0]
+          const d = new Date(raw)
+          return isNaN(d.getTime()) ? new Date().toISOString().split("T")[0] : d.toISOString().split("T")[0]
+        })(),
+        time:      get("waktu") || get("time") || "",
+        location:  get("lokasi") || get("location") || get("tempat") || "",
+        attendees: (() => {
+          const raw = get("peserta") || get("attendees")
+          return raw ? raw.split(/[,;]/).map(s => s.trim()).filter(Boolean) : []
+        })(),
+        topic:     get("topik") || get("topic") || get("agenda") || "",
+        background: getSection("background", ["kondisi saat ini","current","main point","point penting","kendala","action"]),
+        tujuan:    get("tujuan") || get("tujuan rapat") || "",
+        main_points: getBullets("main point", ["kendala","action item","catatan"]).length > 0
+          ? getBullets("main point", ["kendala","action item","catatan"])
+          : [{ id: crypto.randomUUID(), text: "" }],
+        kendala:   getBullets("kendala", ["action item","catatan"]),
+        action_items: getActionItems(),
+        catatan_tambahan: getSection("catatan tambahan", []),
+      }
+
+      setForm(parsed)
+      setUploadQueue(remaining.map(f => f.name))
+      setView("form")
+      setStep(2)
+    } catch (err) {
+      setParseError("Gagal membaca file. Pastikan format .txt sudah sesuai.")
+      console.error(err)
+    }
+    setUploading(false)
+  }
+
   const save = async () => {
     if (!form.title || !form.date) return
     setSaving(true)
@@ -122,12 +236,40 @@ export default function NotulensiPage() {
   if (view === "list") return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }} className="animate-fade">
       <MotivationBanner page="notulensi" />
+
+      {parseError && (
+        <div style={{ background: "#fde8e8", border: "1px solid #fca5a5", borderRadius: "var(--radius-sm)", padding: "10px 14px", fontSize: "12px", color: "#c0392b", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          ❌ {parseError}
+          <button onClick={() => setParseError("")} style={{ background: "none", border: "none", cursor: "pointer", color: "#c0392b" }}>×</button>
+        </div>
+      )}
+
+      {uploadQueue.length > 0 && (
+        <div style={{ background: "var(--accent-muted)", border: "1px solid var(--accent-light)", borderRadius: "var(--radius-sm)", padding: "10px 14px", fontSize: "12px", color: "var(--accent)" }}>
+          <div style={{ fontWeight: 700, marginBottom: "6px" }}>📂 Antrian Upload ({uploadQueue.length} file tersisa)</div>
+          {uploadQueue.map((name, i) => (
+            <div key={name} style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "3px" }}>
+              <span style={{ opacity: 0.6 }}>{i + 1}.</span> {name}
+            </div>
+          ))}
+          <div style={{ marginTop: "8px", fontSize: "11px", opacity: 0.8 }}>
+            Simpan notulensi saat ini, lalu klik <strong>Upload .txt</strong> lagi untuk lanjut ke file berikutnya. Atau klik tombol di bawah untuk proses file selanjutnya langsung.
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
           <div style={{ fontSize: "18px", fontWeight: 800 }}>Notulensi Rapat</div>
           <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>{list.length} catatan tersimpan</div>
         </div>
-        <button className="btn btn-primary" onClick={openNew}><Plus size={16} /> Buat Notulensi</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <input ref={fileInputRef} type="file" accept=".txt" multiple style={{ display: "none" }} onChange={handleMultipleUpload} />
+          <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+            {uploading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Membaca...</> : <><Upload size={14} /> Upload .txt</>}
+          </button>
+          <button className="btn btn-primary" onClick={openNew}><Plus size={16} /> Buat Notulensi</button>
+        </div>
       </div>
 
       {list.length === 0 ? (
@@ -173,6 +315,7 @@ export default function NotulensiPage() {
           ))}
         </div>
       )}
+    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 
