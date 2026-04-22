@@ -48,22 +48,19 @@ const EMPTY_DOC = {
   product_scope: "", global_flow: "", epics: [] as Epic[], status: "draft"
 }
 
-// ── AI Call ───────────────────────────────────────────────────
+// ── AI Call — via internal API route (key aman di server) ────
 async function callAI(systemPrompt: string, userPrompt: string): Promise<string> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const response = await fetch("/api/ai", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }]
-    })
+    body: JSON.stringify({ systemPrompt, userPrompt }),
   })
+  if (!response.ok) {
+    const err = await response.json()
+    throw new Error(err.error || "AI call failed")
+  }
   const data = await response.json()
-  return data.content?.map((c: { type: string; text?: string }) =>
-    c.type === "text" ? c.text : ""
-  ).join("").trim() || ""
+  return data.text || ""
 }
 
 // ── Main ──────────────────────────────────────────────────────
@@ -118,121 +115,63 @@ ${r.content.slice(0, 1500)}
     return basePrompt + refSection
   }
 
-  // ── GENERATE SEMUA SEKALIGUS ──────────────────────────────────
+  // ── GENERATE SEMUA DALAM 1 REQUEST (hemat token) ────────────
   const generateAll = async () => {
     if (!form.project || !form.modul || !context.trim()) return
 
     setIsGenerating(true)
     setView("result")
-    const systemPrompt = buildSystemPrompt()
+    setGenStep("\u2728 AI sedang menulis dokumen lengkap...")
 
-    const baseInfo = `Project: ${form.project}
+    const systemPrompt = buildSystemPrompt()
+    const numE = numEpics
+
+    const prompt = `Project: ${form.project}
 Modul: ${form.modul}
 Type: ${form.type}
 Request By: ${form.request_by}
 
-KONTEKS KEBUTUHAN DARI USER:
-${context}`
+KONTEKS KEBUTUHAN:
+${context}
+
+Buatkan dokumen requirement lengkap dalam format JSON. Balas HANYA dengan JSON valid:
+
+{
+  "background": "paragraf latar belakang min 3 kalimat",
+  "current_conditions": "paragraf kondisi saat ini min 3 kalimat",
+  "product_perspective": "paragraf solusi produk min 3 kalimat",
+  "product_scope": "- poin 1\\n- poin 2\\n- poin 3",
+  "global_flow": "paragraf alur proses end-to-end min 4 kalimat",
+  "epics": [
+    {
+      "code": "S26-XXX-MTX_FiturName",
+      "userStory": "Sebagai seorang Admin Saya ingin fitur Sehingga manfaat",
+      "acceptanceCriteria": "- Kriteria 1\\n- Kriteria 2\\n- Kriteria 3"
+    }
+  ]
+}
+
+Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web admin Matrix, SFA untuk mobile salesman.`
 
     try {
-      // 1. Background
-      setGenStep("✍️ Menulis Background...")
-      const bg = await callAI(systemPrompt, `${baseInfo}
-
-Buatkan paragraf Background untuk dokumen requirement ini.
-Jelaskan latar belakang kebutuhan bisnis yang memotivasi pengembangan modul ini.
-Minimal 3 kalimat, formal dan teknis. Langsung tulis paragrafnya saja.`)
-      setForm(f => ({ ...f, background: bg }))
-
-      // 2. Current Conditions
-      setGenStep("📋 Menulis Current Conditions...")
-      const cc = await callAI(systemPrompt, `${baseInfo}
-
-Background yang sudah ditulis:
-${bg}
-
-Buatkan paragraf Current Conditions.
-Jelaskan kondisi saat ini yang menjadi masalah/gap yang perlu diselesaikan.
-Minimal 3 kalimat. Langsung tulis paragrafnya saja.`)
-      setForm(f => ({ ...f, current_conditions: cc }))
-
-      // 3. Product Perspective
-      setGenStep("💡 Menulis Product Perspective...")
-      const pp = await callAI(systemPrompt, `${baseInfo}
-
-Background: ${bg}
-Current Conditions: ${cc}
-
-Buatkan paragraf Product Perspective.
-Jelaskan solusi produk yang diusulkan untuk mengatasi masalah tersebut.
-Minimal 3 kalimat. Langsung tulis paragrafnya saja.`)
-      setForm(f => ({ ...f, product_perspective: pp }))
-
-      // 4. Product Scope
-      setGenStep("🎯 Menulis Product Scope...")
-      const ps = await callAI(systemPrompt, `${baseInfo}
-
-Buatkan Product Scope dalam format bullet points (gunakan dash -).
-Jelaskan ruang lingkup produk yang akan dikembangkan. Maksimal 5 poin.
-Langsung tulis bullet pointsnya saja.`)
-      setForm(f => ({ ...f, product_scope: ps }))
-
-      // 5. Global Flow
-      setGenStep("🔄 Menulis Global Flow Process...")
-      const gf = await callAI(systemPrompt, `${baseInfo}
-
-Product Scope: ${ps}
-
-Buatkan paragraf Global Flow Process.
-Deskripsikan alur proses end-to-end dari konfigurasi admin hingga penggunaan salesman di lapangan.
-Minimal 4 kalimat. Langsung tulis paragrafnya saja.`)
-      setForm(f => ({ ...f, global_flow: gf }))
-
-      // 6. Generate EPICs
-      setGenStep(`⚡ Membuat ${numEpics} EPIC & User Stories...`)
-      const epicPrompt = `${baseInfo}
-
-Background: ${bg}
-Product Scope: ${ps}
-
-Buatkan ${numEpics} EPIC untuk modul ini dengan format JSON array berikut:
-[
-  {
-    "code": "S26-XXX-[SYSTEM]_[FiturName]",
-    "userStory": "Sebagai seorang [Admin/Sales] Saya ingin [fitur] Sehingga [manfaat]",
-    "acceptanceCriteria": "- Kriteria 1\\n- Kriteria 2\\n- Kriteria 3"
-  }
-]
-
-Pastikan:
-- Code epic menggunakan format yang benar (MTX untuk Matrix/web, SFA untuk mobile)
-- User story mengikuti format "Sebagai... Saya ingin... Sehingga..."
-- Acceptance Criteria spesifik dan testable
-- Sesuaikan dengan konteks modul yang diminta
-
-Balas HANYA dengan JSON array saja, tanpa penjelasan tambahan.`
-
-      const epicRaw = await callAI(systemPrompt, epicPrompt)
-
-      try {
-        const clean = epicRaw.replace(/```json|```/g, "").trim()
-        const parsed = JSON.parse(clean)
-        const epics: Epic[] = parsed.map((e: Omit<Epic, "id">) => ({ ...e, id: crypto.randomUUID() }))
-        setForm(f => ({ ...f, epics }))
-      } catch {
-        // Kalau JSON gagal parse, buat epic placeholder
-        const fallbackEpics: Epic[] = Array.from({ length: numEpics }, (_, i) => ({
-          id: crypto.randomUUID(),
-          code: `S26-XXX-SFA_${form.modul.replace(/\s/g, "")}${i + 1}`,
-          userStory: "",
-          acceptanceCriteria: "",
-        }))
-        setForm(f => ({ ...f, epics: fallbackEpics }))
-      }
-
-      setGenStep("✅ Selesai!")
+      const raw = await callAI(systemPrompt, prompt)
+      const clean = raw.replace(/\`\`\`json|\`\`\`/g, "").trim()
+      const parsed = JSON.parse(clean)
+      const epics: Epic[] = (parsed.epics || []).map((e: Omit<Epic, "id">) => ({
+        ...e, id: crypto.randomUUID()
+      }))
+      setForm(f => ({
+        ...f,
+        background: parsed.background || "",
+        current_conditions: parsed.current_conditions || "",
+        product_perspective: parsed.product_perspective || "",
+        product_scope: parsed.product_scope || "",
+        global_flow: parsed.global_flow || "",
+        epics,
+      }))
+      setGenStep("\u2705 Selesai!")
     } catch {
-      setGenStep("❌ Gagal generate. Cek koneksi internet.")
+      setGenStep("\u274c Gagal parse hasil AI. Coba generate ulang.")
     }
 
     setIsGenerating(false)
