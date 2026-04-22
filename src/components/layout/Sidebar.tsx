@@ -1,15 +1,15 @@
 "use client"
 
 import { usePathname, useRouter } from "next/navigation"
-import { Home, FileText, DollarSign, LayoutGrid, GitBranch, X, Sparkles, LogOut, ScrollText } from "lucide-react"
+import { Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText, X, Sparkles, LogOut } from "lucide-react"
 
 const NAV = [
-  { icon: Home,       label: "Home",        path: "/dashboard",            desc: "Overview harian" },
-  { icon: FileText,   label: "Notulensi",   path: "/dashboard/notulensi",  desc: "Catatan rapat" },
-  { icon: DollarSign, label: "Finance",     path: "/dashboard/finance",    desc: "Keuangan" },
-  { icon: LayoutGrid, label: "Kanban",      path: "/dashboard/kanban",     desc: "Task board" },
-  { icon: GitBranch,  label: "User Flow",   path: "/dashboard/userflow",   desc: "Diagram" },
-  { icon: ScrollText, label: "Doc Req",     path: "/dashboard/docreq",     desc: "AI Doc Generator" },
+  { icon: Home,       label: "Home",      path: "/dashboard",           desc: "Overview harian",        ai: false },
+  { icon: FileText,   label: "Notulensi", path: "/dashboard/notulensi", desc: "Catatan rapat",          ai: false },
+  { icon: DollarSign, label: "Finance",   path: "/dashboard/finance",   desc: "Keuangan",               ai: false },
+  { icon: LayoutGrid, label: "Kanban",    path: "/dashboard/kanban",    desc: "Task board",             ai: false },
+  { icon: GitBranch,  label: "User Flow", path: "/dashboard/userflow",  desc: "AI Flowchart Generator", ai: true  },
+  { icon: ScrollText, label: "Doc Req",   path: "/dashboard/docreq",    desc: "AI Doc Generator",       ai: true  },
 ]
 
 interface Props { isOpen: boolean; onClose: () => void }
@@ -58,7 +58,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
           </div>
         </div>
 
-        {/* Date pill */}
+        {/* Date */}
         <div style={{ padding: "14px 16px 0" }}>
           <div style={{ background: "var(--accent-muted)", borderRadius: "var(--radius-sm)", padding: "10px 14px", border: "1px solid var(--accent-light)" }}>
             <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--accent2)", letterSpacing: "0.06em", textTransform: "uppercase" }}>{dayName}</div>
@@ -69,25 +69,18 @@ export default function Sidebar({ isOpen, onClose }: Props) {
         {/* Nav */}
         <nav style={{ flex: 1, padding: "14px 12px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
           <div className="label" style={{ padding: "4px 8px 8px" }}>Menu</div>
-          {NAV.map(({ icon: Icon, label, path, desc }) => {
+          {NAV.map(({ icon: Icon, label, path, desc, ai }) => {
             const active = pathname === path || (path !== "/dashboard" && pathname.startsWith(path))
-            const isNew = path === "/dashboard/docreq"
             return (
               <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
-                style={{
-                  display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px",
-                  borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer",
-                  width: "100%", textAlign: "left", transition: "all 0.15s",
-                  background: active ? "var(--accent-muted)" : "transparent",
-                  fontFamily: "'Plus Jakarta Sans', sans-serif",
-                }}>
+                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                 <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
                   <Icon size={16} color={active ? "white" : "var(--text3)"} />
                 </div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)", display: "flex", alignItems: "center", gap: "6px" }}>
                     {label}
-                    {isNew && <span style={{ fontSize: "9px", background: "var(--accent)", color: "white", padding: "1px 5px", borderRadius: "99px", fontWeight: 700 }}>AI</span>}
+                    {ai && <span style={{ fontSize: "9px", background: "var(--accent)", color: "white", padding: "1px 5px", borderRadius: "99px", fontWeight: 700 }}>AI</span>}
                   </div>
                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
                 </div>

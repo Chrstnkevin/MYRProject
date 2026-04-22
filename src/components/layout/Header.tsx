@@ -4,12 +4,11 @@ import { Menu, Bell } from "lucide-react"
 import { usePathname } from "next/navigation"
 
 const PAGE_TITLES: Record<string, { title: string; sub: string }> = {
-  "/dashboard":           { title: "Dashboard",           sub: "Selamat datang kembali 👋" },
-  "/dashboard/notulensi": { title: "Notulensi",           sub: "Catatan rapat & action items" },
-  "/dashboard/finance":   { title: "Finance Tracker",     sub: "Pantau pemasukan & pengeluaran" },
-  "/dashboard/kanban":    { title: "Kanban Board",        sub: "Kelola tugas harian kamu" },
-  "/dashboard/userflow":  { title: "User Flow",           sub: "Diagram & flow editor" },
-  "/dashboard/docreq":    { title: "Doc Requirement",     sub: "AI-powered requirement generator ✨" },
+  "/dashboard":           { title: "Dashboard",        sub: "Selamat datang kembali 👋" },
+  "/dashboard/notulensi": { title: "Notulensi",        sub: "Catatan rapat & action items" },
+  "/dashboard/finance":   { title: "Finance Tracker",  sub: "Pantau pemasukan & pengeluaran" },
+  "/dashboard/kanban":    { title: "Kanban Board",     sub: "Kelola tugas harian kamu" },
+  "/dashboard/docreq":    { title: "Doc Requirement",  sub: "AI-powered requirement generator ✨" },
 }
 
 interface Props { onToggleSidebar: () => void; sidebarOpen: boolean }
