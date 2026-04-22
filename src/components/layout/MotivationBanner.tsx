@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -41,6 +41,15 @@ const QUOTES: Record<PageType, string[]> = {
     "Setiap task yang selesai adalah kemenangan kecil yang layak dirayakan.",
     "Progress, bukan perfection. Gerak terus.",
   ],
+  docreq: [
+    "Dokumen yang baik adalah fondasi produk yang hebat.",
+    "Requirement yang jelas = development yang lancar.",
+    "Tulis sekarang, debug lebih sedikit nanti.",
+    "Setiap fitur hebat dimulai dari requirement yang solid.",
+    "AI membantu menulis, kamu yang menentukan arah.",
+    "Dokumentasi bukan hambatan — ini investasi tim.",
+    "Requirement yang detail menyelamatkan berjam-jam meeting.",
+  ],
   userflow: [
     "Desain yang baik bukan soal indah — tapi soal seberapa mudah pengguna tidak tersesat.",
     "Alur yang jelas adalah kasih sayang kepada pengguna.",
@@ -61,6 +70,7 @@ const CONFIG: Record<PageType, {
   notulensi: { label: "Rapat Beres, Catatan Jelas",    emoji: "✍️",  bg: "linear-gradient(135deg,#fdf4ff,#fae8ff)", border: "#e9d5ff", labelColor: "#9333ea", textColor: "#581c87", primary: "#c084fc", light: "#e9d5ff" },
   finance:   { label: "Dompet Sehat, Pikiran Tenang",  emoji: "💰",  bg: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "#bfdbfe", labelColor: "#2563eb", textColor: "#1e3a8a", primary: "#3b82f6", light: "#93c5fd" },
   kanban:    { label: "Mode: Produktif Abis",          emoji: "🔥",  bg: "linear-gradient(135deg,#fffbeb,#fef3c7)", border: "#fde68a", labelColor: "#d97706", textColor: "#92400e", primary: "#f59e0b", light: "#fde68a" },
+  docreq:    { label: "Requirement Engineer 📋",    emoji: "✍️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "var(--accent-light)", labelColor: "var(--accent)", textColor: "var(--accent)", primary: "var(--accent)", light: "var(--accent-light)" },
   userflow:  { label: "Arsitek Alur Terbaik",          emoji: "🎨",  bg: "linear-gradient(135deg,#fff7ed,#ffedd5)", border: "#fed7aa", labelColor: "#ea580c", textColor: "#7c2d12", primary: "#fb923c", light: "#fdba74" },
 }
 
@@ -222,6 +232,34 @@ function UserFlowSVG({ p, l }: { p: string; l: string }) {
   )
 }
 
+
+function DocReqSVG({ p, l }: { p: string; l: string }) {
+  return (
+    <svg width="80" height="70" viewBox="0 0 80 70" fill="none">
+      <style>{`
+        @keyframes dr-float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+        @keyframes dr-blink { 0%,90%,100%{opacity:1} 95%{opacity:0} }
+        @keyframes dr-write { 0%{width:0} 100%{width:32px} }
+        .dr-doc { animation: dr-float 3s ease-in-out infinite }
+        .dr-cursor { animation: dr-blink 1.2s step-end infinite }
+      `}</style>
+      <g className="dr-doc">
+        <rect x="10" y="8" width="44" height="54" rx="4" fill={l} stroke={p} strokeWidth="1.5"/>
+        <rect x="16" y="18" width="32" height="3" rx="1.5" fill={p} opacity="0.4"/>
+        <rect x="16" y="25" width="26" height="2.5" rx="1.25" fill={p} opacity="0.3"/>
+        <rect x="16" y="31" width="30" height="2.5" rx="1.25" fill={p} opacity="0.3"/>
+        <rect x="16" y="37" width="20" height="2.5" rx="1.25" fill={p} opacity="0.3"/>
+        <rect x="16" y="44" width="28" height="2.5" rx="1.25" fill={p} opacity="0.2"/>
+      </g>
+      {/* Sparkle AI */}
+      <circle cx="62" cy="20" r="12" fill={p} opacity="0.15"/>
+      <text x="62" y="25" textAnchor="middle" fontSize="14">✨</text>
+      {/* Cursor */}
+      <rect className="dr-cursor" x="46" y="37" width="2" height="10" rx="1" fill={p}/>
+    </svg>
+  )
+}
+
 export default function MotivationBanner({ page }: { page: PageType }) {
   const c = CONFIG[page]
   const quote = getDailyQuote(page)
@@ -250,6 +288,7 @@ export default function MotivationBanner({ page }: { page: PageType }) {
       {page === "finance"   && <FinanceSVG   {...svgProps} />}
       {page === "kanban"    && <KanbanSVG    {...svgProps} />}
       {page === "userflow"  && <UserFlowSVG  {...svgProps} />}
+      {page === "docreq"   && <DocReqSVG    p={c.primary} l={c.light} />}
 
       {/* Text */}
       <div style={{ flex: 1, position: "relative" }}>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react"
 import { supabase } from "@/lib/supabase"
+import MotivationBanner from "@/components/layout/MotivationBanner"
 import { Plus, X, FileText, Sparkles, ChevronRight, ChevronLeft, Trash2, Edit3, Copy, Check, RefreshCw, BookOpen, Upload, Zap } from "lucide-react"
 
 // ── Types ─────────────────────────────────────────────────────
@@ -235,6 +236,8 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
   // ── LIST ──────────────────────────────────────────────────────
   if (view === "list") return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }} className="animate-fade">
+
+      <MotivationBanner page="docreq" />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
         <div>
