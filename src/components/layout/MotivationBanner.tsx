@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -59,6 +59,15 @@ const QUOTES: Record<PageType, string[]> = {
     "Sederhanakan. Lalu sederhanakan lagi.",
     "User flow yang baik lahir dari empati, bukan asumsi.",
   ],
+  restore: [
+    "Backup itu janji. Restore itu bukti.",
+    "Data yang direstore hari ini adalah bisnis yang selamat esok hari.",
+    "Setiap restore sukses adalah satu ketenangan yang kamu berikan ke seluruh tim.",
+    "DRP bukan sekadar prosedur — ini tameng terakhir yang kamu jaga.",
+    "Konsistensi kecil hari ini mencegah bencana besar di masa depan.",
+    "2x seminggu, 8x sebulan. Sederhana, tapi menyelamatkan.",
+    "Yang kamu lakukan hari ini tidak terlihat — sampai hari di mana ia menyelamatkan segalanya.",
+  ],
 }
 
 const CONFIG: Record<PageType, {
@@ -72,6 +81,7 @@ const CONFIG: Record<PageType, {
   kanban:    { label: "Mode: Produktif Abis",          emoji: "🔥",  bg: "linear-gradient(135deg,#fffbeb,#fef3c7)", border: "#fde68a", labelColor: "#d97706", textColor: "#92400e", primary: "#f59e0b", light: "#fde68a" },
   docreq:    { label: "Requirement Engineer 📋",    emoji: "✍️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "var(--accent-light)", labelColor: "var(--accent)", textColor: "var(--accent)", primary: "var(--accent)", light: "var(--accent-light)" },
   userflow:  { label: "Arsitek Alur Terbaik",          emoji: "🎨",  bg: "linear-gradient(135deg,#fff7ed,#ffedd5)", border: "#fed7aa", labelColor: "#ea580c", textColor: "#7c2d12", primary: "#fb923c", light: "#fdba74" },
+  restore:   { label: "Guardian of Data",               emoji: "🛡️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#86efac", labelColor: "#16a34a", textColor: "#14532d", primary: "#22c55e", light: "#86efac" },
 }
 
 function getDailyQuote(page: PageType): string {
@@ -260,6 +270,44 @@ function DocReqSVG({ p, l }: { p: string; l: string }) {
   )
 }
 
+
+function RestoreSVG({ p, l }: { p: string; l: string }) {
+  return (
+    <>
+      <style>{`
+        @keyframes rs-spin  { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
+        @keyframes rs-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.6;transform:scale(0.92)} }
+        @keyframes rs-drop  { 0%,100%{transform:translateY(0)} 50%{transform:translateY(4px)} }
+        .rs-gear  { transform-origin:32px 30px; animation:rs-spin 4s linear infinite }
+        .rs-pulse { animation:rs-pulse 2s ease-in-out infinite }
+        .rs-drop  { animation:rs-drop 1.4s ease-in-out infinite }
+      `}</style>
+      <svg width="72" height="72" viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
+        {/* Server stack */}
+        <rect x="10" y="14" width="44" height="11" rx="3" fill={l} opacity="0.8"/>
+        <rect x="10" y="14" width="44" height="11" rx="3" fill="none" stroke={p} strokeWidth="1.5"/>
+        <circle cx="47" cy="19.5" r="2.5" fill={p} className="rs-pulse"/>
+        <rect x="15" y="18" width="16" height="2" rx="1" fill={p} opacity="0.4"/>
+
+        <rect x="10" y="28" width="44" height="11" rx="3" fill={l} opacity="0.5"/>
+        <rect x="10" y="28" width="44" height="11" rx="3" fill="none" stroke={p} strokeWidth="1.5"/>
+        <circle cx="47" cy="33.5" r="2.5" fill={p} opacity="0.5"/>
+        <rect x="15" y="32" width="12" height="2" rx="1" fill={p} opacity="0.3"/>
+
+        {/* Restore arrow */}
+        <g className="rs-gear">
+          <path d="M32 46 A8 8 0 0 1 24 54" fill="none" stroke={p} strokeWidth="2.5" strokeLinecap="round"/>
+          <path d="M22 51 L24 54 L27 51" fill="none" stroke={p} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+        </g>
+        {/* Shield */}
+        <path d="M32 42 L38 45 L38 51 Q38 55 32 57 Q26 55 26 51 L26 45 Z" fill={p} opacity="0.18"/>
+        <path d="M32 42 L38 45 L38 51 Q38 55 32 57 Q26 55 26 51 L26 45 Z" fill="none" stroke={p} strokeWidth="1.5"/>
+        <path d="M29 49.5 L31.5 52 L35.5 47" fill="none" stroke={p} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="rs-drop"/>
+      </svg>
+    </>
+  )
+}
+
 export default function MotivationBanner({ page }: { page: PageType }) {
   const c = CONFIG[page]
   const quote = getDailyQuote(page)
@@ -289,6 +337,7 @@ export default function MotivationBanner({ page }: { page: PageType }) {
       {page === "kanban"    && <KanbanSVG    {...svgProps} />}
       {page === "userflow"  && <UserFlowSVG  {...svgProps} />}
       {page === "docreq"   && <DocReqSVG    p={c.primary} l={c.light} />}
+      {page === "restore"  && <RestoreSVG   p={c.primary} l={c.light} />}
 
       {/* Text */}
       <div style={{ flex: 1, position: "relative" }}>

@@ -1,48 +1,16 @@
 "use client"
 
 import { usePathname, useRouter } from "next/navigation"
-import { Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText, X, LogOut } from "lucide-react"
-
-// ── Elite Global Logo ────────────────────────────────────────
-function EliteGlobalLogo() {
-  return (
-    <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="eg-grad" x1="0" y1="0" x2="38" y2="38" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#2d6a4f"/>
-          <stop offset="100%" stopColor="#40916c"/>
-        </linearGradient>
-        <linearGradient id="eg-shine" x1="0" y1="0" x2="0" y2="38" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="white" stopOpacity="0.15"/>
-          <stop offset="100%" stopColor="white" stopOpacity="0"/>
-        </linearGradient>
-      </defs>
-      {/* Background rounded square */}
-      <rect width="38" height="38" rx="10" fill="url(#eg-grad)"/>
-      <rect width="38" height="38" rx="10" fill="url(#eg-shine)"/>
-      {/* Letter E */}
-      <text
-        x="5" y="26"
-        fontFamily="'Plus Jakarta Sans', system-ui, sans-serif"
-        fontWeight="900"
-        fontSize="22"
-        fill="white"
-        letterSpacing="-1"
-      >EG</text>
-      {/* Accent dot */}
-      <circle cx="33" cy="8" r="3" fill="white" opacity="0.6"/>
-      <circle cx="33" cy="8" r="1.5" fill="white" opacity="0.9"/>
-    </svg>
-  )
-}
+import { Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText, X, Sparkles, LogOut, Database } from "lucide-react"
 
 const NAV = [
-  { icon: Home,       label: "Home",      path: "/dashboard",           desc: "Overview harian",        ai: false },
-  { icon: FileText,   label: "Notulensi", path: "/dashboard/notulensi", desc: "Catatan rapat",          ai: false },
-  { icon: DollarSign, label: "Finance",   path: "/dashboard/finance",   desc: "Keuangan",               ai: false },
-  { icon: LayoutGrid, label: "Kanban",    path: "/dashboard/kanban",    desc: "Task board",             ai: false },
-  { icon: GitBranch,  label: "User Flow", path: "/dashboard/userflow",  desc: "AI Flowchart Generator", ai: true  },
-  { icon: ScrollText, label: "Doc Req",   path: "/dashboard/docreq",    desc: "AI Doc Generator",       ai: true  },
+  { icon: Home,       label: "Home",           path: "/dashboard",                desc: "Overview harian",        ai: false },
+  { icon: FileText,   label: "Notulensi",      path: "/dashboard/notulensi",      desc: "Catatan rapat",          ai: false },
+  { icon: DollarSign, label: "Finance",        path: "/dashboard/finance",        desc: "Keuangan",               ai: false },
+  { icon: LayoutGrid, label: "Kanban",         path: "/dashboard/kanban",         desc: "Task board",             ai: false },
+  { icon: GitBranch,  label: "User Flow",      path: "/dashboard/userflow",       desc: "AI Flowchart Generator", ai: true  },
+  { icon: ScrollText, label: "Doc Req",        path: "/dashboard/docreq",         desc: "AI Doc Generator",       ai: true  },
+  { icon: Database,   label: "Restore DB PHI", path: "/dashboard/restore-phi",    desc: "Monitoring DRP Restore", ai: false },
 ]
 
 interface Props { isOpen: boolean; onClose: () => void }
@@ -77,7 +45,9 @@ export default function Sidebar({ isOpen, onClose }: Props) {
         <div style={{ padding: "24px 20px 20px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <EliteGlobalLogo />
+              <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Sparkles size={18} color="white" />
+              </div>
               <div>
                 <div style={{ fontSize: "15px", fontWeight: 800, color: "var(--text)", letterSpacing: "-0.02em" }}>Elite Global</div>
                 <div style={{ fontSize: "10px", color: "var(--text3)", fontWeight: 500 }}>Productivity OS</div>

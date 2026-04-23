@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase"
 import { KanbanTask } from "@/lib/types"
 import { Plus, X, ChevronLeft, ChevronRight, LayoutGrid, Calendar, FileText, Copy, Check, RefreshCw } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
+import ModalOverlay from "@/components/layout/ModalOverlay"
 
 // ── Constants ────────────────────────────────────────────────
 const COLUMNS = [
@@ -28,14 +29,6 @@ const PRIO_BG: Record<string, string> = {
 }
 
 const EMPTY: Partial<KanbanTask> = { title: "", description: "", status: "todo", priority: "medium", tags: [] }
-
-const PRESET_TAGS = [
-  { label: "Supporting PHI",   color: "#1e40af", bg: "#dbeafe" },
-  { label: "Supporting Lokal", color: "#065f46", bg: "#d1fae5" },
-  { label: "Discuss",          color: "#92400e", bg: "#fef3c7" },
-  { label: "Document",         color: "#5b21b6", bg: "#ede9fe" },
-  { label: "Weekly Task",      color: "#9f1239", bg: "#ffe4e6" },
-]
 type TabView = "board" | "calendar"
 type ColKey = "todo" | "inprogress" | "done" | "blocked"
 
@@ -61,6 +54,7 @@ export default function KanbanPage() {
   const [tab, setTab]               = useState<TabView>("board")
   const [modal, setModal]           = useState(false)
   const [form, setForm]             = useState({ ...EMPTY, date })
+  const [tagInput, setTagInput]     = useState("")
   const [saving, setSaving]         = useState(false)
   const [dragging, setDragging]     = useState<string | null>(null)
   const [calYear, setCalYear]       = useState(new Date().getFullYear())
@@ -130,6 +124,12 @@ export default function KanbanPage() {
     }).eq("id", taskId)
     loadBoard()
     if (tab === "calendar") loadCalendar()
+  }
+
+  const addTag = () => {
+    if (!tagInput.trim()) return
+    setForm(f => ({ ...f, tags: [...(f.tags || []), tagInput.trim()] }))
+    setTagInput("")
   }
 
   // ── Generate Daily Report ─────────────────────────────────
@@ -323,14 +323,9 @@ ${todoList}`
                         </div>
                         {(task.tags?.length || 0) > 0 && (
                           <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "8px" }}>
-                            {task.tags?.map(tag => {
-                              const preset = PRESET_TAGS.find(p => p.label === tag)
-                              return (
-                                <span key={tag} style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "99px", fontWeight: 600, background: preset?.bg || "var(--accent-muted)", color: preset?.color || "var(--accent)" }}>
-                                  {tag}
-                                </span>
-                              )
-                            })}
+                            {task.tags?.map(tag => (
+                              <span key={tag} style={{ fontSize: "10px", padding: "1px 7px", borderRadius: "99px", background: "var(--accent-muted)", color: "var(--accent)" }}>#{tag}</span>
+                            ))}
                           </div>
                         )}
                         <div style={{ display: "flex", gap: "4px", marginTop: "10px", flexWrap: "wrap" }}>
@@ -432,7 +427,7 @@ ${todoList}`
 
       {/* ── DAILY REPORT MODAL ───────────────────────────── */}
       {showReport && (
-        <div className="modal-overlay" onClick={() => setShowReport(false)}>
+        <ModalOverlay onClose={() => setShowReport(false)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: "600px" }}>
             <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
@@ -472,18 +467,18 @@ ${todoList}`
               )}
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       {/* ── TASK MODAL ────────────────────────────────────── */}
       {modal && (
-        <div className="modal-overlay" onClick={() => setModal(false)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: "480px" }}>
-            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between" }}>
+        <ModalOverlay onClose={() => setModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: "480px", width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
               <span style={{ fontWeight: 800, fontSize: "16px" }}>Buat Task Baru</span>
-              <button onClick={() => setModal(false)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer" }}><X size={18} /></button>
+              <button onClick={() => setModal(false)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", padding: 6, borderRadius: "var(--radius-xs)" }}><X size={18} /></button>
             </div>
-            <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "14px" }}>
+            <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto" }}>
               <div>
                 <div className="label" style={{ marginBottom: "6px" }}>Judul Task *</div>
                 <input className="input" placeholder="Apa yang perlu dikerjakan?" value={form.title || ""} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} autoFocus />
@@ -521,42 +516,24 @@ ${todoList}`
               </div>
               <div>
                 <div className="label" style={{ marginBottom: "8px" }}>Tags</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                  {PRESET_TAGS.map(tag => {
-                    const active = form.tags?.includes(tag.label)
-                    return (
-                      <button key={tag.label} type="button"
-                        onClick={() => setForm(f => ({
-                          ...f,
-                          tags: active
-                            ? f.tags?.filter(t => t !== tag.label)
-                            : [...(f.tags || []), tag.label]
-                        }))}
-                        style={{
-                          padding: "5px 12px", borderRadius: "99px", cursor: "pointer",
-                          fontSize: "12px", fontWeight: 600,
-                          fontFamily: "'Plus Jakarta Sans', sans-serif",
-                          border: `1.5px solid ${active ? tag.color : tag.color + "40"}`,
-                          background: active ? tag.bg : "transparent",
-                          color: active ? tag.color : "var(--text3)",
-                          transition: "all 0.15s",
-                          transform: active ? "scale(1.03)" : "scale(1)",
-                        }}>
-                        {active ? "✓ " : ""}{tag.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <button className="btn btn-ghost" onClick={() => setModal(false)} style={{ flex: 1 }}>Batal</button>
-                <button className="btn btn-primary" onClick={save} disabled={saving || !form.title} style={{ flex: 2, opacity: !form.title ? 0.6 : 1 }}>
-                  {saving ? "Menyimpan..." : "Buat Task"}
-                </button>
+                <select className="input" value={(form.tags?.[0]) || ""} onChange={e => setForm(f => ({ ...f, tags: e.target.value ? [e.target.value] : [] }))}>
+                  <option value="">— Pilih Tag —</option>
+                  <option value="Supporting PHI">Supporting PHI</option>
+                  <option value="Supporting Lokal">Supporting Lokal</option>
+                  <option value="Discuss">Discuss</option>
+                  <option value="Document">Document</option>
+                  <option value="Weekly Task">Weekly Task</option>
+                </select>
               </div>
             </div>
+            <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", gap: "10px", flexShrink: 0 }}>
+              <button className="btn btn-ghost" onClick={() => setModal(false)} style={{ flex: 1 }}>Batal</button>
+              <button className="btn btn-primary" onClick={save} disabled={saving || !form.title} style={{ flex: 2, opacity: !form.title ? 0.6 : 1 }}>
+                {saving ? "Menyimpan..." : "Buat Task"}
+              </button>
+            </div>
           </div>
-        </div>
+        </ModalOverlay>
       )}
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>

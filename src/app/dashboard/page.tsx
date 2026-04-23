@@ -2,93 +2,93 @@
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { KanbanTask, FinanceTransaction } from "@/lib/types"
+import { KanbanTask, Notulensi } from "@/lib/types"
+import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from "recharts"
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  BarChart, Bar, CartesianGrid, PieChart, Pie, Cell, Legend
-} from "recharts"
-import { CheckCircle2, Clock, Ban, ListTodo, TrendingUp, TrendingDown, Wallet, ArrowUpRight } from "lucide-react"
+  CheckCircle2, Clock, Ban, ListTodo, Database,
+  FileText, ArrowUpRight, AlertTriangle, ShieldCheck
+} from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
+import { useRouter } from "next/navigation"
 
 const PIE_COLORS = ["#6b7280", "#b45309", "#2d6a4f", "#c0392b"]
+const MONTHS = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
+const MONTHLY_TARGET = 8
+const WEEKLY_TARGET  = 2
+
+function getWeekNumber(d: Date) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const dayNum = date.getUTCDay() || 7
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum)
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1))
+  return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
+}
 
 export default function HomePage() {
-  const [tasks, setTasks]         = useState<KanbanTask[]>([])
-  const [transactions, setTransactions] = useState<FinanceTransaction[]>([])
-  const [loading, setLoading]     = useState(true)
+  const router = useRouter()
+  const now          = new Date()
+  const currentMonth = now.getMonth() + 1
+  const currentYear  = now.getFullYear()
+  const currentWeek  = getWeekNumber(now)
+
+  const [tasks,     setTasks]     = useState<KanbanTask[]>([])
+  const [notulensi, setNotulensi] = useState<Notulensi[]>([])
+  const [restores,  setRestores]  = useState<any[]>([])
+  const [loading,   setLoading]   = useState(true)
 
   useEffect(() => {
     const load = async () => {
-      const [t, f] = await Promise.all([
+      const [t, n, r] = await Promise.all([
         supabase.from("kanban_tasks").select("*").order("created_at", { ascending: false }).limit(50),
-        supabase.from("finance_transactions").select("*").order("date", { ascending: false }).limit(60),
+        supabase.from("notulensi").select("*").order("date", { ascending: false }).limit(5),
+        supabase.from("restore_phi").select("*").eq("year", currentYear),
       ])
       if (t.data) setTasks(t.data)
-      if (f.data) setTransactions(f.data)
+      if (n.data) setNotulensi(n.data)
+      if (r.data) setRestores(r.data)
       setLoading(false)
     }
     load()
   }, [])
 
+  // Task stats
   const taskStats = {
     todo:       tasks.filter(t => t.status === "todo").length,
     inprogress: tasks.filter(t => t.status === "inprogress").length,
     done:       tasks.filter(t => t.status === "done").length,
     blocked:    tasks.filter(t => t.status === "blocked").length,
   }
-
-  const totalIncome  = transactions.filter(t => t.type === "income").reduce((s, t) => s + t.amount, 0)
-  const totalExpense = transactions.filter(t => t.type === "expense").reduce((s, t) => s + t.amount, 0)
-  const balance      = totalIncome - totalExpense
-
-  const last7 = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - i))
-    const key = d.toISOString().split("T")[0]
-    return {
-      day: d.toLocaleDateString("id-ID", { weekday: "short" }),
-      Pemasukan:   transactions.filter(t => t.date === key && t.type === "income").reduce((s,t) => s+t.amount,0)/1000,
-      Pengeluaran: transactions.filter(t => t.date === key && t.type === "expense").reduce((s,t) => s+t.amount,0)/1000,
-    }
-  })
-
   const taskPieData = [
-    { name: "To Do", value: taskStats.todo },
+    { name: "To Do",       value: taskStats.todo },
     { name: "In Progress", value: taskStats.inprogress },
-    { name: "Done", value: taskStats.done },
-    { name: "Blocked", value: taskStats.blocked },
+    { name: "Done",        value: taskStats.done },
+    { name: "Blocked",     value: taskStats.blocked },
   ].filter(d => d.value > 0)
 
-  const expByCategory: Record<string, number> = {}
-  transactions.filter(t => t.type === "expense").forEach(t => {
-    expByCategory[t.category] = (expByCategory[t.category] || 0) + t.amount
-  })
-  const catData = Object.entries(expByCategory).sort((a,b) => b[1]-a[1])
+  // Restore stats
+  const doneThisMonth = restores.filter(r => r.done_restore && r.month === currentMonth).length
+  const doneThisWeek  = restores.filter(r => {
+    if (!r.done_restore || !r.restore_date) return false
+    return getWeekNumber(new Date(r.restore_date)) === currentWeek
+  }).length
+  const doneThisYear = restores.filter(r => r.done_restore).length
+  const totalMaster  = 85
+  const monthlyOk    = doneThisMonth >= MONTHLY_TARGET
+  const weeklyOk     = doneThisWeek  >= WEEKLY_TARGET
 
-  const fmt = (n: number) => new Intl.NumberFormat("id-ID", { notation: "compact", maximumFractionDigits: 1 }).format(n)
-  const fmtFull = (n: number) => new Intl.NumberFormat("id-ID").format(n)
+  // Annual bar data
+  const annualData = Array.from({ length: 12 }, (_, i) =>
+    restores.filter(r => r.done_restore && r.month === i + 1).length
+  )
 
-  const hour = new Date().getHours()
-  const greet = hour < 12 ? "Selamat pagi" : hour < 17 ? "Selamat siang" : "Selamat malam"
+  const hour   = now.getHours()
+  const greet  = hour < 12 ? "Selamat pagi" : hour < 17 ? "Selamat siang" : "Selamat malam"
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
       <div style={{ color: "var(--text3)", fontSize: "14px" }}>Memuat dashboard...</div>
     </div>
   )
-
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload?.length) return null
-    return (
-      <div className="card" style={{ padding: "10px 14px", fontSize: "12px" }}>
-        <div style={{ fontWeight: 700, marginBottom: "6px", color: "var(--text)" }}>{label}</div>
-        {payload.map((p: any) => (
-          <div key={p.name} style={{ color: p.color, display: "flex", gap: "8px", justifyContent: "space-between" }}>
-            <span>{p.name}</span><span style={{ fontWeight: 600 }}>Rp {p.value}k</span>
-          </div>
-        ))}
-      </div>
-    )
-  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }} className="animate-fade">
@@ -102,26 +102,27 @@ export default function HomePage() {
         <div style={{ position: "absolute", right: "40px", bottom: "-40px", width: "120px", height: "120px", borderRadius: "50%", background: "rgba(255,255,255,0.04)" }} />
         <div style={{ position: "relative" }}>
           <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.7)", fontWeight: 500, marginBottom: "4px" }}>
-            {new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+            {now.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
           </div>
           <div style={{ fontSize: "22px", fontWeight: 800, color: "white", letterSpacing: "-0.02em" }}>
             {greet}! 👋
           </div>
           <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.65)", marginTop: "4px" }}>
-            Kamu punya <strong style={{ color: "white" }}>{taskStats.todo + taskStats.inprogress}</strong> tugas yang perlu diselesaikan hari ini.
+            Kamu punya <strong style={{ color: "white" }}>{taskStats.todo + taskStats.inprogress}</strong> tugas aktif
+            {" · "}Restore bulan ini <strong style={{ color: monthlyOk ? "#86efac" : "#fde68a" }}>{doneThisMonth}/{MONTHLY_TARGET}</strong>
           </div>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "12px" }} className="stagger">
+      {/* KPI Cards — Task */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }} className="stagger">
         {[
-          { label: "To Do",        val: taskStats.todo,       icon: ListTodo,     color: "#6b7280", bg: "#f3f4f6" },
-          { label: "In Progress",  val: taskStats.inprogress, icon: Clock,        color: "#b45309", bg: "#fef3c7" },
-          { label: "Selesai",      val: taskStats.done,       icon: CheckCircle2, color: "#2d6a4f", bg: "#d8f3dc" },
-          { label: "Blocked",      val: taskStats.blocked,    icon: Ban,          color: "#c0392b", bg: "#fde8e8" },
+          { label: "To Do",       val: taskStats.todo,       icon: ListTodo,     color: "#6b7280", bg: "#f3f4f6" },
+          { label: "In Progress", val: taskStats.inprogress, icon: Clock,        color: "#b45309", bg: "#fef3c7" },
+          { label: "Selesai",     val: taskStats.done,       icon: CheckCircle2, color: "#2d6a4f", bg: "#d8f3dc" },
+          { label: "Blocked",     val: taskStats.blocked,    icon: Ban,          color: "#c0392b", bg: "#fde8e8" },
         ].map(({ label, val, icon: Icon, color, bg }) => (
-          <div key={label} className="card card-hover" style={{ padding: "18px 16px" }}>
+          <div key={label} className="card card-hover" style={{ padding: "18px 16px", cursor: "pointer" }} onClick={() => router.push("/dashboard/kanban")}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <div style={{ fontSize: "28px", fontWeight: 800, color, letterSpacing: "-0.03em", lineHeight: 1 }}>{val}</div>
@@ -137,86 +138,79 @@ export default function HomePage() {
 
       <MotivationBanner page="home" />
 
-      {/* Charts row */}
+      {/* Main 3-column grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
 
-        {/* Cashflow chart */}
-        <div className="card" style={{ padding: "20px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+        {/* Restore DB PHI Summary */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/restore-phi")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px" }}>
             <div>
-              <div className="label">Cashflow</div>
-              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>7 Hari Terakhir</div>
+              <div className="label">Restore DB PHI</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Progress {MONTHS[currentMonth - 1]} {currentYear}</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--accent-muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Database size={18} color="var(--accent)" />
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={last7} barGap={4} barSize={10}>
-              <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-              <XAxis dataKey="day" tick={{ fill: "var(--text3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => `${v}k`} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="Pemasukan"   fill="#2d6a4f" radius={[4,4,0,0]} />
-              <Bar dataKey="Pengeluaran" fill="#c0392b" radius={[4,4,0,0]} opacity={0.7} />
-            </BarChart>
-          </ResponsiveContainer>
-          <div style={{ display: "flex", gap: "16px", marginTop: "12px", justifyContent: "center" }}>
-            {[["Pemasukan","#2d6a4f"],["Pengeluaran","#c0392b"]].map(([l,c]) => (
-              <div key={l} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "2px", background: c }} />
-                <span style={{ fontSize: "11px", color: "var(--text3)" }}>{l}</span>
-              </div>
-            ))}
-          </div>
-        </div>
 
-        {/* Finance summary */}
-        <div className="card" style={{ padding: "20px" }}>
-          <div className="label" style={{ marginBottom: "4px" }}>Keuangan</div>
-          <div style={{ fontSize: "16px", fontWeight: 800, marginBottom: "20px" }}>Ringkasan</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+          {/* Monthly progress bar */}
+          <div style={{ marginBottom: "16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "12px", color: "var(--text2)", fontWeight: 600 }}>Bulan ini</span>
+              <span style={{ fontSize: "12px", fontWeight: 700, color: monthlyOk ? "var(--success)" : "var(--warning)" }}>
+                {doneThisMonth}/{MONTHLY_TARGET}
+              </span>
+            </div>
+            <div style={{ height: "8px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${Math.min(doneThisMonth / MONTHLY_TARGET * 100, 100)}%`, background: monthlyOk ? "var(--success)" : "var(--accent3)", borderRadius: "99px", transition: "width 0.8s ease" }} />
+            </div>
+          </div>
+
+          {/* Stats row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px" }}>
             {[
-              { label: "Saldo",       val: balance,      color: balance >= 0 ? "#2d6a4f" : "#c0392b", icon: Wallet,       bg: balance >= 0 ? "#d8f3dc" : "#fde8e8" },
-              { label: "Pemasukan",   val: totalIncome,  color: "#2d6a4f",  icon: TrendingUp,   bg: "#d8f3dc" },
-              { label: "Pengeluaran", val: totalExpense, color: "#c0392b",  icon: TrendingDown, bg: "#fde8e8" },
-            ].map(({ label, val, color, icon: Icon, bg }) => (
-              <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px", background: "var(--bg)", borderRadius: "var(--radius-sm)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <div style={{ width: "32px", height: "32px", borderRadius: "8px", background: bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <Icon size={15} color={color} />
-                  </div>
-                  <span style={{ fontSize: "13px", fontWeight: 500 }}>{label}</span>
+              { label: "Minggu ini", val: doneThisWeek, target: WEEKLY_TARGET, ok: weeklyOk },
+              { label: "Tahun ini",  val: doneThisYear, target: null, ok: true },
+              { label: "Belum done", val: totalMaster - doneThisMonth, target: null, ok: (totalMaster - doneThisMonth) === 0 },
+            ].map(({ label, val, target, ok }) => (
+              <div key={label} style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "10px", textAlign: "center" }}>
+                <div style={{ fontSize: "18px", fontWeight: 800, color: ok ? "var(--accent)" : "var(--warning)", letterSpacing: "-0.03em" }}>
+                  {val}{target ? `/${target}` : ""}
                 </div>
-                <span className="mono" style={{ fontSize: "14px", fontWeight: 700, color }}>
-                  Rp {fmt(Math.abs(val))}
-                </span>
+                <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>{label}</div>
               </div>
             ))}
           </div>
-          {catData.length > 0 && (
-            <div style={{ marginTop: "18px" }}>
-              <div className="label" style={{ marginBottom: "10px" }}>Top Pengeluaran</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {catData.slice(0, 3).map(([name, val], i) => {
-                  const pct = Math.round((val / totalExpense) * 100)
-                  const colors = ["#2d6a4f","#b45309","#1e40af"]
-                  return (
-                    <div key={name}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                        <span style={{ fontSize: "12px", fontWeight: 500 }}>{name}</span>
-                        <span className="mono" style={{ fontSize: "11px", color: "var(--text3)" }}>{pct}%</span>
-                      </div>
-                      <div style={{ height: "5px", background: "var(--bg2)", borderRadius: "99px" }}>
-                        <div style={{ height: "100%", width: `${pct}%`, background: colors[i % colors.length], borderRadius: "99px", transition: "width 0.8s ease" }} />
-                      </div>
-                    </div>
-                  )
-                })}
+
+          {/* Annual mini bars */}
+          <div style={{ marginTop: "16px", display: "flex", gap: "3px", alignItems: "flex-end" }}>
+            {annualData.map((v, i) => (
+              <div key={i} title={`${MONTHS[i]}: ${v}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <div style={{ width: "100%", background: i + 1 === currentMonth ? "var(--accent)" : v > 0 ? "var(--accent3)" : "var(--surface3)", borderRadius: 3, height: Math.max(3, v * 2.5), transition: "height 0.3s" }} />
+                <div style={{ fontSize: "7px", color: "var(--text3)" }}>{MONTHS[i][0]}</div>
               </div>
+            ))}
+          </div>
+
+          {/* Reminder */}
+          {(!monthlyOk || !weeklyOk) && (
+            <div style={{ marginTop: "12px", background: "var(--warning-bg)", borderRadius: "var(--radius-xs)", padding: "8px 10px", display: "flex", alignItems: "center", gap: "7px" }}>
+              <AlertTriangle size={13} color="var(--warning)" />
+              <span style={{ fontSize: "11px", color: "var(--warning)", fontWeight: 600 }}>
+                {!monthlyOk ? `Kurang ${MONTHLY_TARGET - doneThisMonth}x lagi bulan ini` : `Minggu ini baru ${doneThisWeek}/${WEEKLY_TARGET}`}
+              </span>
+            </div>
+          )}
+          {monthlyOk && weeklyOk && (
+            <div style={{ marginTop: "12px", background: "var(--success-bg)", borderRadius: "var(--radius-xs)", padding: "8px 10px", display: "flex", alignItems: "center", gap: "7px" }}>
+              <ShieldCheck size={13} color="var(--success)" />
+              <span style={{ fontSize: "11px", color: "var(--success)", fontWeight: 600 }}>Target minggu ini & bulan ini terpenuhi 🎉</span>
             </div>
           )}
         </div>
 
         {/* Task Status Pie */}
-        <div className="card" style={{ padding: "20px" }}>
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/kanban")}>
           <div className="label" style={{ marginBottom: "4px" }}>Tugas</div>
           <div style={{ fontSize: "16px", fontWeight: 800, marginBottom: "16px" }}>Status Overview</div>
           {taskPieData.length > 0 ? (
@@ -225,7 +219,7 @@ export default function HomePage() {
                 <Pie data={taskPieData} cx="50%" cy="50%" innerRadius={50} outerRadius={78} paddingAngle={3} dataKey="value">
                   {taskPieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
-                <Tooltip contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", fontSize: "12px", boxShadow: "var(--shadow)" }} />
+                <Tooltip contentStyle={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", fontSize: "12px" }} />
                 <Legend wrapperStyle={{ fontSize: "11px", color: "var(--text3)" }} />
               </PieChart>
             </ResponsiveContainer>
@@ -235,17 +229,72 @@ export default function HomePage() {
               <span>Belum ada task</span>
             </div>
           )}
+          <div style={{ marginTop: "12px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+            <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: "var(--warning)" }}>{taskStats.inprogress}</div>
+              <div style={{ fontSize: "10px", color: "var(--text3)" }}>Sedang dikerjakan</div>
+            </div>
+            <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 12px" }}>
+              <div style={{ fontSize: "16px", fontWeight: 800, color: "var(--accent)" }}>{taskStats.done}</div>
+              <div style={{ fontSize: "10px", color: "var(--text3)" }}>Selesai</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Notulensi terbaru */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/notulensi")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <div className="label">Notulensi</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Rapat Terbaru</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--accent-muted)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <FileText size={18} color="var(--accent)" />
+            </div>
+          </div>
+          {notulensi.length === 0 ? (
+            <div style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "13px", flexDirection: "column", gap: "8px" }}>
+              <FileText size={28} color="var(--border2)" />
+              <span>Belum ada notulensi</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {notulensi.slice(0, 4).map((n, i) => (
+                <div key={n.id} style={{
+                  display: "flex", alignItems: "flex-start", gap: "10px", padding: "10px 12px",
+                  background: "var(--surface3)", borderRadius: "var(--radius-sm)",
+                  borderLeft: "3px solid var(--accent)"
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{n.title}</div>
+                    <div style={{ fontSize: "11px", color: "var(--text3)", marginTop: "2px" }}>
+                      {new Date(n.date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                      {n.location ? ` · ${n.location}` : ""}
+                    </div>
+                  </div>
+                  <ArrowUpRight size={14} color="var(--text3)" style={{ flexShrink: 0, marginTop: 2 }} />
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: "14px", textAlign: "center" }}>
+            <span style={{ fontSize: "11px", color: "var(--accent)", fontWeight: 600, cursor: "pointer" }}>
+              Lihat semua notulensi →
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Recent tasks */}
+      {/* Recent tasks list */}
       <div className="card" style={{ overflow: "hidden" }}>
         <div style={{ padding: "18px 20px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div className="label">Tugas</div>
             <div style={{ fontSize: "15px", fontWeight: 800, marginTop: "1px" }}>Terbaru</div>
           </div>
-          <span style={{ fontSize: "12px", color: "var(--text3)", fontWeight: 500 }}>{tasks.length} total</span>
+          <button onClick={() => router.push("/dashboard/kanban")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "12px", color: "var(--accent)", fontWeight: 600, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+            Lihat semua <ArrowUpRight size={13} />
+          </button>
         </div>
         {tasks.length === 0 ? (
           <div style={{ padding: "40px", textAlign: "center", color: "var(--text3)" }}>Belum ada tugas.</div>
@@ -254,7 +303,7 @@ export default function HomePage() {
             {tasks.slice(0, 6).map((task, i) => (
               <div key={task.id} style={{
                 display: "flex", alignItems: "center", gap: "14px", padding: "13px 20px",
-                borderBottom: i < 5 && i < tasks.length - 1 ? "1px solid var(--border)" : "none",
+                borderBottom: i < Math.min(5, tasks.length - 1) ? "1px solid var(--border)" : "none",
               }}>
                 <span className={`badge badge-${task.status}`}>
                   {task.status === "inprogress" ? "In Progress" : task.status === "todo" ? "To Do" : task.status === "done" ? "Done" : "Blocked"}
@@ -268,6 +317,7 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
     </div>
   )
 }
