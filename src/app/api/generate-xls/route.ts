@@ -86,7 +86,9 @@ for entry in entries:
     ws[f"F{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
     for col in ["B","C","D","E","F"]: lr(ws[f"{col}{current_row}"])
     current_row += 1
+
     for img in entry.get("images",[]): current_row = embed_image(img.get("dataUrl",""), current_row)
+
     for ss in entry.get("subSections",[]):
         if ss.get("deskripsi"):
             ws.row_dimensions[current_row].height = ROW_H_PT
@@ -96,6 +98,7 @@ for entry in entries:
             for col in ["B","C","D","E","F"]: lr(ws[f"{col}{current_row}"])
             current_row += 1
         for img in ss.get("images",[]): current_row = embed_image(img.get("dataUrl",""), current_row)
+
     if entry.get("subKeterangan"):
         ws.row_dimensions[current_row].height = ROW_H_PT
         ws[f"D{current_row}"] = entry["subKeterangan"]
@@ -106,6 +109,7 @@ for entry in entries:
         ws[f"E{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
         for col in ["B","C","D","E","F"]: lr(ws[f"{col}{current_row}"])
         current_row += 1
+
     for col in ["B","C","D","E","F"]: lr_bottom(ws[f"{col}{current_row-1}"])
 
 wb.save(out_file)
@@ -123,15 +127,16 @@ export async function POST(req: NextRequest) {
   const { header, entries } = body
   if (!header || !entries) return NextResponse.json({ error: "Missing data" }, { status: 400 })
 
+  // Cek apakah Python tersedia (local dev)
   const pythonCmd = await findPython()
 
   if (pythonCmd) {
     // ── LOCAL: jalankan Python langsung ──────────────────────
-    const tmpDir       = os.tmpdir()
-    const ts           = Date.now()
-    const dataFile     = path.join(tmpDir, `scentest_data_${ts}.json`)
-    const scriptFile   = path.join(tmpDir, `scentest_script_${ts}.py`)
-    const outFile      = path.join(tmpDir, `scentest_out_${ts}.xlsx`)
+    const tmpDir      = os.tmpdir()
+    const ts          = Date.now()
+    const dataFile    = path.join(tmpDir, `scentest_data_${ts}.json`)
+    const scriptFile  = path.join(tmpDir, `scentest_script_${ts}.py`)
+    const outFile     = path.join(tmpDir, `scentest_out_${ts}.xlsx`)
     const templateFile = path.join(process.cwd(), "public", "templates", "scenario-test-template.xlsx")
 
     if (!fs.existsSync(templateFile)) {
@@ -139,13 +144,13 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      fs.writeFileSync(dataFile,   JSON.stringify({ header, entries }), "utf-8")
+      fs.writeFileSync(dataFile,  JSON.stringify({ header, entries }), "utf-8")
       fs.writeFileSync(scriptFile, PYTHON_SCRIPT, "utf-8")
       await execAsync(`"${pythonCmd}" "${scriptFile}" "${templateFile}" "${dataFile}" "${outFile}"`)
 
       const buf   = fs.readFileSync(outFile)
       const fname = (header.judulDokumen || "scenario-test").trim().replace(/[\\/:*?"<>|]/g, "_")
-      return new NextResponse(buf, {
+      return new NextResponse(new Uint8Array(buf), {
         status: 200,
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -159,27 +164,47 @@ export async function POST(req: NextRequest) {
     }
 
   } else {
-    // ── VERCEL PRODUCTION: hit Python serverless function ─────
-    // File: api/generate-xls.py → accessible at /api/generate-xls
-    const fnUrl = `${req.nextUrl.origin}/api/generate-xls`
-    console.log("[generate-xls] Calling Vercel Python fn:", fnUrl)
+    // ── NETLIFY: forward ke Python function ──────────────────
+    const netlifyFnUrl = `${req.nextUrl.origin}/.netlify/functions/generate_xls`
+    console.log("[generate-xls] No Python found, calling Netlify fn:", netlifyFnUrl)
 
-    const res = await fetch(fnUrl, {
+    const res     = await fetch(netlifyFnUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ header, entries }),
     })
 
+    const rawText = await res.text()
+    console.log("[generate-xls] Netlify fn status:", res.status)
+    console.log("[generate-xls] Netlify fn response (500 chars):", rawText.slice(0, 500))
+
     if (!res.ok) {
-      const txt = await res.text()
-      let errMsg = `Server error (${res.status})`
-      try { errMsg = JSON.parse(txt).error || errMsg } catch {}
+      let errMsg = `Netlify function error (status ${res.status})`
+      try {
+        const parsed = JSON.parse(rawText)
+        errMsg = parsed.error || parsed.errorMessage || rawText.slice(0, 300)
+      } catch {}
       return NextResponse.json({ error: errMsg }, { status: 500 })
     }
 
-    const buf   = await res.arrayBuffer()
+    // Netlify Python function return isBase64Encoded response
+    let buf: Buffer
+    try {
+      const parsed = JSON.parse(rawText)
+      if (parsed.isBase64Encoded && parsed.body) {
+        // Normal Netlify function response — decode base64 body
+        buf = Buffer.from(parsed.body, "base64")
+      } else if (parsed.error) {
+        return NextResponse.json({ error: parsed.error }, { status: 500 })
+      } else {
+        return NextResponse.json({ error: "Format response tidak dikenali dari Netlify function" }, { status: 500 })
+      }
+    } catch {
+      return NextResponse.json({ error: `Response bukan JSON valid: ${rawText.slice(0, 200)}` }, { status: 500 })
+    }
+
     const fname = (header.judulDokumen || "scenario-test").trim().replace(/[\\/:*?"<>|]/g, "_")
-    return new NextResponse(buf, {
+    return new NextResponse(new Uint8Array(buf), {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -1,8 +1,0 @@
-{
-  "functions": {
-    "api/generate-xls.py": {
-      "runtime": "vercel-python@4.0.0",
-      "maxDuration": 30
-    }
-  }
-}
