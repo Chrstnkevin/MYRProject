@@ -6,7 +6,7 @@ import {
   ChevronUp, ChevronDown, X, ClipboardPaste, CheckCircle2,
   AlertCircle, Eye, EyeOff, Loader2, ArrowLeft,
   FolderOpen, FileText, Clock, CheckCircle, XCircle,
-  Edit3, Save, RefreshCw
+  Edit3, Save, RefreshCw, Layers
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -14,10 +14,17 @@ import { supabase } from "@/lib/supabase"
 // ── Types ────────────────────────────────────────────────────
 interface PastedImage { id: string; dataUrl: string; label: string }
 
+interface SubSection {
+  id: string
+  deskripsi: string
+  images: PastedImage[]
+}
+
 interface TestEntry {
   id: string; no: number; object: string; keterangan: string
   tanggalTest: string; status: "OK"|"NOT OK"|"IN PROGRESS"|""
   images: PastedImage[]; subKeterangan: string
+  subSections: SubSection[]   // ← nested sub-sections
 }
 
 interface FormHeader {
@@ -46,7 +53,11 @@ const HEADER_FIELDS: [string, keyof FormHeader, string][] = [
 const newEntry = (no: number): TestEntry => ({
   id: crypto.randomUUID(), no, object:"", keterangan:"",
   tanggalTest: new Date().toLocaleDateString("id-ID",{day:"2-digit",month:"2-digit",year:"numeric"}),
-  status:"", images:[], subKeterangan:""
+  status:"", images:[], subKeterangan:"", subSections:[]
+})
+
+const newSubSection = (): SubSection => ({
+  id: crypto.randomUUID(), deskripsi:"", images:[]
 })
 
 function calcDocStatus(entries: TestEntry[]): ScenarioDoc["doc_status"] {
@@ -82,7 +93,7 @@ export default function ScenarioTestPage() {
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving]         = useState(false)
   const [preview, setPreview]       = useState(false)
-  const [pasteTarget, setPasteTarget] = useState<string|null>(null)
+  const [pasteTarget, setPasteTarget] = useState<{entryId:string;subId?:string}|null>(null)
   const [toast, setToast]           = useState<{msg:string;type:"ok"|"err"}|null>(null)
 
   const showToast = (msg: string, type:"ok"|"err"="ok") => {
@@ -98,7 +109,7 @@ export default function ScenarioTestPage() {
   useEffect(()=>{loadDocs()},[])
 
   // Paste
-  const handlePaste = useCallback((e: ClipboardEvent, entryId: string) => {
+  const handlePaste = useCallback((e: ClipboardEvent, entryId: string, subId?: string) => {
     const items = e.clipboardData?.items
     if (!items) return
     for (const item of Array.from(items)) {
@@ -109,9 +120,20 @@ export default function ScenarioTestPage() {
         const reader = new FileReader()
         reader.onload = ev => {
           const dataUrl = ev.target?.result as string
-          setEntries(prev => prev.map(en => en.id !== entryId ? en : {
-            ...en, images:[...en.images,{id:crypto.randomUUID(),dataUrl,label:`Screenshot ${en.images.length+1}`}]
-          }))
+          const newImg: PastedImage = { id: crypto.randomUUID(), dataUrl, label: "" }
+          if (subId) {
+            // Paste to subsection
+            setEntries(prev => prev.map(en => en.id !== entryId ? en : {
+              ...en, subSections: en.subSections.map(ss => ss.id !== subId ? ss : {
+                ...ss, images: [...ss.images, newImg]
+              })
+            }))
+          } else {
+            // Paste to main entry
+            setEntries(prev => prev.map(en => en.id !== entryId ? en : {
+              ...en, images:[...en.images, newImg]
+            }))
+          }
           showToast("Gambar berhasil ditempel!")
         }
         reader.readAsDataURL(file); return
@@ -122,7 +144,7 @@ export default function ScenarioTestPage() {
 
   useEffect(()=>{
     if (!pasteTarget) return
-    const h = (e:ClipboardEvent)=>handlePaste(e,pasteTarget)
+    const h = (e:ClipboardEvent)=>handlePaste(e,pasteTarget.entryId,pasteTarget.subId)
     window.addEventListener("paste",h)
     return ()=>window.removeEventListener("paste",h)
   },[pasteTarget,handlePaste])
@@ -171,17 +193,33 @@ export default function ScenarioTestPage() {
   }
 
   const generateXLS = async () => {
-    if (!header.judulDokumen.trim()) { showToast("Judul dokumen wajib diisi!","err"); return }
+    if (!header.judulDokumen.trim()) { showToast("Judul dokumen wajib diisi!", "err"); return }
     setGenerating(true)
     try {
-      const res = await fetch("/api/generate-xls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({header,entries})})
-      if (!res.ok) throw new Error((await res.json()).error||"Generate failed")
-      const blob=await res.blob(), url=URL.createObjectURL(blob), a=document.createElement("a")
-      a.href=url; a.download=`${header.judulDokumen.trim().replace(/[\\/:*?"<>|]/g,"_")}.xlsx`; a.click()
-      URL.revokeObjectURL(url); showToast("File berhasil diunduh!")
-    } catch(err:unknown){ showToast(err instanceof Error?err.message:"Gagal generate","err") }
-    finally { setGenerating(false) }
+      const res = await fetch("/api/generate-xls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ header, entries }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || "Generate failed")
+      }
+      const blob  = await res.blob()
+      const url   = URL.createObjectURL(blob)
+      const a     = document.createElement("a")
+      a.href      = url
+      a.download  = `${header.judulDokumen.trim().replace(/[\/:*?"<>|]/g, "_")}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      showToast("File berhasil diunduh!")
+    } catch (err: unknown) {
+      showToast(err instanceof Error ? err.message : "Gagal generate", "err")
+    } finally {
+      setGenerating(false)
+    }
   }
+
 
   const addEntry = () => {
     const no = entries.length ? Math.max(...entries.map(e=>e.no))+1 : 1
@@ -345,12 +383,12 @@ export default function ScenarioTestPage() {
       <div style={{display:"flex",flexDirection:"column",gap:"12px"}}>
         {entries.map((entry,idx)=>(
           <EntryCard key={entry.id} entry={entry} idx={idx} total={entries.length}
-            isPasteTarget={pasteTarget===entry.id}
+            activePasteTarget={pasteTarget}
             onUpdate={(f,v)=>updateEntry(entry.id,f,v)}
             onRemove={()=>removeEntry(entry.id)}
             onMoveUp={()=>moveEntry(entry.id,"up")}
             onMoveDown={()=>moveEntry(entry.id,"down")}
-            onActivatePaste={()=>setPasteTarget(p=>p===entry.id?null:entry.id)}
+            onSetPasteTarget={t=>setPasteTarget(t)}
             onRemoveImage={iId=>removeImage(entry.id,iId)}
           />
         ))}
@@ -367,15 +405,65 @@ export default function ScenarioTestPage() {
   )
 }
 
+// ── Paste Zone ────────────────────────────────────────────────
+function PasteZone({active,imageCount,onActivate}:{active:boolean;imageCount:number;onActivate:()=>void}) {
+  return (
+    <div onClick={onActivate} style={{border:`2px dashed ${active?"var(--accent)":"var(--border2)"}`,borderRadius:"var(--radius-sm)",padding:"8px 14px",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:active?"var(--accent-muted)":"var(--surface2)",transition:"all 0.15s"}}>
+      {active
+        ? <><ClipboardPaste size={13} color="var(--accent)"/><span style={{fontSize:"12px",fontWeight:600,color:"var(--accent)"}}>Siap! Tekan <kbd style={{background:"var(--surface3)",padding:"1px 5px",borderRadius:"4px",fontFamily:"monospace"}}>Ctrl+V</kbd></span></>
+        : <><ImageIcon size={13} color="var(--text3)"/><span style={{fontSize:"12px",color:"var(--text3)"}}>Klik lalu <kbd style={{background:"var(--surface3)",padding:"1px 5px",borderRadius:"4px",fontFamily:"monospace"}}>Ctrl+V</kbd> untuk paste gambar</span></>
+      }
+      {imageCount > 0 && <span style={{marginLeft:"auto",fontSize:"11px",fontWeight:700,color:"var(--accent)",background:"var(--accent-light)",padding:"1px 8px",borderRadius:"99px"}}>{imageCount} gambar</span>}
+    </div>
+  )
+}
+
+// ── Image Grid ─────────────────────────────────────────────────
+function ImageGrid({images,onRemove}:{images:PastedImage[];onRemove:(id:string)=>void}) {
+  if (!images.length) return null
+  return (
+    <div style={{display:"flex",flexWrap:"wrap",gap:"8px",marginBottom:"10px"}}>
+      {images.map(img=>(
+        <div key={img.id} style={{border:"1.5px solid var(--border)",borderRadius:"var(--radius-sm)",overflow:"hidden",width:"160px",flexShrink:0}}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={img.dataUrl} alt="" style={{width:"100%",maxHeight:"100px",objectFit:"contain",background:"#fafafa",display:"block"}}/>
+          <div style={{padding:"3px 6px",display:"flex",justifyContent:"flex-end",borderTop:"1px solid var(--border)"}}>
+            <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--danger)"}} onClick={()=>onRemove(img.id)}><X size={11}/></button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Entry Card ────────────────────────────────────────────────
-function EntryCard({entry,idx,total,isPasteTarget,onUpdate,onRemove,onMoveUp,onMoveDown,onActivatePaste,onRemoveImage}:{
-  entry:TestEntry;idx:number;total:number;isPasteTarget:boolean
+function EntryCard({entry,idx,total,activePasteTarget,onUpdate,onRemove,onMoveUp,onMoveDown,onSetPasteTarget,onRemoveImage}:{
+  entry:TestEntry;idx:number;total:number
+  activePasteTarget:{entryId:string;subId?:string}|null
   onUpdate:(f:keyof TestEntry,v:unknown)=>void
   onRemove:()=>void;onMoveUp:()=>void;onMoveDown:()=>void
-  onActivatePaste:()=>void;onRemoveImage:(id:string)=>void
+  onSetPasteTarget:(t:{entryId:string;subId?:string}|null)=>void
+  onRemoveImage:(id:string)=>void
 }) {
+  const isMainPaste = activePasteTarget?.entryId===entry.id && !activePasteTarget?.subId
+
+  const addSubSection = () =>
+    onUpdate("subSections", [...(entry.subSections||[]), newSubSection()])
+
+  const removeSubSection = (ssId:string) =>
+    onUpdate("subSections", entry.subSections.filter(s=>s.id!==ssId))
+
+  const updateSubSection = (ssId:string, field:keyof SubSection, val:unknown) =>
+    onUpdate("subSections", entry.subSections.map(s=>s.id!==ssId?s:{...s,[field]:val}))
+
+  const removeSubImage = (ssId:string, imgId:string) =>
+    onUpdate("subSections", entry.subSections.map(s=>s.id!==ssId?s:{
+      ...s, images:s.images.filter(i=>i.id!==imgId)
+    }))
+
   return (
     <div className="card" style={{padding:"16px"}}>
+      {/* ── Header row ── */}
       <div style={{display:"flex",alignItems:"flex-start",gap:"10px",marginBottom:"12px"}}>
         <div style={{minWidth:"30px",height:"30px",borderRadius:"8px",background:"var(--accent-muted)",color:"var(--accent)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"13px",fontWeight:800,flexShrink:0}}>
           {entry.no}
@@ -396,54 +484,73 @@ function EntryCard({entry,idx,total,isPasteTarget,onUpdate,onRemove,onMoveUp,onM
         </div>
       </div>
 
+      {/* ── Keterangan + Tanggal ── */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 150px",gap:"10px",marginBottom:"12px"}}>
         <div>
           <label className="label" style={{display:"block",marginBottom:"4px"}}>KETERANGAN</label>
-          <textarea className="input" rows={2} placeholder="Deskripsi skenario…" value={entry.keterangan} onChange={e=>onUpdate("keterangan",e.target.value)}/>
+          <textarea className="input" rows={2} placeholder="Deskripsi skenario…"
+            value={entry.keterangan} onChange={e=>onUpdate("keterangan",e.target.value)}/>
         </div>
         <div>
           <label className="label" style={{display:"block",marginBottom:"4px"}}>TANGGAL TEST</label>
-          <input className="input" placeholder="dd/mm/yyyy" value={entry.tanggalTest} onChange={e=>onUpdate("tanggalTest",e.target.value)}/>
+          <input className="input" placeholder="dd/mm/yyyy"
+            value={entry.tanggalTest} onChange={e=>onUpdate("tanggalTest",e.target.value)}/>
         </div>
       </div>
 
-      {entry.images.length > 0 && (
-        <div style={{marginBottom:"12px"}}>
-          <label className="label" style={{display:"block",marginBottom:"8px"}}>GAMBAR ({entry.images.length})</label>
-          <div style={{display:"flex",flexWrap:"wrap",gap:"10px"}}>
-            {entry.images.map(img=>(
-              <div key={img.id} style={{border:"1.5px solid var(--border)",borderRadius:"var(--radius-sm)",overflow:"hidden",width:"180px"}}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img.dataUrl} alt={img.label} style={{width:"100%",maxHeight:"110px",objectFit:"contain",background:"#fafafa",display:"block"}}/>
-                <div style={{padding:"4px 8px",display:"flex",gap:"4px",alignItems:"center",borderTop:"1px solid var(--border)"}}>
-                  <span style={{fontSize:"11px",color:"var(--text3)",flex:1}}>{img.label}</span>
-                  <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--danger)"}} onClick={()=>onRemoveImage(img.id)}><X size={12}/></button>
+      {/* ── Main entry images ── */}
+      <ImageGrid images={entry.images} onRemove={onRemoveImage}/>
+      <div style={{marginBottom:"12px"}}>
+        <PasteZone active={isMainPaste} imageCount={entry.images.length}
+          onActivate={()=>onSetPasteTarget(isMainPaste?null:{entryId:entry.id})}/>
+      </div>
+
+      {/* ── Sub-sections ── */}
+      {(entry.subSections||[]).length > 0 && (
+        <div style={{display:"flex",flexDirection:"column",gap:"8px",marginBottom:"12px"}}>
+          {entry.subSections.map((ss,ssIdx)=>{
+            const isSubPaste = activePasteTarget?.entryId===entry.id && activePasteTarget?.subId===ss.id
+            return (
+              <div key={ss.id} style={{
+                border:"1.5px solid var(--border)",borderRadius:"var(--radius-sm)",
+                padding:"12px",background:"var(--surface2)",
+                borderLeft:"3px solid var(--accent2)",
+              }}>
+                {/* Sub-section header */}
+                <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}}>
+                  <span style={{fontSize:"11px",fontWeight:700,color:"var(--accent2)",background:"var(--accent-muted)",padding:"2px 8px",borderRadius:"99px"}}>
+                    Sub {ssIdx+1}
+                  </span>
+                  <div style={{flex:1}}/>
+                  <button style={{background:"none",border:"none",cursor:"pointer",color:"var(--danger)",padding:"2px"}}
+                    onClick={()=>removeSubSection(ss.id)}>
+                    <X size={13}/>
+                  </button>
                 </div>
+
+                {/* Deskripsi */}
+                <div style={{marginBottom:"8px"}}>
+                  <label className="label" style={{display:"block",marginBottom:"4px"}}>DESKRIPSI</label>
+                  <textarea className="input" rows={2} placeholder="Deskripsi sub-section…"
+                    value={ss.deskripsi}
+                    onChange={e=>updateSubSection(ss.id,"deskripsi",e.target.value)}/>
+                </div>
+
+                {/* Sub images */}
+                <ImageGrid images={ss.images} onRemove={imgId=>removeSubImage(ss.id,imgId)}/>
+                <PasteZone active={isSubPaste} imageCount={ss.images.length}
+                  onActivate={()=>onSetPasteTarget(isSubPaste?null:{entryId:entry.id,subId:ss.id})}/>
               </div>
-            ))}
-          </div>
+            )
+          })}
         </div>
       )}
 
-      {(entry.images.length > 0 || entry.subKeterangan) && (
-        <div style={{marginBottom:"12px"}}>
-          <label className="label" style={{display:"block",marginBottom:"4px"}}>KETERANGAN TAMBAHAN</label>
-          <input className="input" style={{fontSize:"13px"}} placeholder="Teks setelah gambar…"
-            value={entry.subKeterangan} onChange={e=>onUpdate("subKeterangan",e.target.value)}/>
-        </div>
-      )}
-
-      <div onClick={onActivatePaste} style={{border:`2px dashed ${isPasteTarget?"var(--accent)":"var(--border2)"}`,borderRadius:"var(--radius-sm)",padding:"9px 14px",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:isPasteTarget?"var(--accent-muted)":"var(--surface2)",transition:"all 0.15s"}}>
-        {isPasteTarget
-          ? <><ClipboardPaste size={14} color="var(--accent)"/><span style={{fontSize:"12px",fontWeight:600,color:"var(--accent)"}}>Siap! Tekan <kbd style={{background:"var(--surface3)",padding:"1px 5px",borderRadius:"4px",fontFamily:"monospace"}}>Ctrl+V</kbd> untuk paste screenshot</span></>
-          : <><ImageIcon size={14} color="var(--text3)"/><span style={{fontSize:"12px",color:"var(--text3)"}}>Klik di sini lalu <kbd style={{background:"var(--surface3)",padding:"1px 5px",borderRadius:"4px",fontFamily:"monospace"}}>Ctrl+V</kbd> untuk paste gambar</span></>
-        }
-        {entry.images.length > 0 && (
-          <span style={{marginLeft:"auto",fontSize:"11px",fontWeight:700,color:"var(--accent)",background:"var(--accent-light)",padding:"1px 8px",borderRadius:"99px"}}>
-            {entry.images.length} gambar
-          </span>
-        )}
-      </div>
+      {/* ── Add sub-section button ── */}
+      <button className="btn btn-ghost" onClick={addSubSection}
+        style={{width:"100%",justifyContent:"center",borderStyle:"dashed",fontSize:"12px",padding:"7px"}}>
+        <Layers size={13}/> Tambah Sub-Section
+      </button>
     </div>
   )
 }
