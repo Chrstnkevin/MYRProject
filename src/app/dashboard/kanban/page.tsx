@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useRef } from "react"
 import { supabase } from "@/lib/supabase"
 import { KanbanTask } from "@/lib/types"
-import { Plus, X, ChevronLeft, ChevronRight, LayoutGrid, Calendar, FileText, Copy, Check, RefreshCw } from "lucide-react"
+import { Plus, X, ChevronLeft, ChevronRight, LayoutGrid, Calendar, FileText, Copy, Check, RefreshCw, Edit3, GripVertical } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import ModalOverlay from "@/components/layout/ModalOverlay"
 
@@ -53,6 +53,8 @@ export default function KanbanPage() {
   const [date, setDate]             = useState(new Date().toISOString().split("T")[0])
   const [tab, setTab]               = useState<TabView>("board")
   const [modal, setModal]           = useState(false)
+  const [editingTask, setEditingTask] = useState<KanbanTask | null>(null)
+  const [longPressTask, setLongPressTask] = useState<string | null>(null)
   const [form, setForm]             = useState({ ...EMPTY, date })
   const [tagInput, setTagInput]     = useState("")
   const [saving, setSaving]         = useState(false)
@@ -102,11 +104,32 @@ export default function KanbanPage() {
   const save = async () => {
     if (!form.title) return
     setSaving(true)
-    const col = getColumnTasks(form.status || "todo")
-    const maxOrder = col.length > 0 ? Math.max(...col.map(t => t.order_index)) + 1 : 0
-    await supabase.from("kanban_tasks").insert([{ ...form, date, order_index: maxOrder, updated_at: new Date().toISOString() }])
-    setModal(false); setForm({ ...EMPTY, date }); setSaving(false)
+    if (editingTask) {
+      // Update existing task
+      await supabase.from("kanban_tasks").update({
+        title: form.title, description: form.description,
+        status: form.status, priority: form.priority,
+        date: form.date, due_date: form.due_date, tags: form.tags,
+        updated_at: new Date().toISOString()
+      }).eq("id", editingTask.id)
+    } else {
+      // Create new task
+      const col = getColumnTasks(form.status || "todo")
+      const maxOrder = col.length > 0 ? Math.max(...col.map(t => t.order_index)) + 1 : 0
+      await supabase.from("kanban_tasks").insert([{ ...form, date, order_index: maxOrder, updated_at: new Date().toISOString() }])
+    }
+    setModal(false); setEditingTask(null); setForm({ ...EMPTY, date }); setSaving(false)
     if (tab === "board") loadBoard(); else loadCalendar()
+  }
+
+  const openEdit = (task: KanbanTask) => {
+    setEditingTask(task)
+    setForm({
+      title: task.title, description: task.description || "",
+      status: task.status, priority: task.priority,
+      date: task.date, due_date: task.due_date || "", tags: task.tags || []
+    })
+    setModal(true)
   }
 
   const del = async (id: string) => {
@@ -249,7 +272,7 @@ ${todoList}`
               <FileText size={15} /> Generate Report
             </button>
           )}
-          <button className="btn btn-primary" onClick={() => { setForm({ ...EMPTY, date }); setModal(true) }}>
+          <button className="btn btn-primary" onClick={() => { setEditingTask(null); setForm({ ...EMPTY, date }); setModal(true) }}>
             <Plus size={16} /> Task
           </button>
         </div>
@@ -297,47 +320,97 @@ ${todoList}`
 
                   {/* Tasks — no min-height to avoid whitespace */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                    {colTasks.map(task => (
-                      <div key={task.id} draggable
-                        onDragStart={() => setDragging(task.id)}
-                        onDragEnd={() => setDragging(null)}
-                        className="card"
-                        style={{ padding: "14px", cursor: "grab", opacity: dragging === task.id ? 0.4 : 1, transition: "opacity 0.15s" }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "8px" }}>
-                          <span style={{ fontSize: "13px", fontWeight: 600, flex: 1, lineHeight: 1.4 }}>{task.title}</span>
-                          <button onClick={() => del(task.id)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", padding: "0 0 0 8px", flexShrink: 0 }}>
-                            <X size={13} />
-                          </button>
-                        </div>
-                        {task.description && <p style={{ fontSize: "12px", color: "var(--text3)", marginBottom: "10px", lineHeight: 1.5 }}>{task.description}</p>}
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "99px", fontWeight: 600, background: PRIO_BG[task.priority], color: PRIO_COLOR[task.priority] }}>
-                            {task.priority === "critical" ? "🔥 " : ""}{task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
-                          </span>
-                          {col.key === "todo" && (
-                            <span className="mono" style={{ fontSize: "10px", color: "var(--text3)", background: "var(--bg)", padding: "2px 7px", borderRadius: "99px", border: "1px solid var(--border)" }}>
-                              {new Date(task.date).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                    {colTasks.map(task => {
+                      const isLongPress = longPressTask === task.id
+                      let pressTimer: ReturnType<typeof setTimeout>
+                      return (
+                        <div key={task.id}
+                          draggable={isLongPress}
+                          onDragStart={() => { if (isLongPress) setDragging(task.id) }}
+                          onDragEnd={() => { setDragging(null); setLongPressTask(null) }}
+                          className="card"
+                          onClick={() => { if (!isLongPress) openEdit(task) }}
+                          onMouseDown={() => { pressTimer = setTimeout(() => setLongPressTask(task.id), 500) }}
+                          onMouseUp={() => { clearTimeout(pressTimer); if (!isLongPress) setLongPressTask(null) }}
+                          onMouseLeave={() => { clearTimeout(pressTimer) }}
+                          onTouchStart={() => { pressTimer = setTimeout(() => setLongPressTask(task.id), 500) }}
+                          onTouchEnd={() => { clearTimeout(pressTimer) }}
+                          style={{
+                            padding: "12px 14px", cursor: isLongPress ? "grab" : "pointer",
+                            opacity: dragging === task.id ? 0.4 : 1,
+                            transition: "all 0.2s cubic-bezier(0.22,1,0.36,1)",
+                            outline: isLongPress ? "2px solid var(--accent)" : "none",
+                            transform: isLongPress ? "scale(1.02)" : "scale(1)",
+                            userSelect: "none",
+                          }}
+                        >
+                          {/* Top row: tag kiri | priority kanan */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", flex: 1 }}>
+                              {(task.tags?.length || 0) > 0
+                                ? task.tags?.map(tag => (
+                                    <span key={tag} style={{ fontSize: "10px", padding: "1px 7px", borderRadius: "99px", background: "var(--accent-muted)", color: "var(--accent)", fontWeight: 600 }}>#{tag}</span>
+                                  ))
+                                : <span style={{ fontSize: "10px", color: "var(--border2)" }}>—</span>
+                              }
+                            </div>
+                            <span style={{ fontSize: "10px", padding: "2px 8px", borderRadius: "99px", fontWeight: 700, background: PRIO_BG[task.priority], color: PRIO_COLOR[task.priority], flexShrink: 0, marginLeft: "6px" }}>
+                              {task.priority === "critical" ? "🔥 " : ""}{task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
                             </span>
+                          </div>
+
+                          {/* Title */}
+                          <div style={{ fontSize: "13px", fontWeight: 700, lineHeight: 1.4, color: "var(--text)", marginBottom: task.description ? "6px" : "0" }}>
+                            {task.title}
+                          </div>
+
+                          {/* Description */}
+                          {task.description && (
+                            <p style={{ fontSize: "12px", color: "var(--text3)", lineHeight: 1.5, margin: "0 0 8px" }}>{task.description}</p>
                           )}
-                        </div>
-                        {(task.tags?.length || 0) > 0 && (
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginTop: "8px" }}>
-                            {task.tags?.map(tag => (
-                              <span key={tag} style={{ fontSize: "10px", padding: "1px 7px", borderRadius: "99px", background: "var(--accent-muted)", color: "var(--accent)" }}>#{tag}</span>
+
+                          {/* Bottom row: date (todo) | delete | drag hint */}
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              {col.key === "todo" && (
+                                <span className="mono" style={{ fontSize: "10px", color: "var(--text3)", background: "var(--bg)", padding: "2px 7px", borderRadius: "99px", border: "1px solid var(--border)" }}>
+                                  {new Date(task.date).toLocaleDateString("id-ID", { day: "numeric", month: "short" })}
+                                </span>
+                              )}
+                              <span style={{ fontSize: "10px", color: "var(--text3)", opacity: isLongPress ? 1 : 0.4, transition: "opacity 0.2s", display: "flex", alignItems: "center", gap: "2px" }}>
+                                <GripVertical size={11} /> {isLongPress ? "lepas untuk pindah" : "tahan untuk pindah"}
+                              </span>
+                            </div>
+                            <button
+                              onClick={e => { e.stopPropagation(); del(task.id) }}
+                              style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", padding: "2px 4px", borderRadius: "4px", transition: "color 0.15s" }}
+                              onMouseEnter={e => (e.currentTarget.style.color = "var(--danger)")}
+                              onMouseLeave={e => (e.currentTarget.style.color = "var(--text3)")}
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+
+                          {/* Move buttons — only show when long pressed */}
+                          <div style={{
+                            display: "flex", gap: "4px", flexWrap: "wrap",
+                            maxHeight: isLongPress ? "40px" : "0px",
+                            overflow: "hidden",
+                            marginTop: isLongPress ? "8px" : "0",
+                            transition: "all 0.2s cubic-bezier(0.22,1,0.36,1)",
+                            opacity: isLongPress ? 1 : 0,
+                          }}>
+                            {COLUMNS.filter(c => c.key !== col.key).map(c => (
+                              <button key={c.key}
+                                onClick={e => { e.stopPropagation(); moveTask(task.id, task.status, c.key); setLongPressTask(null) }}
+                                style={{ fontSize: "10px", padding: "3px 9px", borderRadius: "4px", cursor: "pointer", background: STATUS_BG[c.key], border: `1px solid ${c.color}40`, color: c.color, fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 700, transition: "all 0.15s" }}>
+                                → {c.label}
+                              </button>
                             ))}
                           </div>
-                        )}
-                        <div style={{ display: "flex", gap: "4px", marginTop: "10px", flexWrap: "wrap" }}>
-                          {COLUMNS.filter(c => c.key !== col.key).map(c => (
-                            <button key={c.key} onClick={() => moveTask(task.id, task.status, c.key)}
-                              style={{ fontSize: "10px", padding: "2px 7px", borderRadius: "4px", cursor: "pointer", background: STATUS_BG[c.key], border: `1px solid ${c.color}30`, color: c.color, fontFamily: "'Plus Jakarta Sans', sans-serif", fontWeight: 600 }}>
-                              → {c.label}
-                            </button>
-                          ))}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
 
                     {/* Drop zone - only show when dragging */}
                     {colTasks.length === 0 && (
@@ -405,6 +478,7 @@ ${todoList}`
                   <div key={task.id} className="card" style={{ padding: "12px 14px" }}>
                     <div style={{ display: "flex", gap: "8px", marginBottom: "6px" }}>
                       <span style={{ fontSize: "13px", fontWeight: 600, flex: 1 }}>{task.title}</span>
+                      <button onClick={() => openEdit(task)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer" }} title="Edit task"><Edit3 size={12} /></button>
                       <button onClick={() => del(task.id)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer" }}><X size={12} /></button>
                     </div>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
@@ -472,11 +546,11 @@ ${todoList}`
 
       {/* ── TASK MODAL ────────────────────────────────────── */}
       {modal && (
-        <ModalOverlay onClose={() => setModal(false)}>
+        <ModalOverlay onClose={() => { setModal(false); setEditingTask(null); setForm({ ...EMPTY, date }) }}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: "480px", width: "100%", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-              <span style={{ fontWeight: 800, fontSize: "16px" }}>Buat Task Baru</span>
-              <button onClick={() => setModal(false)} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", padding: 6, borderRadius: "var(--radius-xs)" }}><X size={18} /></button>
+              <span style={{ fontWeight: 800, fontSize: "16px" }}>{editingTask ? "✏️ Edit Task" : "Buat Task Baru"}</span>
+              <button onClick={() => { setModal(false); setEditingTask(null); setForm({ ...EMPTY, date }) }} style={{ background: "none", border: "none", color: "var(--text3)", cursor: "pointer", padding: 6, borderRadius: "var(--radius-xs)" }}><X size={18} /></button>
             </div>
             <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto" }}>
               <div>
@@ -527,9 +601,9 @@ ${todoList}`
               </div>
             </div>
             <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", gap: "10px", flexShrink: 0 }}>
-              <button className="btn btn-ghost" onClick={() => setModal(false)} style={{ flex: 1 }}>Batal</button>
+              <button className="btn btn-ghost" onClick={() => { setModal(false); setEditingTask(null); setForm({ ...EMPTY, date }) }} style={{ flex: 1 }}>Batal</button>
               <button className="btn btn-primary" onClick={save} disabled={saving || !form.title} style={{ flex: 2, opacity: !form.title ? 0.6 : 1 }}>
-                {saving ? "Menyimpan..." : "Buat Task"}
+                {saving ? "Menyimpan..." : editingTask ? "Simpan Perubahan" : "Buat Task"}
               </button>
             </div>
           </div>
