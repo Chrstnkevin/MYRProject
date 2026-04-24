@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
 
   } else {
     // ── NETLIFY: forward ke Python function ──────────────────
-    const netlifyFnUrl = `${req.nextUrl.origin}/.netlify/functions/generate-xls`
+    const netlifyFnUrl = `${req.nextUrl.origin}/.netlify/functions/generate_xls`
     console.log("[generate-xls] No Python found, calling Netlify fn:", netlifyFnUrl)
 
     const res     = await fetch(netlifyFnUrl, {

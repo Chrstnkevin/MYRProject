@@ -9,10 +9,9 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
-# Python functions configuration
 [functions]
   directory = "netlify/functions"
+  node_bundler = "esbuild"
 
-# Python runtime untuk generate-xls function
-[functions.generate-xls]
+[functions."generate_xls"]
   runtime = "python3.9"
