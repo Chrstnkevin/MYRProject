@@ -28,14 +28,23 @@ def handler(event, context):
         header  = body.get("header", {})
         entries = body.get("entries", [])
 
-        # Path ke template (relative to function, template ada di public/templates)
-        # Di Netlify, base dir = root project
-        template_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "public", "templates", "scenario-test-template.xlsx"
-        )
+        # Cari template — coba beberapa path (local & Netlify)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(base_dir, "..", "..", "public", "templates", "scenario-test-template.xlsx"),
+            os.path.join(os.getcwd(), "public", "templates", "scenario-test-template.xlsx"),
+            os.path.join(base_dir, "..", "public", "templates", "scenario-test-template.xlsx"),
+        ]
+        template_path = None
+        for c in candidates:
+            norm = os.path.normpath(c)
+            if os.path.exists(norm):
+                template_path = norm
+                break
 
-        if not os.path.exists(template_path):
-            return error_response("Template tidak ditemukan")
+        if not template_path:
+            tried = [os.path.normpath(c) for c in candidates]
+            return error_response(f"Template tidak ditemukan. Paths: {tried}")
 
         wb = load_workbook(template_path)
         ws = wb.active

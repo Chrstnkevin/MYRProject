@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
 
       const buf   = fs.readFileSync(outFile)
       const fname = (header.judulDokumen || "scenario-test").trim().replace(/[\\/:*?"<>|]/g, "_")
-      return new NextResponse(buf, {
+      return new NextResponse(new Uint8Array(buf), {
         status: 200,
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -165,23 +165,46 @@ export async function POST(req: NextRequest) {
 
   } else {
     // ── NETLIFY: forward ke Python function ──────────────────
-    // Di Netlify, function Python ada di /.netlify/functions/generate-xls
     const netlifyFnUrl = `${req.nextUrl.origin}/.netlify/functions/generate-xls`
+    console.log("[generate-xls] No Python found, calling Netlify fn:", netlifyFnUrl)
 
-    const res = await fetch(netlifyFnUrl, {
+    const res     = await fetch(netlifyFnUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ header, entries }),
     })
 
+    const rawText = await res.text()
+    console.log("[generate-xls] Netlify fn status:", res.status)
+    console.log("[generate-xls] Netlify fn response (500 chars):", rawText.slice(0, 500))
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: "Netlify function error" }))
-      return NextResponse.json(err, { status: 500 })
+      let errMsg = `Netlify function error (status ${res.status})`
+      try {
+        const parsed = JSON.parse(rawText)
+        errMsg = parsed.error || parsed.errorMessage || rawText.slice(0, 300)
+      } catch {}
+      return NextResponse.json({ error: errMsg }, { status: 500 })
     }
 
-    const buf   = await res.arrayBuffer()
+    // Netlify Python function return isBase64Encoded response
+    let buf: Buffer
+    try {
+      const parsed = JSON.parse(rawText)
+      if (parsed.isBase64Encoded && parsed.body) {
+        // Normal Netlify function response — decode base64 body
+        buf = Buffer.from(parsed.body, "base64")
+      } else if (parsed.error) {
+        return NextResponse.json({ error: parsed.error }, { status: 500 })
+      } else {
+        return NextResponse.json({ error: "Format response tidak dikenali dari Netlify function" }, { status: 500 })
+      }
+    } catch {
+      return NextResponse.json({ error: `Response bukan JSON valid: ${rawText.slice(0, 200)}` }, { status: 500 })
+    }
+
     const fname = (header.judulDokumen || "scenario-test").trim().replace(/[\\/:*?"<>|]/g, "_")
-    return new NextResponse(buf, {
+    return new NextResponse(new Uint8Array(buf), {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
