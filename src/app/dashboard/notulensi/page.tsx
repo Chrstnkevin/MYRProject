@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { Plus, FileText, Trash2, X, ChevronRight, Check, MapPin, Clock, Users, Upload, RefreshCw } from "lucide-react"
+import { Plus, FileText, Trash2, X, ChevronRight, Check, MapPin, Clock, Users, Upload, RefreshCw, Copy, Share2, ClipboardCheck, Sparkles, Loader2 } from "lucide-react"
 import { useRef } from "react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
@@ -58,12 +58,133 @@ export default function NotulensiPage() {
   const [form, setForm]       = useState(newDoc())
   const [selected, setSelected] = useState<NotulensiDoc | null>(null)
   const [attendeeInput, setAttendeeInput] = useState("")
-  const [saving, setSaving]   = useState(false)
+  const [saving, setSaving]     = useState(false)
+  const [aiParsing, setAiParsing] = useState(false)
+  const [aiError, setAiError]     = useState("")
+  const [copyToast, setCopyToast] = useState<"detail"|"ringkasan"|null>(null)
+  const aiFileRef                 = useRef<HTMLInputElement>(null)
   const [numAttendees, setNumAttendees] = useState(1)
   const [uploading, setUploading]     = useState(false)
   const [parseError, setParseError]   = useState("")
   const [uploadQueue, setUploadQueue] = useState<string[]>([])  // list nama file dalam antrian
   const fileInputRef                  = useRef<HTMLInputElement>(null)
+
+  const applyParsed = (p: Record<string, unknown>) => {
+    setForm(prev => ({
+      ...prev,
+      title:            (p.title as string)            || prev.title,
+      date:             (p.date as string)             || prev.date,
+      time:             (p.time as string)             || prev.time,
+      location:         (p.location as string)         || prev.location,
+      attendees:        Array.isArray(p.attendees) && p.attendees.length ? p.attendees as string[] : prev.attendees,
+      topic:            (p.topic as string)            || prev.topic,
+      background:       (p.background as string)       || prev.background,
+      tujuan:           (p.tujuan as string)           || prev.tujuan,
+      main_points:      Array.isArray(p.main_points) && p.main_points.length
+        ? (p.main_points as string[]).map(t => ({ id: crypto.randomUUID(), text: t }))
+        : prev.main_points,
+      kendala:          Array.isArray(p.kendala) && p.kendala.length
+        ? (p.kendala as string[]).map(t => ({ id: crypto.randomUUID(), text: t }))
+        : prev.kendala,
+      action_items:     Array.isArray(p.action_items) && p.action_items.length
+        ? (p.action_items as {text:string;pic:string;deadline:string}[]).map(a => ({
+            id: crypto.randomUUID(), text: a.text||"", pic: a.pic||"", deadline: a.deadline||"", done: false
+          }))
+        : prev.action_items,
+      catatan_tambahan: (p.catatan_tambahan as string) || prev.catatan_tambahan,
+    }))
+  }
+
+  const parseFile = async (file: File) => {
+    setAiParsing(true); setAiError("")
+    try {
+      const reader = new FileReader()
+      const base64 = await new Promise<string>(res => {
+        reader.onload = ev => res(((ev.target?.result as string)||"").split(",")[1]||"")
+        reader.readAsDataURL(file)
+      })
+      const resp = await fetch("/api/parse-notulensi", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileBase64: base64, fileType: file.type, fileName: file.name }),
+      })
+      const data = await resp.json()
+      if (!resp.ok || !data.parsed) throw new Error(data.error || "AI gagal parse")
+      applyParsed(data.parsed)
+    } catch (err: unknown) {
+      setAiError(err instanceof Error ? err.message : "Gagal parse")
+    } finally { setAiParsing(false) }
+  }
+
+  const parseText = async (text: string) => {
+    setAiParsing(true); setAiError("")
+    try {
+      const resp = await fetch("/api/parse-notulensi", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawText: text }),
+      })
+      const data = await resp.json()
+      if (!resp.ok || !data.parsed) throw new Error(data.error || "AI gagal parse")
+      applyParsed(data.parsed)
+    } catch (err: unknown) {
+      setAiError(err instanceof Error ? err.message : "Gagal parse")
+    } finally { setAiParsing(false) }
+  }
+
+  const showCopyToast = (type: "detail"|"ringkasan") => {
+    setCopyToast(type); setTimeout(() => setCopyToast(null), 2500)
+  }
+
+  const copyDetail = (doc: NotulensiDoc) => {
+    const tgl = new Date(doc.date).toLocaleDateString("id-ID",{weekday:"long",day:"numeric",month:"long",year:"numeric"})
+    const lines = [
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+      "📋 NOTULENSI RAPAT",
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+      `📌 ${doc.title}`,
+      `📅 ${tgl}${doc.time?" · "+doc.time:""}`,
+      ...(doc.location?[`📍 ${doc.location}`]:[]),
+      ...(doc.attendees?.length?[`👥 Peserta: ${doc.attendees.join(", ")}`]:[]),
+      "",
+      ...(doc.topic?["🎯 TOPIK",doc.topic,""]:[]),
+      ...(doc.background?["📖 LATAR BELAKANG",doc.background,""]:[]),
+      ...(doc.tujuan?["🏁 TUJUAN",doc.tujuan,""]:[]),
+      ...(doc.main_points?.filter(p=>p.text).length?["💡 POIN UTAMA",...doc.main_points.filter(p=>p.text).map((p,i)=>`${i+1}. ${p.text}`),""]:[]),
+      ...(doc.kendala?.filter(k=>k.text).length?["⚠️ KENDALA",...doc.kendala.filter(k=>k.text).map((k,i)=>`${i+1}. ${k.text}`),""]:[]),
+      ...(doc.action_items?.length?["✅ TINDAK LANJUT",...doc.action_items.map((a,i)=>{
+        const dl=a.deadline?new Date(a.deadline).toLocaleDateString("id-ID",{day:"numeric",month:"short"}):"-"
+        return `${i+1}. ${a.text}\n   PIC: ${a.pic||"-"} | ${dl} | ${a.done?"✓ Selesai":"⏳ Pending"}`
+      }),""]:[]),
+      ...(doc.catatan_tambahan?["📝 CATATAN",doc.catatan_tambahan,""]:[]),
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    navigator.clipboard.writeText(lines.join("\n"))
+    showCopyToast("detail")
+  }
+
+  const copyRingkasan = (doc: NotulensiDoc) => {
+    const tgl = new Date(doc.date).toLocaleDateString("id-ID",{day:"numeric",month:"long",year:"numeric"})
+    const pending = doc.action_items?.filter(a=>!a.done)||[]
+    const mainPts = doc.main_points?.filter(p=>p.text)||[]
+    const att = doc.attendees||[]
+    const attStr = att.slice(0,3).join(", ") + (att.length>3 ? ` +${att.length-3} lainnya` : "")
+    const lines = [
+      `📋 *${doc.title}*`,
+      `📅 ${tgl}${doc.time?" · "+doc.time:""}${doc.location?" · "+doc.location:""}`,
+      ...(att.length?[`👥 ${att.length} peserta: ${attStr}`]:[]),
+      "",
+      ...(doc.topic?[`🎯 *Topik:* ${doc.topic}`]:[]),
+      ...(doc.tujuan?[`🏁 *Tujuan:* ${doc.tujuan}`]:[]),
+      ...(mainPts.length?["","*💡 Poin Utama:*",...mainPts.slice(0,4).map((p,i)=>`${i+1}. ${p.text}`),
+        ...(mainPts.length>4?[`   _...+${mainPts.length-4} poin lainnya_`]:[])]:[]),
+      ...(pending.length?["","*✅ Action Items:*",...pending.slice(0,3).map(a=>{
+        const dl=a.deadline?new Date(a.deadline).toLocaleDateString("id-ID",{day:"numeric",month:"short"}):"-"
+        return `• ${a.text} _(${a.pic||"-"}, ${dl})_`
+      }),...(pending.length>3?[`   _...+${pending.length-3} lainnya_`]:[])]:[]),
+      "","_Dikirim via Elite Global Dashboard_",
+    ]
+    navigator.clipboard.writeText(lines.join("\n"))
+    showCopyToast("ringkasan")
+  }
 
   const load = async () => {
     const { data } = await supabase.from("notulensi").select("*").order("date", { ascending: false })
@@ -334,7 +455,35 @@ export default function NotulensiPage() {
       </div>
 
       {step === 1 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <input ref={aiFileRef} type="file" style={{ display: "none" }}
+            accept=".pdf,.doc,.docx,.txt,.md,image/*"
+            onChange={e => { if (e.target.files?.[0]) parseFile(e.target.files[0]) }}
+          />
+          <div className="card" style={{ padding: "16px 20px", background: "var(--accent-muted)", border: "1.5px dashed var(--accent2)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+              <div style={{ width: "34px", height: "34px", borderRadius: "10px", background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <Sparkles size={16} color="white" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--accent)" }}>✨ Auto-fill dengan AI</div>
+                <div style={{ fontSize: "11px", color: "var(--text3)" }}>Upload file atau paste teks → AI isi semua form otomatis</div>
+              </div>
+              <button className="btn btn-secondary" style={{ fontSize: "12px", flexShrink: 0 }}
+                onClick={() => aiFileRef.current?.click()} disabled={aiParsing}>
+                {aiParsing
+                  ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }}/> Membaca...</>
+                  : <><Upload size={13}/> Upload File</>}
+              </button>
+            </div>
+            <AITextInput onParse={parseText} loading={aiParsing} />
+            {aiError && (
+              <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--danger)", padding: "7px 12px", background: "var(--danger-bg)", borderRadius: "6px" }}>
+                ⚠️ {aiError}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
           {/* Detail Rapat */}
           <div className="card" style={{ padding: "20px" }}>
             <div style={{ fontWeight: 700, marginBottom: "16px", display: "flex", alignItems: "center", gap: "8px" }}>
@@ -395,6 +544,7 @@ export default function NotulensiPage() {
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       )}
@@ -576,7 +726,13 @@ export default function NotulensiPage() {
           {step === 1 ? "Batal" : "← Edit Info"}
         </button>
         {step === 1 ? (
-          <button className="btn btn-primary" onClick={() => setStep(2)} disabled={!form.title || !form.date}>
+          <button className="btn btn-primary" onClick={() => {
+            if (!form.title.trim()) {
+              alert("Nama notulensi wajib diisi terlebih dahulu")
+              return
+            }
+            setStep(2)
+          }}>
             Lanjut ke Pencatatan →
           </button>
         ) : (
@@ -603,7 +759,15 @@ export default function NotulensiPage() {
             </div>
           </div>
         </div>
-        <button className="btn btn-danger" onClick={() => del(selected.id)}><Trash2 size={15} /> Hapus</button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button className="btn btn-ghost" style={{ fontSize: "12px" }} onClick={() => copyRingkasan(selected)}>
+            {copyToast === "ringkasan" ? <><ClipboardCheck size={14} color="var(--success)"/> Tersalin!</> : <><Share2 size={14}/> Share</>}
+          </button>
+          <button className="btn btn-ghost" style={{ fontSize: "12px" }} onClick={() => copyDetail(selected)}>
+            {copyToast === "detail" ? <><ClipboardCheck size={14} color="var(--success)"/> Tersalin!</> : <><Copy size={14}/> Copy Detail</>}
+          </button>
+          <button className="btn btn-danger" onClick={() => del(selected.id)}><Trash2 size={15} /> Hapus</button>
+        </div>
       </div>
 
       {/* Tags row */}
@@ -748,4 +912,39 @@ export default function NotulensiPage() {
   )
 
   return null
+}
+
+// ── AITextInput ───────────────────────────────────────────────
+function AITextInput({ onParse, loading }: { onParse: (text: string) => void; loading: boolean }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState("")
+  return (
+    <div>
+      <button type="button" className="btn btn-ghost"
+        style={{ fontSize: "11px", width: "100%", justifyContent: "center", padding: "6px", borderStyle: "dashed" }}
+        onClick={() => setOpen(v => !v)}>
+        📋 {open ? "Tutup" : "Atau paste teks catatan langsung (Ctrl+V)"}
+      </button>
+      {open && (
+        <div style={{ marginTop: "10px" }}>
+          <textarea className="input" rows={5}
+            placeholder="Paste catatan rapat di sini (Ctrl+V)..."
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onPaste={e => { const t = e.clipboardData.getData("text"); if (t.trim().length > 30) setText(t) }}
+            style={{ fontFamily: "monospace", fontSize: "12px", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+            <button className="btn btn-primary" style={{ fontSize: "12px", flex: 1 }}
+              onClick={() => { if (text.trim()) { onParse(text); setOpen(false); setText("") } }}
+              disabled={loading || !text.trim()}>
+              {loading ? "⏳ AI sedang membaca…" : "✨ Generate dengan AI"}
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: "12px" }}
+              onClick={() => { setText(""); setOpen(false) }}>Batal</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }

@@ -1,24 +1,17 @@
 "use client"
 
-import { useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
-import {
-  Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText,
-  X, Sparkles, LogOut, Database, ClipboardList, FolderOpen, ChevronDown, ChevronRight
-} from "lucide-react"
+import { Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText, X, Sparkles, LogOut, Database, Globe } from "lucide-react"
 
-const NAV_TOP = [
-  { icon: Home,          label: "Home",           path: "/dashboard",               desc: "Overview harian"        },
-  { icon: LayoutGrid,    label: "Kanban",          path: "/dashboard/kanban",        desc: "Task board"             },
-  { icon: FileText,      label: "Notulensi",       path: "/dashboard/notulensi",     desc: "Catatan rapat"          },
-  { icon: Database,      label: "Restore DB PHI",  path: "/dashboard/restore-phi",   desc: "Monitoring DRP Restore" },
-  { icon: DollarSign,    label: "Finance",         path: "/dashboard/finance",       desc: "Keuangan"               },
-]
-
-const NAV_DOKUMEN = [
-  { icon: ScrollText,    label: "Doc Req",         path: "/dashboard/docreq",        desc: "AI Doc Generator",      ai: true  },
-  { icon: GitBranch,     label: "User Flow",       path: "/dashboard/userflow",      desc: "AI Flowchart Generator",ai: true  },
-  { icon: ClipboardList, label: "Scenario Test",   path: "/dashboard/scenario-test", desc: "Form Scenario Testing", ai: false },
+const NAV = [
+  { icon: Home,       label: "Home",           path: "/dashboard",                desc: "Overview harian",        ai: false },
+  { icon: FileText,   label: "Notulensi",      path: "/dashboard/notulensi",      desc: "Catatan rapat",          ai: false },
+  { icon: DollarSign, label: "Finance",        path: "/dashboard/finance",        desc: "Keuangan",               ai: false },
+  { icon: LayoutGrid, label: "Kanban",         path: "/dashboard/kanban",         desc: "Task board",             ai: false },
+  { icon: GitBranch,  label: "User Flow",      path: "/dashboard/userflow",       desc: "AI Flowchart Generator", ai: true  },
+  { icon: ScrollText, label: "Doc Req",        path: "/dashboard/docreq",         desc: "AI Doc Generator",       ai: true  },
+  { icon: Database,   label: "Restore DB PHI", path: "/dashboard/restore-phi",    desc: "Monitoring DRP Restore", ai: false },
+  { icon: Globe,      label: "Landing Page",   path: "/dashboard/landing-admin", desc: "Manage Public Website",  ai: false },
 ]
 
 interface Props { isOpen: boolean; onClose: () => void }
@@ -26,9 +19,6 @@ interface Props { isOpen: boolean; onClose: () => void }
 export default function Sidebar({ isOpen, onClose }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
-  const [dokumenOpen, setDokumenOpen] = useState(
-    NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
-  )
 
   const today   = new Date()
   const dayName = today.toLocaleDateString("id-ID", { weekday: "long" })
@@ -39,12 +29,9 @@ export default function Sidebar({ isOpen, onClose }: Props) {
     router.push("/login")
   }
 
-  const closeIfMobile = () => { if (window.innerWidth < 768) onClose() }
-
-  const isActive = (path: string) =>
-    pathname === path || (path !== "/dashboard" && pathname.startsWith(path))
-
-  const isDokumenActive = NAV_DOKUMEN.some(n => isActive(n.path))
+  const closeIfMobile = () => {
+    if (window.innerWidth < 768) onClose()
+  }
 
   return (
     <>
@@ -55,7 +42,6 @@ export default function Sidebar({ isOpen, onClose }: Props) {
         transform: isOpen ? "translateX(0)" : "translateX(-100%)",
         transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1)",
       }}>
-
         {/* Logo */}
         <div style={{ padding: "24px 20px 20px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -85,10 +71,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
         {/* Nav */}
         <nav style={{ flex: 1, padding: "14px 12px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
           <div className="label" style={{ padding: "4px 8px 8px" }}>Menu</div>
-
-          {/* Top nav items */}
-          {NAV_TOP.map(({ icon: Icon, label, path, desc }) => {
-            const active = isActive(path)
+          {NAV.map(({ icon: Icon, label, path, desc, ai }) => {
+            const active = pathname === path || (path !== "/dashboard" && pathname.startsWith(path))
             return (
               <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
                 style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
@@ -96,62 +80,15 @@ export default function Sidebar({ isOpen, onClose }: Props) {
                   <Icon size={16} color={active ? "white" : "var(--text3)"} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)" }}>{label}</div>
+                  <div style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    {label}
+                    {ai && <span style={{ fontSize: "9px", background: "var(--accent)", color: "white", padding: "1px 5px", borderRadius: "99px", fontWeight: 700 }}>AI</span>}
+                  </div>
                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
                 </div>
               </button>
             )
           })}
-
-          {/* ── Dokumen group ── */}
-          <div style={{ marginTop: "6px" }}>
-            {/* Group header / toggle */}
-            <button onClick={() => setDokumenOpen(v => !v)}
-              style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: isDokumenActive && !dokumenOpen ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-              <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: isDokumenActive ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
-                <FolderOpen size={16} color={isDokumenActive ? "white" : "var(--text3)"} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: "13px", fontWeight: isDokumenActive ? 700 : 500, color: isDokumenActive ? "var(--accent)" : "var(--text)" }}>Dokumen</div>
-                <div style={{ fontSize: "11px", color: "var(--text3)" }}>Doc Req, User Flow, Scenario</div>
-              </div>
-              {dokumenOpen
-                ? <ChevronDown size={14} color="var(--text3)" />
-                : <ChevronRight size={14} color="var(--text3)" />}
-            </button>
-
-            {/* Nested items */}
-            <div style={{
-              overflow: "hidden",
-              maxHeight: dokumenOpen ? "300px" : "0px",
-              transition: "max-height 0.25s cubic-bezier(0.22,1,0.36,1)",
-            }}>
-              <div style={{ paddingLeft: "14px", paddingTop: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
-                {/* Vertical line */}
-                <div style={{ position: "relative" }}>
-                  <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: "var(--border2)", borderRadius: "99px" }} />
-                  {NAV_DOKUMEN.map(({ icon: Icon, label, path, desc, ai }) => {
-                    const active = isActive(path)
-                    return (
-                      <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
-                        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px 8px 34px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                        <div style={{ width: "28px", height: "28px", borderRadius: "8px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
-                          <Icon size={14} color={active ? "white" : "var(--text3)"} />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: "12px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)", display: "flex", alignItems: "center", gap: "5px" }}>
-                            {label}
-                            {ai && <span style={{ fontSize: "8px", background: "var(--accent)", color: "white", padding: "1px 4px", borderRadius: "99px", fontWeight: 700 }}>AI</span>}
-                          </div>
-                          <div style={{ fontSize: "10px", color: "var(--text3)" }}>{desc}</div>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
         </nav>
 
         {/* Bottom */}
