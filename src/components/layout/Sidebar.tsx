@@ -4,7 +4,9 @@ import { useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import {
   Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText,
-  X, Sparkles, LogOut, Database, ClipboardList, FolderOpen, ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe
+  X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
+  ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
+  BarChart3, TrendingUp
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -13,15 +15,34 @@ const NAV_TOP = [
   { icon: FileText,      label: "Notulensi",       path: "/dashboard/notulensi",     desc: "Catatan rapat"          },
   { icon: Database,      label: "Restore DB PHI",  path: "/dashboard/restore-phi",   desc: "Monitoring DRP Restore" },
   { icon: DollarSign,    label: "Finance",         path: "/dashboard/finance",       desc: "Keuangan"               },
-  { icon: UploadCloud,   label: "SFA Upload",      path: "/dashboard/sfa-upload",    desc: "Update data landing"    },
   { icon: Globe,         label: "Landing Admin",   path: "/dashboard/landing-admin", desc: "Kelola landing page"    },
 ]
 
+// ── Nested: Data Utilisasi ─────────────────────────────────────
+const NAV_UTILISASI = [
+  {
+    icon: BarChart3,
+    label: "SFA Upload",
+    path: "/dashboard/sfa-upload",
+    desc: "Update data SFA",
+    badge: "SFA",
+    badgeColor: "#E8381A",
+  },
+  {
+    icon: TrendingUp,
+    label: "Ficom Upload",
+    path: "/dashboard/ficom-upload",
+    desc: "Update data Ficom",
+    badge: "Ficom",
+    badgeColor: "#FB8C00",
+  },
+]
+
 const NAV_DOKUMEN = [
-  { icon: ScrollText,    label: "Doc Req",         path: "/dashboard/docreq",        desc: "AI Doc Generator",      ai: true  },
-  { icon: GitBranch,     label: "User Flow",       path: "/dashboard/userflow",      desc: "AI Flowchart Generator",ai: true  },
-  { icon: ClipboardList, label: "Scenario Test",   path: "/dashboard/scenario-test", desc: "Form Scenario Testing", ai: false },
-  { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",    desc: "AI Poster dari Dokumen",  ai: true  },
+  { icon: ScrollText,    label: "Doc Req",          path: "/dashboard/docreq",        desc: "AI Doc Generator",       ai: true  },
+  { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",      desc: "AI Flowchart Generator", ai: true  },
+  { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test", desc: "Form Scenario Testing",  ai: false },
+  { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",    desc: "AI Poster dari Dokumen", ai: true  },
 ]
 
 interface Props { isOpen: boolean; onClose: () => void }
@@ -29,9 +50,12 @@ interface Props { isOpen: boolean; onClose: () => void }
 export default function Sidebar({ isOpen, onClose }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
-  const [dokumenOpen, setDokumenOpen] = useState(
-    NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
-  )
+
+  const isUtilisasiActive = NAV_UTILISASI.some(n => pathname.startsWith(n.path))
+  const isDokumenActive   = NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
+
+  const [utilisasiOpen, setUtilisasiOpen] = useState(isUtilisasiActive)
+  const [dokumenOpen,   setDokumenOpen]   = useState(isDokumenActive)
 
   const today   = new Date()
   const dayName = today.toLocaleDateString("id-ID", { weekday: "long" })
@@ -47,7 +71,105 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const isActive = (path: string) =>
     pathname === path || (path !== "/dashboard" && pathname.startsWith(path))
 
-  const isDokumenActive = NAV_DOKUMEN.some(n => isActive(n.path))
+  // ── Reusable nested child button ──
+  const NestedBtn = ({
+    icon: Icon, label, path, desc, ai, badge, badgeColor
+  }: {
+    icon: React.ElementType; label: string; path: string; desc: string
+    ai?: boolean; badge?: string; badgeColor?: string
+  }) => {
+    const active = isActive(path)
+    return (
+      <button onClick={() => { router.push(path); closeIfMobile() }}
+        style={{
+          display: "flex", alignItems: "center", gap: "10px",
+          padding: "8px 10px 8px 34px", borderRadius: "var(--radius-sm)",
+          border: "none", cursor: "pointer", width: "100%", textAlign: "left",
+          transition: "all 0.15s",
+          background: active ? "var(--accent-muted)" : "transparent",
+          fontFamily: "'Plus Jakarta Sans', sans-serif",
+        }}>
+        <div style={{
+          width: "28px", height: "28px", borderRadius: "8px", flexShrink: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: active ? (badgeColor || "var(--accent)") : "var(--surface3)",
+          transition: "all 0.15s",
+        }}>
+          <Icon size={14} color={active ? "white" : "var(--text3)"} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: "12px", fontWeight: active ? 700 : 500,
+            color: active ? (badgeColor || "var(--accent)") : "var(--text)",
+            display: "flex", alignItems: "center", gap: "5px",
+          }}>
+            {label}
+            {badge && (
+              <span style={{
+                fontSize: "8px", background: badgeColor || "var(--accent)",
+                color: "white", padding: "1px 5px", borderRadius: "99px", fontWeight: 700,
+              }}>{badge}</span>
+            )}
+            {ai && (
+              <span style={{
+                fontSize: "8px", background: "var(--accent)",
+                color: "white", padding: "1px 4px", borderRadius: "99px", fontWeight: 700,
+              }}>AI</span>
+            )}
+          </div>
+          <div style={{ fontSize: "10px", color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</div>
+        </div>
+        {active && (
+          <div style={{ width: "4px", height: "4px", borderRadius: "50%", background: badgeColor || "var(--accent)", flexShrink: 0 }} />
+        )}
+      </button>
+    )
+  }
+
+  // ── Reusable group header ──
+  const GroupHeader = ({
+    label, desc, icon: Icon, isActive: active, isOpen: open, onToggle, accentColor
+  }: {
+    label: string; desc: string; icon: React.ElementType
+    isActive: boolean; isOpen: boolean; onToggle: () => void; accentColor?: string
+  }) => (
+    <button onClick={onToggle}
+      style={{
+        display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px",
+        borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer",
+        width: "100%", textAlign: "left", transition: "all 0.15s",
+        background: active && !open ? "var(--accent-muted)" : "transparent",
+        fontFamily: "'Plus Jakarta Sans', sans-serif",
+      }}>
+      <div style={{
+        width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: active ? (accentColor || "var(--accent)") : "var(--surface3)",
+        transition: "all 0.15s",
+      }}>
+        <Icon size={16} color={active ? "white" : "var(--text3)"} />
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? (accentColor || "var(--accent)") : "var(--text)" }}>{label}</div>
+        <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
+      </div>
+      {open
+        ? <ChevronDown size={14} color="var(--text3)" />
+        : <ChevronRight size={14} color="var(--text3)" />}
+    </button>
+  )
+
+  // ── Nested items container ──
+  const NestedContainer = ({ open, children, lineColor }: { open: boolean; children: React.ReactNode; lineColor?: string }) => (
+    <div style={{ overflow: "hidden", maxHeight: open ? "400px" : "0px", transition: "max-height 0.28s cubic-bezier(0.22,1,0.36,1)" }}>
+      <div style={{ paddingLeft: "14px", paddingTop: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
+        <div style={{ position: "relative" }}>
+          <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: lineColor || "var(--border2)", borderRadius: "99px" }} />
+          {children}
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <>
@@ -106,54 +228,39 @@ export default function Sidebar({ isOpen, onClose }: Props) {
             )
           })}
 
-          {/* ── Dokumen group ── */}
+          {/* ── Data Utilisasi group ── */}
           <div style={{ marginTop: "6px" }}>
-            {/* Group header / toggle */}
-            <button onClick={() => setDokumenOpen(v => !v)}
-              style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: isDokumenActive && !dokumenOpen ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-              <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: isDokumenActive ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
-                <FolderOpen size={16} color={isDokumenActive ? "white" : "var(--text3)"} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: "13px", fontWeight: isDokumenActive ? 700 : 500, color: isDokumenActive ? "var(--accent)" : "var(--text)" }}>Dokumen</div>
-                <div style={{ fontSize: "11px", color: "var(--text3)" }}>Doc Req, User Flow, Scenario</div>
-              </div>
-              {dokumenOpen
-                ? <ChevronDown size={14} color="var(--text3)" />
-                : <ChevronRight size={14} color="var(--text3)" />}
-            </button>
+            <GroupHeader
+              icon={UploadCloud}
+              label="Data Utilisasi"
+              desc="SFA & Ficom upload"
+              isActive={isUtilisasiActive}
+              isOpen={utilisasiOpen}
+              onToggle={() => setUtilisasiOpen(v => !v)}
+              accentColor="#1E88E5"
+            />
+            <NestedContainer open={utilisasiOpen} lineColor="rgba(30,136,229,0.3)">
+              {NAV_UTILISASI.map(item => (
+                <NestedBtn key={item.path} {...item} />
+              ))}
+            </NestedContainer>
+          </div>
 
-            {/* Nested items */}
-            <div style={{
-              overflow: "hidden",
-              maxHeight: dokumenOpen ? "300px" : "0px",
-              transition: "max-height 0.25s cubic-bezier(0.22,1,0.36,1)",
-            }}>
-              <div style={{ paddingLeft: "14px", paddingTop: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
-                {/* Vertical line */}
-                <div style={{ position: "relative" }}>
-                  <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: "var(--border2)", borderRadius: "99px" }} />
-                  {NAV_DOKUMEN.map(({ icon: Icon, label, path, desc, ai }) => {
-                    const active = isActive(path)
-                    return (
-                      <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
-                        style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px 8px 34px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                        <div style={{ width: "28px", height: "28px", borderRadius: "8px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
-                          <Icon size={14} color={active ? "white" : "var(--text3)"} />
-                        </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: "12px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)", display: "flex", alignItems: "center", gap: "5px" }}>
-                            {label}
-                            {ai && <span style={{ fontSize: "8px", background: "var(--accent)", color: "white", padding: "1px 4px", borderRadius: "99px", fontWeight: 700 }}>AI</span>}
-                          </div>
-                          <div style={{ fontSize: "10px", color: "var(--text3)" }}>{desc}</div>
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
+          {/* ── Dokumen group ── */}
+          <div style={{ marginTop: "4px" }}>
+            <GroupHeader
+              icon={FolderOpen}
+              label="Dokumen"
+              desc="Doc Req, User Flow, Scenario"
+              isActive={isDokumenActive}
+              isOpen={dokumenOpen}
+              onToggle={() => setDokumenOpen(v => !v)}
+            />
+            <NestedContainer open={dokumenOpen}>
+              {NAV_DOKUMEN.map(item => (
+                <NestedBtn key={item.path} {...item} />
+              ))}
+            </NestedContainer>
           </div>
         </nav>
 
