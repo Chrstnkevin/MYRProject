@@ -69,7 +69,7 @@ function NavBar() {
           {[
             {label:"About", href:"/landing/about"},
             {label:"Applications", href:"/landing/applications"},
-            {label:"Stats", href:"/landing/stats"},
+            {label:"Utilisation", href:"/landing/utilisation"},
             {label:"Supporting", href:"/landing/supporting"},
           ].map(n => (
             <a key={n.label} href={n.href}
@@ -107,7 +107,7 @@ function NavBar() {
           {[
             {label:"About", href:"/landing/about"},
             {label:"Applications", href:"/landing/applications"},
-            {label:"Stats", href:"/landing/stats"},
+            {label:"Utilisation", href:"/landing/utilisation"},
             {label:"Supporting", href:"/landing/supporting"},
           ].map(n => (
             <a key={n.label} href={n.href}
