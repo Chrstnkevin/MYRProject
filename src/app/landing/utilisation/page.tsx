@@ -165,8 +165,8 @@ function BranchPopup({ b, salesman, onClose }: { b:Branch; salesman:Salesman[]; 
   }), [salesman, slsFilter, slsSearch])
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px",backdropFilter:"blur(10px)"}} onClick={onClose}>
-      <div style={{background:"white",borderRadius:"24px",maxWidth:"700px",width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(0,0,0,0.3)",animation:"popIn 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
+    <div className="sfa-popup-bd" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"flex-end",justifyContent:"center",backdropFilter:"blur(10px)"}} onClick={onClose}>
+      <div className="sfa-popup-inner" style={{background:"white",borderRadius:"clamp(16px,4vw,24px)",maxWidth:"700px",width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(0,0,0,0.3)",animation:"popIn 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
         {/* Header */}
         <div style={{background:`linear-gradient(135deg,${col}18,${col}06)`,padding:"20px 24px 16px",borderBottom:`3px solid ${col}`,flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:"12px"}}>
@@ -308,8 +308,8 @@ function AreaPopup({ area, branches, allSalesman, onBranchClick, onClose }: {
   const avgUpdPct   = totalSls ? Math.round(totalUpdated/totalSls*100) : 0
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px",backdropFilter:"blur(10px)"}} onClick={onClose}>
-      <div style={{background:"white",borderRadius:"24px",maxWidth:"780px",width:"100%",maxHeight:"92vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(0,0,0,0.3)",animation:"areaPopIn 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
+    <div className="sfa-popup-bd" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",zIndex:9999,display:"flex",alignItems:"flex-end",justifyContent:"center",backdropFilter:"blur(10px)"}} onClick={onClose}>
+      <div className="sfa-popup-inner" style={{background:"white",borderRadius:"clamp(16px,4vw,24px)",maxWidth:"780px",width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:"0 40px 100px rgba(0,0,0,0.3)",animation:"areaPopIn 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
 
         {/* Header */}
         <div style={{background:`linear-gradient(135deg,${col}15,${col}05)`,padding:"20px 24px 16px",borderBottom:`3px solid ${col}`,flexShrink:0}}>
@@ -564,7 +564,7 @@ export default function UtilisationPage() {
       {/* ── App Tab Bar ── */}
       <div style={{position:"sticky",top:"64px",zIndex:90,background:"rgba(7,7,20,0.97)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"0 clamp(20px,5vw,80px)"}}>
         <div style={{maxWidth:"1100px",margin:"0 auto",display:"flex",overflowX:"auto"}}>
-          {[{id:"sfa",label:"SFA",active:true,href:"#"},{id:"ficom",label:"💰 Ficom",active:false,href:"/landing/ficom"},{id:"ficom-lite",label:"📱 Ficom Lite",active:false,href:"#"}].map(tab=>(
+          {[{id:"sfa",label:"SFA",active:true,href:"#"},{id:"ficom",label:"💰 Ficom",active:false,href:"/landing/ficom"},{id:"ficom-lite",label:"📱 Ficom Lite",active:false,href:"/landing/ficom-lite"}].map(tab=>(
             <button key={tab.id}
   style={{padding:"12px 20px",border:"none",cursor:tab.active||tab.href!=="#"?"pointer":"not-allowed",fontFamily:"inherit",fontSize:"13px",fontWeight:appTab===tab.id?700:500,color:appTab===tab.id?"#FF4D4D":tab.href!=="#"?"rgba(255,255,255,0.45)":"rgba(255,255,255,0.18)",background:"transparent",borderBottom:appTab===tab.id?"2px solid #FF4D4D":"2px solid transparent",transition:"all 0.2s",display:"flex",alignItems:"center",gap:"8px",whiteSpace:"nowrap",textDecoration:"none"}}
               onClick={()=>tab.href!=="#"&&!tab.active?window.location.href=tab.href:undefined}>
@@ -577,7 +577,7 @@ export default function UtilisationPage() {
       </div>
 
       {/* ── HERO ── */}
-      <div style={{position:"relative",overflow:"hidden",background:"linear-gradient(160deg,#0D0D28 0%,#12091A 50%,#0A1A12 100%)",padding:"clamp(48px,7vw,90px) clamp(20px,5vw,80px) clamp(40px,5vw,70px)"}}>
+      <div style={{position:"relative",overflow:"hidden",background:"linear-gradient(160deg,#0D0D28 0%,#12091A 50%,#0A1A12 100%)",padding:"clamp(60px,9vw,100px) clamp(16px,4vw,80px) clamp(36px,5vw,70px)"}}>
         {/* Animated particles */}
         {particles.map((p,i)=><Particle key={i} {...p}/>)}
         {/* Mesh gradient blobs */}
@@ -592,19 +592,19 @@ export default function UtilisationPage() {
             <span style={{fontSize:"12px",fontWeight:700,color:"#FF6B6B",letterSpacing:"0.1em",textTransform:"uppercase"}}>Live · SFA PHI Pilot · {latestCutoff}</span>
           </div>
 
-          <div style={{display:"flex",gap:"clamp(32px,5vw,64px)",alignItems:"center",flexWrap:"wrap"}}>
+          <div className="sfa-hero-layout" style={{display:"flex",gap:"clamp(20px,4vw,64px)",alignItems:"center",flexWrap:"wrap"}}>
             {/* Left */}
-            <div style={{flex:1,minWidth:"260px",animation:"fadeInUp 0.8s ease both"}}>
-              <h1 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(32px,5vw,60px)",fontWeight:900,lineHeight:1.05,letterSpacing:"-0.03em",color:"white",marginBottom:"clamp(12px,2vw,18px)"}}>
+            <div style={{flex:1,minWidth:"min(100%,280px)",animation:"fadeInUp 0.8s ease both"}}>
+              <h1 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(28px,7vw,60px)",fontWeight:900,lineHeight:1.05,letterSpacing:"-0.03em",color:"white",marginBottom:"clamp(10px,2vw,18px)"}}>
                 SFA Utilisation<br/>
                 <span style={{background:"linear-gradient(135deg,#FF4D4D,#FF9A3C)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Monitoring</span>
               </h1>
-              <p style={{fontSize:"clamp(12px,1.3vw,14px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(24px,3.5vw,36px)",lineHeight:1.7}}>
+              <p style={{fontSize:"clamp(11px,3vw,14px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(16px,3.5vw,36px)",lineHeight:1.7}}>
                 {latest?.total?.toLocaleString()} active salesman · {latestBranches.length} branches · 5 areas
               </p>
 
               {/* KPI Grid */}
-              <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(6px,1vw,10px)",maxWidth:"560px"}}>
+              <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(6px,1.5vw,10px)",width:"100%",maxWidth:"520px"}}>
                 {[
                   {n:<AnimCounter target={latest?.pct_done||0} suffix="%"/>,  l:"Trained",   i:"🎓",c:"#FF4D4D",bg:"rgba(255,77,77,0.12)",border:"rgba(255,77,77,0.2)"},
                   {n:<AnimCounter target={latest?.total||0}/>,                l:"Salesman",  i:"👥",c:"white",  bg:"rgba(255,255,255,0.05)",border:"rgba(255,255,255,0.1)"},
@@ -615,15 +615,15 @@ export default function UtilisationPage() {
                 ].map((s,i)=>(
                   <div key={i} className="kpi-card" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(10px,1.5vw,14px)",border:`1px solid ${s.border}`,textAlign:"center",backdropFilter:"blur(10px)",animation:"fadeInUp 0.6s ease both",animationDelay:`${i*0.08}s`}}>
                     <div style={{fontSize:"clamp(16px,2vw,20px)",marginBottom:"4px"}}>{s.i}</div>
-                    <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,20px)",fontWeight:900,color:s.c,lineHeight:1,marginBottom:"4px",whiteSpace:"nowrap"}}>{s.n}</div>
-                    <div style={{fontSize:"clamp(7px,0.7vw,9px)",color:"rgba(255,255,255,0.3)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>{s.l}</div>
+                    <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(15px,4vw,20px)",fontWeight:900,color:s.c,lineHeight:1,marginBottom:"4px",whiteSpace:"nowrap"}}>{s.n}</div>
+                    <div style={{fontSize:"clamp(8px,1.8vw,9px)",color:"rgba(255,255,255,0.3)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.03em"}}>{s.l}</div>
                   </div>
                 ))}
               </div>
             </div>
 
             {/* Right: animated SFA illustration */}
-            <div className="sfa-hero-logo" style={{flexShrink:0,width:"clamp(140px,20vw,240px)"}}>
+            <div className="sfa-hero-logo" style={{flexShrink:0,width:"clamp(100px,18vw,220px)"}}>
               <div style={{position:"relative",width:"100%",paddingBottom:"100%"}}>
                 <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
                   <img src="/sfa-logo.png" alt="SFA" style={{width:"70%",height:"70%",objectFit:"contain",filter:"drop-shadow(0 0 40px rgba(255,77,77,0.5))"}}/>
@@ -639,12 +639,12 @@ export default function UtilisationPage() {
 
       {/* ── WHITE CONTENT ── */}
       <div style={{background:"#F6F7FA",borderRadius:"28px 28px 0 0",marginTop:"-4px"}}>
-        <div style={{maxWidth:"1100px",margin:"0 auto",padding:"clamp(20px,3vw,36px) clamp(20px,5vw,80px)"}}>
+        <div style={{maxWidth:"1100px",margin:"0 auto",padding:"clamp(16px,3vw,36px) clamp(12px,4vw,80px)"}}>
 
           {/* Glossary */}
           <div style={{background:"white",borderRadius:"16px",border:"1px solid rgba(0,0,0,0.07)",padding:"clamp(12px,1.5vw,18px)",marginBottom:"clamp(14px,2vw,20px)",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
             <div style={{fontWeight:700,fontSize:"12px",color:"#333",marginBottom:"10px"}}>📖 Keterangan Istilah</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"8px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,150px),1fr))",gap:"8px"}}>
               {[
                 {term:"Trained",             def:"Sudah training SFA (100% dari salesman aktif 2026)",c:"#FF4D4D"},
                 {term:"Aktif (Flag T)",       def:"Tidak diblokir & bertransaksi di 2026",            c:"#4DCC70"},
@@ -740,7 +740,7 @@ export default function UtilisationPage() {
           <div style={{background:"white",borderRadius:"16px",border:"1px solid rgba(0,0,0,0.07)",padding:"clamp(14px,2vw,22px)",marginBottom:"clamp(14px,2vw,20px)",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
             <h2 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,18px)",fontWeight:800,marginBottom:"4px",color:"#111"}}>🗺️ Performance by Area</h2>
             <p style={{fontSize:"10px",color:"#bbb",marginBottom:"14px"}}>Click untuk lihat detail branch · Progress bar = % Updated SFA</p>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,150px),1fr))",gap:"clamp(8px,1.2vw,12px)"}}>
+            <div className="sfa-area-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,140px),1fr))",gap:"clamp(8px,1.2vw,12px)"}}>
               {areaSummary.map((a,i)=>(
                 <div key={i} className="area-card"
                   style={{borderRadius:"16px",padding:"clamp(12px,1.6vw,18px)",border:`2px solid ${a.color}20`,background:"white",cursor:"pointer",transition:"border-color 0.25s,transform 0.25s,box-shadow 0.25s",boxShadow:"0 2px 8px rgba(0,0,0,0.04)",animation:"fadeInUp 0.5s ease both",animationDelay:`${i*0.1}s`,position:"relative",overflow:"hidden"}}
@@ -756,7 +756,7 @@ export default function UtilisationPage() {
                   <div style={{height:"5px",background:`${a.color}15`,borderRadius:"99px",marginBottom:"10px",overflow:"hidden"}}>
                     <div style={{height:"100%",width:`${a.pctUpdated}%`,background:`linear-gradient(90deg,${a.color},${a.color}99)`,borderRadius:"99px"}}/>
                   </div>
-                  <div style={{fontSize:"clamp(9px,1vw,10px)",color:"#888",lineHeight:1.8}}>
+                  <div style={{fontSize:"clamp(9px,2vw,10px)",color:"#888",lineHeight:1.7}}>
                     <div><strong style={{color:"#111"}}>{a.total}</strong> salesman · <strong style={{color:"#555"}}>{a.branches}</strong> cab</div>
                     <div>✅ {a.active} aktif · 🔄 {a.pctUpdated}% upd</div>
                   </div>
@@ -789,8 +789,8 @@ export default function UtilisationPage() {
                 </div>
               </div>
             </div>
-            <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",minWidth:"520px"}}>
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",minWidth:"480px"}}>
                 <thead>
                   <tr style={{borderBottom:"2px solid #F0F0F0"}}>
                     {[{l:"Branch Name",c:"branch_name"as const},{l:"Area",c:null},{l:"Total",c:"total"as const},{l:"Aktif ✅",c:"active"as const},{l:"Tdk Aktif 🚫",c:null},{l:"Updated 🔄",c:null},{l:"% Updated",c:"pct_updated"as const},{l:"",c:null}].map((h,i)=>(
@@ -894,6 +894,23 @@ export default function UtilisationPage() {
         @keyframes countdown { from{width:100%} to{width:0%} }
         @media(max-width:640px){
           .kpi-grid { grid-template-columns: repeat(2,1fr) !important; }
+          .sfa-area-grid { grid-template-columns: repeat(2,1fr) !important; }
+          .sfa-hero-logo { display: none !important; }
+          .sfa-hero-layout { gap: 16px !important; }
+          .sfa-popup-bd { align-items: flex-end !important; padding: 0 !important; }
+          .sfa-popup-inner {
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+            max-width: 100% !important;
+            max-height: 88vh !important;
+          }
+        }
+        @media(min-width:641px){
+          .sfa-popup-bd { align-items: center !important; padding: 16px !important; }
+        }
+        @media(max-width:380px){
+          .kpi-grid { gap: 6px !important; }
+          .sfa-area-grid { grid-template-columns: 1fr 1fr !important; }
         }
       `}}/>
     </div>

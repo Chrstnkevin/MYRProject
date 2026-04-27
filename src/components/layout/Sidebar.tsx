@@ -36,6 +36,14 @@ const NAV_UTILISASI = [
     badge: "Ficom",
     badgeColor: "#FB8C00",
   },
+  {
+    icon: TrendingUp,
+    label: "Ficom Lite Upload",
+    path: "/dashboard/ficom-lite-upload",
+    desc: "Update data Ficom Lite",
+    badge: "Lite",
+    badgeColor: "#22C55E",
+  },
 ]
 
 const NAV_DOKUMEN = [

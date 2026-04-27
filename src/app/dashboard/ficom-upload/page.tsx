@@ -131,12 +131,14 @@ async function parseFicomExcels(
 
   onProgress(`✅ EDI: ${userMap.size} users · ${sellingDays} selling days · ${periodLabel}`)
 
-  // ── 2. Parse training file ──
-  onProgress("⏳ Reading training schedule...")
+  // ── 2. Parse Ficom_Usage file → extract Training Sched as MASTER ──
+  // Training Sched sheet: REG(AOR), Position, Employee Name, User ID, Training Date
+  // This is the FULL MASTER of all ADM/RDM who should use Ficom
+  onProgress("⏳ Reading master user list from Training Sched...")
   const trBuf = await trainingFile.arrayBuffer()
   const trWb = XLSX.read(trBuf, { type: "array", cellDates: true })
   
-  // Try "Training Sched" or "Sheet1"
+  // Priority: Training Sched sheet (Ficom_Usage file) > Sheet1 (fallback)
   const trSheetName = trWb.SheetNames.includes("Training Sched") ? "Training Sched"
     : trWb.SheetNames.includes("Sheet1") ? "Sheet1"
     : trWb.SheetNames[0]
@@ -144,19 +146,36 @@ async function parseFicomExcels(
   const trWs = trWb.Sheets[trSheetName]
   const trRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(trWs, { raw: false, dateNF: "yyyy-mm-dd" })
 
-  // Build training lookup: user_id -> training_date
-  const trainingMap = new Map<string, string>() // user_id -> date
+  // Build MASTER map: user_id -> { aor, position, name, training_date }
+  // This gives us WHO SHOULD be using Ficom (the denominator for utilisasi)
+  interface MasterUser { aor: string; position: string; username: string; training_date: string | null }
+  const masterMap = new Map<string, MasterUser>()
+  const trainingMap = new Map<string, string>() // user_id -> training_date (for backward compat)
+  
   for (const r of trRows) {
-    // Handle both formats:
-    // Format 1 (Ficom_Usage file): REG, Position, Employee Name, User ID, Training Date
-    // Format 2 (MasterDataFiicom_training): RDM, ADM 1, ADM 2, Date Training
     const uid = s(r["User ID"])
-    if (uid && uid !== "User ID") {
-      const dt = fmtDate(r["Training Date"] || r["Date Training"])
+    if (!uid || uid === "User ID") continue
+    
+    // Training Sched format: REG, Position, Employee Name, User ID, Training Date
+    const aor   = s(r["REG"] || "")
+    const pos   = s(r["Position"] || "")
+    const name  = s(r["Employee Name"] || "")
+    const dt    = fmtDate(r["Training Date"] || r["Date Training"])
+    
+    // Only include valid ADM/RDM/ADS with WF IDs
+    if (uid.startsWith("WF")) {
+      masterMap.set(uid, {
+        aor:  aor || "UNK",
+        position: pos === "RDM" ? "RDM" : "ADM",
+        username: name,
+        training_date: dt,
+      })
       if (dt) trainingMap.set(uid, dt)
     }
   }
-  onProgress(`✅ Training: ${trainingMap.size} trained users`)
+  
+  const masterTotal = masterMap.size
+  onProgress(`✅ Master users: ${masterTotal} ADM/RDM (utilisasi denominator)`)
 
   // ── 2b. Parse m_master (optional) ──
   let totalAds = 0, totalLp = 0
@@ -175,44 +194,72 @@ async function parseFicomExcels(
   }
 
   // ── 3. Build UserRow list ──
+  // Use masterMap as the full list — ALL users who should use Ficom
+  // EDI (userMap) provides compliance data for active users
+  // Users in masterMap but NOT in userMap = never logged in (utilisasi = 0)
   const VALID_AORS = new Set(["GMA", "MIN", "NOL", "SOL", "VIS"])
   const users: UserRow[] = []
   const aorAgg: Record<string, { users: UserRow[] }> = {}
 
-  for (const [uid, u] of userMap) {
-    if (!VALID_AORS.has(u.aor)) continue
-    const uniqueDays = u.dates.size
-    const compliancePct = sellingDays > 0 ? Math.round(uniqueDays / sellingDays * 1000) / 10 : 0
-    const lastDate = u.dates.size > 0 ? [...u.dates].sort().pop()! : null
-    const isTrained = trainingMap.has(uid) ? 1 : 0
-    const trainDate = trainingMap.get(uid) || null
+  // Iterate over MASTER (all who should use Ficom)
+  const masterSource = masterMap.size > 0 ? masterMap : null
 
-    const row: UserRow = {
-      period_month: periodMonth,
-      user_id: uid,
-      username: u.username,
-      position: u.position, // keep ADM/RDM
-      aor: u.aor,
-      sub_aor: u.sub_aor,
-      rdm_name: u.rdm_name,
-      usage_days: uniqueDays,
-      selling_days: sellingDays,
-      compliance_pct: compliancePct,
-      last_usage_date: lastDate,
-      trained: isTrained,
-      training_date: trainDate,
+  if (masterSource) {
+    // Correct path: master from Training Sched
+    for (const [uid, master] of masterSource) {
+      if (!VALID_AORS.has(master.aor)) continue
+      const ediUser = userMap.get(uid)
+      const uniqueDays = ediUser ? ediUser.dates.size : 0
+      const compliancePct = sellingDays > 0 ? Math.round(uniqueDays / sellingDays * 1000) / 10 : 0
+      const lastDate = ediUser?.dates.size ? [...ediUser.dates].sort().pop()! : null
+      const trainDate = master.training_date
+
+      // AOR and sub_aor: prefer EDI data (more detailed), fallback to master
+      const ediData = ediUser || userMap.get(uid)
+      const aorFinal   = ediData ? ediData.aor    : master.aor
+      const subAorFinal= ediData ? ediData.sub_aor : ""
+      const rdmFinal   = ediData ? ediData.rdm_name: ""
+      const usernameFinal = master.username || (ediData?.username ?? uid)
+
+      const row: UserRow = {
+        period_month: periodMonth,
+        user_id: uid,
+        username: usernameFinal,
+        position: master.position,
+        aor: aorFinal !== "UNK" ? aorFinal : master.aor,
+        sub_aor: subAorFinal,
+        rdm_name: rdmFinal,
+        usage_days: uniqueDays,
+        selling_days: sellingDays,
+        compliance_pct: compliancePct,
+        last_usage_date: lastDate,
+        trained: trainDate ? 1 : 0,
+        training_date: trainDate,
+      }
+      users.push(row)
+      const rowAor = row.aor !== "UNK" ? row.aor : master.aor
+      if (VALID_AORS.has(rowAor)) {
+        if (!aorAgg[rowAor]) aorAgg[rowAor] = { users: [] }
+        aorAgg[rowAor].users.push(row)
+      }
     }
-    users.push(row)
-
-    if (!aorAgg[u.aor]) aorAgg[u.aor] = { users: [] }
-    aorAgg[u.aor].users.push(row)
-  }
-
-  // Also add trained users who have NO usage (compliance = 0)
-  for (const [uid, trainDate] of trainingMap) {
-    if (!userMap.has(uid)) {
-      // We don't have AOR info for non-usage users from training file
-      // Skip as we can't determine their AOR without master data
+  } else {
+    // Fallback: use EDI only (old behavior — will give utilisasi ~100%)
+    for (const [uid, u] of userMap) {
+      if (!VALID_AORS.has(u.aor)) continue
+      const uniqueDays = u.dates.size
+      const compliancePct = sellingDays > 0 ? Math.round(uniqueDays / sellingDays * 1000) / 10 : 0
+      const lastDate = u.dates.size > 0 ? [...u.dates].sort().pop()! : null
+      const row: UserRow = {
+        period_month: periodMonth, user_id: uid, username: u.username,
+        position: u.position, aor: u.aor, sub_aor: u.sub_aor, rdm_name: u.rdm_name,
+        usage_days: uniqueDays, selling_days: sellingDays, compliance_pct: compliancePct,
+        last_usage_date: lastDate, trained: trainingMap.has(uid) ? 1 : 0,
+        training_date: trainingMap.get(uid) || null,
+      }
+      users.push(row)
+      if (!aorAgg[u.aor]) aorAgg[u.aor] = { users: [] }
+      aorAgg[u.aor].users.push(row)
     }
   }
 
@@ -233,9 +280,9 @@ async function parseFicomExcels(
   })
 
   // ── 5. Snapshot ──
-  const totalUsers = users.length
+  const totalUsers  = users.length  // = masterMap.size filtered by valid AOR
   const totalTrained = users.filter(u => u.trained === 1).length
-  const totalActive = users.filter(u => u.usage_days > 0).length
+  const totalActive  = users.filter(u => u.usage_days > 0).length  // utilisasi numerator
   const totalHigh = users.filter(u => u.compliance_pct >= 91).length
   const totalMedium = users.filter(u => u.compliance_pct >= 51 && u.compliance_pct < 91).length
   const totalLow = users.filter(u => u.compliance_pct < 51).length
@@ -360,7 +407,7 @@ export default function FicomUploadPage() {
           {[
             { icon: <FileSpreadsheet size={20} color="#FB8C00" />, label: "EDI Usage", sub: "MasterDataFiicom_EDI.xlsx" },
             { icon: "+", label: "", sub: "" },
-            { icon: <FileSpreadsheet size={20} color="#43A047" />, label: "Training", sub: "MasterDataFiicom_training.xlsx" },
+            { icon: <FileSpreadsheet size={20} color="#43A047" />, label: "Training", sub: "Ficom_Usage-_26Pxx_xxx.xlsx (ada sheet Training Sched)" },
             { icon: <ArrowRight size={18} color="var(--text3)" />, label: "", sub: "" },
             { icon: "⚙️", label: "Parse & Calc", sub: "Compliance %" },
             { icon: <ArrowRight size={18} color="var(--text3)" />, label: "", sub: "" },
@@ -388,15 +435,29 @@ export default function FicomUploadPage() {
         </div>
       </div>
 
-      {/* Role mapping info */}
-      <div className="card" style={{ padding: "12px 16px", background: "rgba(251,140,0,0.06)", border: "1px solid rgba(251,140,0,0.2)" }}>
-        <div style={{ fontSize: "11px", fontWeight: 700, color: "#FB8C00", marginBottom: "6px" }}>📋 Role Mapping (Internal → Display)</div>
-        <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", fontSize: "11px", color: "var(--text2)" }}>
-          <span><strong>GRSM</strong> → ADS/ADM (field user)</span>
-          <span><strong>NSM</strong> → RDM (regional manager)</span>
-          <span><strong>SD</strong> → SD</span>
-          <span><strong>RSM</strong> → ADS</span>
-          <span>Compliance = unique login days ÷ selling days × 100</span>
+      {/* CRITICAL: file instructions */}
+      <div className="card" style={{ padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1.5px solid rgba(239,68,68,0.35)" }}>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: "#DC2626", marginBottom: "8px" }}>⚠️ File yang Harus Diupload (Penting!)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "10px", fontSize: "11px" }}>
+          <div style={{ background: "rgba(251,140,0,0.08)", borderRadius: "8px", padding: "10px 12px", border: "1px solid rgba(251,140,0,0.2)" }}>
+            <div style={{ fontWeight: 700, color: "#FB8C00", marginBottom: "4px" }}>📁 File 1 — EDI Usage Log</div>
+            <div style={{ color: "var(--text2)", lineHeight: 1.6 }}>
+              <code>MasterDataFiicom_EDI.xlsx</code><br/>
+              → Siapa yang sudah aktif login ke Ficom (pembilang utilisasi)
+            </div>
+          </div>
+          <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: "8px", padding: "10px 12px", border: "1px solid rgba(239,68,68,0.25)" }}>
+            <div style={{ fontWeight: 700, color: "#DC2626", marginBottom: "4px" }}>📁 File 2 — Master User (WAJIB BENAR!)</div>
+            <div style={{ color: "var(--text2)", lineHeight: 1.6 }}>
+              <code style={{ color: "#DC2626" }}>Ficom_Usage-_26Pxx_xxx.xlsx</code><br/>
+              Bukan MasterDataFiicom_training.xlsx!<br/>
+              → Harus ada sheet <strong>"Training Sched"</strong> (113 ADM/RDM)<br/>
+              → Utilisasi = File1 users ÷ File2 total
+            </div>
+          </div>
+        </div>
+        <div style={{ marginTop: "8px", fontSize: "10px", color: "#DC2626", fontWeight: 600 }}>
+          ❌ Jika File 2 salah → utilisasi akan muncul 100% (karena master = aktif, circular logic)
         </div>
       </div>
 
@@ -425,7 +486,7 @@ export default function FicomUploadPage() {
         <div className="card" style={{ padding: "18px" }}>
           <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
             <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "linear-gradient(135deg,#43A047,#66BB6A)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 900, color: "white" }}>2</div>
-            Training Schedule
+            Ficom Usage xlsx (master)
           </div>
           <div onDrop={e => { e.preventDefault(); setDragOverTr(false); const f = e.dataTransfer.files[0]; if (f) { setTrFile(f); tryParse(ediFile, f, masterFile) } }}
             onDragOver={e => { e.preventDefault(); setDragOverTr(true) }}

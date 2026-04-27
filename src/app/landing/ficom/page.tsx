@@ -184,7 +184,7 @@ function Donut({ high,medium,low,total,size=160 }: { high:number;medium:number;l
         </circle>
       ))}
       <text x={cx} y={cy-6} textAnchor="middle" fontSize={size*0.2} fontWeight="900" fill="white" fontFamily="'Bricolage Grotesque',sans-serif">{activePct}%</text>
-      <text x={cx} y={cy+size*0.13} textAnchor="middle" fontSize={size*0.09} fill="rgba(255,255,255,0.45)" fontFamily="sans-serif">≥50%</text>
+      <text x={cx} y={cy+size*0.13} textAnchor="middle" fontSize={size*0.09} fill="rgba(255,255,255,0.45)" fontFamily="sans-serif">utilisasi</text>
     </svg>
   )
 }
@@ -195,6 +195,9 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
   const [search, setSearch] = useState("")
   const [posF, setPosF]     = useState<"all"|"ADM"|"RDM">("all")
   const [compF, setCompF]   = useState<"all"|"high"|"medium"|"low">("all")
+  const [detailUser, setDetailUser] = useState<FicomUser|null>(null)
+
+  if (detailUser) return <UserDetailPopup user={detailUser} onClose={()=>setDetailUser(null)}/>
 
   const filtered = useMemo(()=>users.filter(u=>{
     const m = u.username.toLowerCase().includes(search.toLowerCase())||u.user_id.toLowerCase().includes(search.toLowerCase())
@@ -261,7 +264,7 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
         {/* Table */}
         <div style={{overflowY:"auto",flex:1}}>
           <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",minWidth:"620px"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",minWidth:"560px"}}>
               <thead>
                 <tr style={{background:"rgba(255,255,255,0.03)",borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
                   {["User ID","Name","Role","Sub-AOR","RDM","Days","Compliance","Training","Last Login"].map(h=>(
@@ -271,8 +274,9 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
               </thead>
               <tbody>
                 {filtered.map((u,i)=>(
-                  <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)",transition:"background 0.12s"}}
-                    onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,0.04)"}}
+                  <tr key={i} style={{borderBottom:"1px solid rgba(255,255,255,0.04)",transition:"background 0.12s",cursor:"pointer"}}
+                    onClick={()=>setDetailUser(u)}
+                    onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,0.06)"}}
                     onMouseLeave={e=>{e.currentTarget.style.background="transparent"}}>
                     <td style={{padding:"8px 10px",fontSize:"11px",color:"rgba(255,255,255,0.3)",fontFamily:"monospace"}}>{u.user_id}</td>
                     <td style={{padding:"8px 10px",fontSize:"12px",fontWeight:600,color:"white",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.username}</td>
@@ -308,27 +312,267 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
   )
 }
 
-// ── Area Popup (branches of an area) ─────────────────────────
-function AreaPopup({ aor, users, onClose }: { aor:string; users:FicomUser[]; onClose:()=>void }) {
-  const col = AOR_COLORS[aor]||"#888"
-  // Group by sub_aor
-  const subAors = useMemo(()=>{
-    const map: Record<string,FicomUser[]> = {}
-    users.forEach(u=>{ if(!map[u.sub_aor]) map[u.sub_aor]=[]; map[u.sub_aor].push(u) })
-    return Object.entries(map).map(([sub,us])=>({
-      sub, count:us.length, avg: Math.round(us.reduce((s,u)=>s+u.compliance_pct,0)/us.length),
-      high:us.filter(u=>u.compliance_pct>=91).length, low:us.filter(u=>u.compliance_pct<51).length
-    })).sort((a,b)=>b.avg-a.avg)
-  },[users])
+
+// ── UserDetailPopup — detail 1 user ──────────────────────────
+function UserDetailPopup({ user, onClose }: { user: FicomUser; onClose: () => void }) {
+  const col = AOR_COLORS[user.aor] || "#888"
+  const cp  = user.compliance_pct
+  const circumference = 2 * Math.PI * 36
+  const dashVal = Math.min(cp, 100) / 100 * circumference
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:9998,display:"flex",alignItems:"center",justifyContent:"center",padding:"16px",backdropFilter:"blur(12px)"}} onClick={onClose}>
-      <div style={{background:"#0F1117",border:`1px solid ${col}40`,borderRadius:"24px",maxWidth:"600px",width:"100%",maxHeight:"85vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:`0 40px 100px rgba(0,0,0,0.5)`,animation:"popUp 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:10000,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0",backdropFilter:"blur(14px)"}} className="popup-backdrop"
+      onClick={onClose}>
+      <div style={{background:"#0D1117",border:`1px solid ${col}50`,borderRadius:"clamp(16px,4vw,24px)",maxWidth:"480px",width:"100%",maxHeight:"90vh",overflowY:"auto",boxShadow:`0 40px 100px rgba(0,0,0,0.6),0 0 0 1px ${col}20`,animation:"popUp 0.3s cubic-bezier(0.34,1.56,0.64,1)"}}
+        onClick={e=>e.stopPropagation()}>
+
+        {/* Header bar */}
+        <div style={{height:"4px",background:`linear-gradient(90deg,${col},${col}60,transparent)`}}/>
+
+        {/* Main content */}
+        <div style={{padding:"24px"}}>
+          {/* Top row: avatar + name + close */}
+          <div style={{display:"flex",alignItems:"flex-start",gap:"14px",marginBottom:"20px"}}>
+            {/* Avatar circle with compliance ring */}
+            <div style={{position:"relative",flexShrink:0}}>
+              <svg width="80" height="80" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5"/>
+                <circle cx="40" cy="40" r="36" fill="none"
+                  stroke={compColor(cp)} strokeWidth="5"
+                  strokeDasharray={`${dashVal} ${circumference}`}
+                  strokeDashoffset={circumference * 0.25}
+                  strokeLinecap="round"
+                  style={{filter:`drop-shadow(0 0 6px ${compColor(cp)}80)`}}
+                  transform="rotate(-90 40 40)">
+                  <animate attributeName="stroke-dasharray"
+                    from={`0 ${circumference}`} to={`${dashVal} ${circumference}`}
+                    dur="1s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+                </circle>
+                <text x="40" y="36" textAnchor="middle" fontSize="11" fontWeight="900" fill="white" fontFamily="'Bricolage Grotesque',sans-serif">
+                  {cp}%
+                </text>
+                <text x="40" y="48" textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.4)" fontFamily="sans-serif">
+                  compliance
+                </text>
+              </svg>
+            </div>
+
+            {/* Name + meta */}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:"17px",fontWeight:800,color:"white",marginBottom:"4px",lineHeight:1.2}}>{user.username}</div>
+              <div style={{display:"flex",gap:"6px",flexWrap:"wrap",marginBottom:"8px"}}>
+                <span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"99px",
+                  background:user.position==="RDM"?"rgba(59,130,246,0.2)":"rgba(168,85,247,0.2)",
+                  color:user.position==="RDM"?"#60A5FA":"#C084FC"}}>
+                  {posLabel(user.position)}
+                </span>
+                <span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"99px",background:`${col}20`,color:col}}>
+                  {user.aor}
+                </span>
+                <span style={{fontSize:"10px",fontWeight:700,padding:"2px 8px",borderRadius:"99px",background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.5)"}}>
+                  {user.sub_aor}
+                </span>
+              </div>
+              <div style={{fontSize:"11px",color:"rgba(255,255,255,0.35)",fontFamily:"monospace"}}>{user.user_id}</div>
+            </div>
+
+            <button onClick={onClose} style={{background:"rgba(255,255,255,0.08)",border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",fontSize:"16px",color:"rgba(255,255,255,0.5)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+          </div>
+
+          {/* Stat grid */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,180px),1fr))",gap:"8px",marginBottom:"16px"}}>
+            {[
+              {icon:"📅",label:"Usage Days",   value:`${user.usage_days} / ${user.selling_days} days`, accent:compColor(cp)},
+              {icon:"📊",label:"Compliance",   value:`${cp}%`,                                          accent:compColor(cp)},
+              {icon:"🕐",label:"Last Login",   value:user.last_usage_date||"No activity",               accent:"rgba(255,255,255,0.6)"},
+              {icon:"👤",label:"RDM",          value:user.rdm_name||"—",                                accent:"rgba(255,255,255,0.6)"},
+              {icon:"🎓",label:"Training",     value:user.trained===1?"Completed":"Pending",             accent:user.trained===1?"#4ADE80":"#F97316"},
+              {icon:"📆",label:"Training Date",value:user.training_date||"—",                           accent:"rgba(255,255,255,0.6)"},
+            ].map((s,i)=>(
+              <div key={i} style={{background:"rgba(255,255,255,0.04)",borderRadius:"12px",padding:"12px 14px",border:"1px solid rgba(255,255,255,0.06)"}}>
+                <div style={{fontSize:"10px",color:"rgba(255,255,255,0.3)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:"5px",display:"flex",alignItems:"center",gap:"5px"}}>
+                  <span>{s.icon}</span>{s.label}
+                </div>
+                <div style={{fontSize:"13px",fontWeight:700,color:s.accent,wordBreak:"break-word",lineHeight:1.3}}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Compliance bar (full width) */}
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:"12px",padding:"14px",border:"1px solid rgba(255,255,255,0.06)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"10px"}}>
+              <span style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontWeight:600}}>📈 Compliance Progress</span>
+              <span style={{fontSize:"13px",fontWeight:800,color:compColor(cp)}}>{cp}%</span>
+            </div>
+            <div style={{height:"8px",background:"rgba(255,255,255,0.06)",borderRadius:"99px",overflow:"hidden",marginBottom:"8px"}}>
+              <div style={{height:"100%",width:`${Math.min(cp,100)}%`,background:`linear-gradient(90deg,${compColor(cp)},${compColor(cp)}bb)`,borderRadius:"99px",boxShadow:`0 0 8px ${compColor(cp)}60`,transition:"width 1s ease"}}/>
+            </div>
+            {/* Tier markers */}
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:"8px",color:"rgba(255,255,255,0.2)"}}>
+              <span>0%</span><span style={{color:cp>=50?"#F97316":"inherit"}}>50%</span>
+              <span style={{color:cp>=71?"#84CC16":"inherit"}}>71%</span>
+              <span style={{color:cp>=91?"#22C55E":"inherit"}}>91%</span><span>100%</span>
+            </div>
+            {/* Tier badge */}
+            <div style={{marginTop:"10px",textAlign:"center"}}>
+              <span style={{
+                display:"inline-block",fontSize:"11px",fontWeight:700,padding:"4px 14px",borderRadius:"99px",
+                background:cp>=91?"rgba(34,197,94,0.15)":cp>=71?"rgba(132,204,22,0.15)":cp>=51?"rgba(249,115,22,0.15)":"rgba(239,68,68,0.15)",
+                color:compColor(cp), border:`1px solid ${compColor(cp)}40`
+              }}>
+                {cp>=91?"🏆 High Performer":cp>=71?"✅ On Track":cp>=51?"⚠️ Needs Improvement":"🔴 Low Compliance"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── SubAreaPopup — list of users in a sub-area ────────────────
+function SubAreaPopup({ subAor, users, aor, onUserClick, onBack }: {
+  subAor: string; users: FicomUser[]; aor: string
+  onUserClick: (u: FicomUser) => void; onBack: () => void
+}) {
+  const col = AOR_COLORS[aor] || "#888"
+  const sorted = [...users].sort((a, b) => b.compliance_pct - a.compliance_pct)
+  const avg = users.length ? Math.round(users.reduce((s,u)=>s+u.compliance_pct,0)/users.length) : 0
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:9999,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0",backdropFilter:"blur(14px)"}} className="popup-backdrop"
+      onClick={onBack}>
+      <div style={{background:"#0D1117",border:`1px solid ${col}40`,borderRadius:"clamp(16px,4vw,24px)",maxWidth:"620px",width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:`0 40px 100px rgba(0,0,0,0.6)`,animation:"popUp 0.3s cubic-bezier(0.34,1.56,0.64,1)"}}
+        onClick={e=>e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{background:`linear-gradient(135deg,${col}15,transparent)`,padding:"18px 22px 14px",borderBottom:`2px solid ${col}25`,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"4px"}}>
+            <button onClick={onBack}
+              style={{background:"rgba(255,255,255,0.08)",border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",fontSize:"14px",color:"rgba(255,255,255,0.6)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              ←
+            </button>
+            <div style={{flex:1}}>
+              <div style={{fontSize:"16px",fontWeight:800,color:"white"}}>
+                <span style={{color:col}}>{aor}</span> · {subAor}
+              </div>
+              <div style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",marginTop:"2px"}}>
+                {users.length} users · avg compliance {avg}% · Click user for detail
+              </div>
+            </div>
+            <button onClick={onBack} style={{background:"rgba(255,255,255,0.08)",border:"none",cursor:"pointer",width:"30px",height:"30px",borderRadius:"50%",fontSize:"16px",color:"rgba(255,255,255,0.5)",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+          </div>
+          {/* Mini stats */}
+          <div style={{display:"flex",gap:"6px",marginTop:"10px",flexWrap:"wrap"}}>
+            {[
+              {l:"≥91%",  v:users.filter(u=>u.compliance_pct>=91).length,  c:"#22C55E",bg:"rgba(34,197,94,0.12)"},
+              {l:"51–90%",v:users.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length,c:"#F97316",bg:"rgba(249,115,22,0.12)"},
+              {l:"<50%",  v:users.filter(u=>u.compliance_pct<51).length,   c:"#EF4444",bg:"rgba(239,68,68,0.12)"},
+              {l:"Trained",v:users.filter(u=>u.trained===1).length,         c:col,       bg:`${col}15`},
+            ].map((s,i)=>(
+              <div key={i} style={{background:s.bg,borderRadius:"8px",padding:"4px 10px",textAlign:"center",border:`1px solid ${s.c}20`}}>
+                <div style={{fontSize:"14px",fontWeight:900,color:s.c,lineHeight:1}}>{s.v}</div>
+                <div style={{fontSize:"8px",color:"rgba(255,255,255,0.4)",marginTop:"1px"}}>{s.l}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* User list */}
+        <div style={{overflowY:"auto",flex:1}}>
+          {sorted.map((u,i)=>(
+            <div key={i}
+              style={{display:"flex",alignItems:"center",gap:"12px",padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,0.04)",cursor:"pointer",transition:"background 0.15s"}}
+              onClick={()=>onUserClick(u)}
+              onMouseEnter={e=>{e.currentTarget.style.background=`${col}0C`}}
+              onMouseLeave={e=>{e.currentTarget.style.background="transparent"}}>
+
+              {/* Rank */}
+              <div style={{width:"22px",fontSize:"11px",color:"rgba(255,255,255,0.2)",fontWeight:700,textAlign:"center",flexShrink:0}}>
+                {i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}`}
+              </div>
+
+              {/* Name + role */}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:"13px",fontWeight:600,color:"white",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.username}</div>
+                <div style={{fontSize:"10px",color:"rgba(255,255,255,0.35)",marginTop:"2px",fontFamily:"monospace"}}>{u.user_id} · {posLabel(u.position)}</div>
+              </div>
+
+              {/* Usage days */}
+              <div style={{textAlign:"center",flexShrink:0}}>
+                <div style={{fontSize:"13px",fontWeight:700,color:"white"}}>{u.usage_days}<span style={{fontSize:"9px",color:"rgba(255,255,255,0.3)"}}>/{u.selling_days}</span></div>
+                <div style={{fontSize:"9px",color:"rgba(255,255,255,0.3)"}}>days</div>
+              </div>
+
+              {/* Compliance mini bar */}
+              <div style={{width:"90px",flexShrink:0}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:"3px"}}>
+                  <span style={{fontSize:"10px",fontWeight:800,color:compColor(u.compliance_pct)}}>{u.compliance_pct}%</span>
+                  {u.trained===1&&<span style={{fontSize:"9px",color:"#4ADE80"}}>✅</span>}
+                </div>
+                <div style={{height:"4px",background:"rgba(255,255,255,0.08)",borderRadius:"99px",overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${Math.min(u.compliance_pct,100)}%`,background:compColor(u.compliance_pct),borderRadius:"99px"}}/>
+                </div>
+              </div>
+
+              {/* Arrow */}
+              <div style={{fontSize:"14px",color:"rgba(255,255,255,0.2)",flexShrink:0}}>›</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Area Popup (sub-area breakdown) → drill to SubAreaPopup ─
+function AreaPopup({ aor, users, onClose }: { aor:string; users:FicomUser[]; onClose:()=>void }) {
+  const col = AOR_COLORS[aor]||"#888"
+  const [selectedSub, setSelectedSub] = useState<string|null>(null)
+  const [selectedUser, setSelectedUser] = useState<FicomUser|null>(null)
+
+  const subAorMap = useMemo(()=>{
+    const map: Record<string,FicomUser[]> = {}
+    users.forEach(u=>{ if(!map[u.sub_aor]) map[u.sub_aor]=[]; map[u.sub_aor].push(u) })
+    return map
+  },[users])
+
+  const subAors = useMemo(()=>
+    Object.entries(subAorMap).map(([sub,us])=>({
+      sub, users:us, count:us.length,
+      avg: Math.round(us.reduce((s,u)=>s+u.compliance_pct,0)/us.length),
+      high:us.filter(u=>u.compliance_pct>=91).length,
+      low:us.filter(u=>u.compliance_pct<51).length,
+    })).sort((a,b)=>b.avg-a.avg)
+  ,[subAorMap])
+
+  // If a user is selected → show UserDetailPopup on top
+  if (selectedUser) return (
+    <UserDetailPopup user={selectedUser} onClose={()=>setSelectedUser(null)}/>
+  )
+
+  // If a sub-area is selected → show SubAreaPopup
+  if (selectedSub && subAorMap[selectedSub]) return (
+    <SubAreaPopup
+      subAor={selectedSub}
+      users={subAorMap[selectedSub]}
+      aor={aor}
+      onUserClick={u=>setSelectedUser(u)}
+      onBack={()=>setSelectedSub(null)}
+    />
+  )
+
+  // Default: sub-area cards
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:9998,display:"flex",alignItems:"flex-end",justifyContent:"center",padding:"0",backdropFilter:"blur(12px)"}} className="popup-backdrop" onClick={onClose}>
+      <div style={{background:"#0F1117",border:`1px solid ${col}40`,borderRadius:"clamp(16px,4vw,24px)",maxWidth:"600px",width:"100%",maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column",boxShadow:`0 40px 100px rgba(0,0,0,0.5)`,animation:"popUp 0.3s cubic-bezier(0.34,1.56,0.64,1)"}} onClick={e=>e.stopPropagation()}>
         <div style={{background:`linear-gradient(135deg,${col}15,transparent)`,padding:"20px 24px",borderBottom:`2px solid ${col}25`,flexShrink:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
               <div style={{fontSize:"18px",fontWeight:800,color:"white"}}>📍 {aor} — Sub-Area Breakdown</div>
-              <div style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",marginTop:"3px"}}>{users.length} users · {subAors.length} sub-areas · Click sub-area to view users</div>
+              <div style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",marginTop:"3px"}}>
+                {users.length} users · {subAors.length} sub-areas · <span style={{color:col}}>Click sub-area → view users → click user → full detail</span>
+              </div>
             </div>
             <button onClick={onClose} style={{background:"rgba(255,255,255,0.08)",border:"none",cursor:"pointer",width:"32px",height:"32px",borderRadius:"50%",fontSize:"18px",color:"rgba(255,255,255,0.6)",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
           </div>
@@ -336,19 +580,27 @@ function AreaPopup({ aor, users, onClose }: { aor:string; users:FicomUser[]; onC
         <div style={{overflowY:"auto",flex:1,padding:"16px"}}>
           <div style={{display:"flex",flexDirection:"column",gap:"8px"}}>
             {subAors.map((s,i)=>(
-              <div key={i} style={{background:"rgba(255,255,255,0.04)",borderRadius:"14px",padding:"14px 16px",border:`1px solid ${col}20`,cursor:"pointer",transition:"all 0.2s"}}
-                onMouseEnter={e=>{e.currentTarget.style.background=`${col}12`;e.currentTarget.style.borderColor=`${col}40`}}
-                onMouseLeave={e=>{e.currentTarget.style.background="rgba(255,255,255,0.04)";e.currentTarget.style.borderColor=`${col}20`}}>
+              <div key={i}
+                style={{background:"rgba(255,255,255,0.04)",borderRadius:"14px",padding:"14px 16px",border:`1px solid ${col}20`,cursor:"pointer",transition:"all 0.2s"}}
+                onClick={()=>setSelectedSub(s.sub)}
+                onMouseEnter={e=>{e.currentTarget.style.background=`${col}12`;e.currentTarget.style.borderColor=`${col}40`;e.currentTarget.style.transform="translateX(4px)"}}
+                onMouseLeave={e=>{e.currentTarget.style.background="rgba(255,255,255,0.04)";e.currentTarget.style.borderColor=`${col}20`;e.currentTarget.style.transform="none"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
-                  <span style={{fontSize:"14px",fontWeight:700,color:"white"}}>{s.sub}</span>
-                  <span style={{fontSize:"16px",fontWeight:900,color:compColor(s.avg),fontFamily:"'Bricolage Grotesque',sans-serif"}}>{s.avg}%</span>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"14px",fontWeight:700,color:"white"}}>{s.sub}</span>
+                    <span style={{fontSize:"10px",color:"rgba(255,255,255,0.3)"}}>({s.count} users)</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:"8px"}}>
+                    <span style={{fontSize:"16px",fontWeight:900,color:compColor(s.avg),fontFamily:"'Bricolage Grotesque',sans-serif"}}>{s.avg}%</span>
+                    <span style={{fontSize:"16px",color:"rgba(255,255,255,0.2)"}}>›</span>
+                  </div>
                 </div>
                 <div style={{height:"5px",background:"rgba(255,255,255,0.08)",borderRadius:"99px",overflow:"hidden",marginBottom:"8px"}}>
-                  <div style={{height:"100%",width:`${Math.min(s.avg,100)}%`,background:`linear-gradient(90deg,${compColor(s.avg)},${compColor(s.avg)}88)`,borderRadius:"99px"}}/>
+                  <div style={{height:"100%",width:`${Math.min(s.avg,100)}%`,background:`linear-gradient(90deg,${compColor(s.avg)},${compColor(s.avg)}88)`,borderRadius:"99px",boxShadow:`0 0 6px ${compColor(s.avg)}40`}}/>
                 </div>
                 <div style={{display:"flex",gap:"12px",fontSize:"10px",color:"rgba(255,255,255,0.4)"}}>
-                  <span>{s.count} users</span>
                   <span style={{color:"#22C55E"}}>✅ {s.high} ≥91%</span>
+                  <span style={{color:"#F97316"}}>🟡 {s.count-s.high-s.low} 51–90%</span>
                   <span style={{color:"#EF4444"}}>🔴 {s.low} &lt;50%</span>
                 </div>
               </div>
@@ -369,6 +621,7 @@ export default function FicomPage() {
   const [users,      setUsers]      = useState<FicomUser[]>([])
   const [areaPopup,  setAreaPopup]  = useState<string|null>(null)
   const [userPopup,  setUserPopup]  = useState<string|null>(null)
+  const [detailUser, setDetailUser] = useState<FicomUser|null>(null)
   const [areaFilter, setAreaFilter] = useState("ALL")
   const [posFilter,  setPosFilter]  = useState<"all"|"ADM"|"RDM">("all")
   const [search,     setSearch]     = useState("")
@@ -461,12 +714,12 @@ export default function FicomPage() {
       <LandingNav/>
 
       {/* ── Tab Bar ── */}
-      <div style={{position:"sticky",top:"64px",zIndex:90,background:"rgba(6,12,26,0.97)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"0 clamp(20px,5vw,80px)"}}>
+      <div style={{position:"sticky",top:"64px",zIndex:90,background:"rgba(6,12,26,0.97)",backdropFilter:"blur(20px)",borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"0 clamp(12px,4vw,80px)"}}>
         <div style={{maxWidth:"1200px",margin:"0 auto",display:"flex",overflowX:"auto"}}>
           {[
             {id:"sfa",   label:"SFA",        href:"/landing/utilisation", active:false},
             {id:"ficom", label:"Ficom",       href:"#",                    active:true},
-            {id:"lite",  label:"Ficom Lite",  href:"#",                    active:false, soon:true},
+            {id:"lite",  label:"Ficom Lite",  href:"/landing/ficom-lite",  active:false, soon:false},
           ].map(tab=>(
             <a key={tab.id} href={tab.href}
               style={{padding:"12px 20px",border:"none",fontFamily:"inherit",fontSize:"13px",fontWeight:tab.active?700:500,color:tab.active?"#F97316":tab.soon?"rgba(255,255,255,0.18)":"rgba(255,255,255,0.45)",background:"transparent",borderBottom:tab.active?"2px solid #F97316":"2px solid transparent",transition:"all 0.2s",display:"flex",alignItems:"center",gap:"8px",whiteSpace:"nowrap",textDecoration:"none",cursor:tab.soon?"not-allowed":"pointer"}}>
@@ -479,7 +732,7 @@ export default function FicomPage() {
       </div>
 
       {/* ══════════ HERO ══════════ */}
-      <div style={{position:"relative",overflow:"hidden",minHeight:"clamp(420px,60vh,620px)",display:"flex",alignItems:"center",padding:"clamp(60px,8vw,100px) clamp(20px,5vw,80px)"}}>
+      <div style={{position:"relative",overflow:"hidden",display:"flex",alignItems:"flex-start",padding:"clamp(80px,10vw,110px) clamp(16px,5vw,80px) clamp(40px,5vw,70px)"}}>
 
         {/* Deep animated background */}
         <div style={{position:"absolute",inset:0,background:"linear-gradient(135deg,#0A0500 0%,#100800 30%,#060C1A 60%,#000A08 100%)"}}/>
@@ -488,7 +741,7 @@ export default function FicomPage() {
         <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(249,115,22,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(249,115,22,0.04) 1px,transparent 1px)",backgroundSize:"48px 48px",animation:"gridSlide 20s linear infinite",pointerEvents:"none"}}/>
 
         {/* Big glowing orbs */}
-        <div style={{position:"absolute",top:"-20%",right:"-10%",width:"clamp(350px,50vw,650px)",height:"clamp(350px,50vw,650px)",borderRadius:"50%",background:"radial-gradient(circle,rgba(249,115,22,0.28),rgba(249,115,22,0.08) 45%,transparent 70%)",filter:"blur(60px)",animation:"orb1 8s ease-in-out infinite",pointerEvents:"none"}}/>
+        <div style={{position:"absolute",top:"-20%",right:"-10%",width:"clamp(200px,45vw,650px)",height:"clamp(200px,45vw,650px)",borderRadius:"50%",background:"radial-gradient(circle,rgba(249,115,22,0.28),rgba(249,115,22,0.08) 45%,transparent 70%)",filter:"blur(60px)",animation:"orb1 8s ease-in-out infinite",pointerEvents:"none"}}/>
         <div style={{position:"absolute",bottom:"-15%",left:"-5%",width:"clamp(250px,35vw,500px)",height:"clamp(250px,35vw,500px)",borderRadius:"50%",background:"radial-gradient(circle,rgba(59,130,246,0.2),transparent 65%)",filter:"blur(60px)",animation:"orb2 11s ease-in-out infinite",pointerEvents:"none"}}/>
         <div style={{position:"absolute",top:"40%",left:"40%",width:"clamp(200px,25vw,380px)",height:"clamp(200px,25vw,380px)",borderRadius:"50%",background:"radial-gradient(circle,rgba(34,197,94,0.1),transparent 65%)",filter:"blur(50px)",pointerEvents:"none"}}/>
 
@@ -498,77 +751,78 @@ export default function FicomPage() {
         ))}
 
         <div style={{maxWidth:"1200px",margin:"0 auto",width:"100%",position:"relative",zIndex:2}}>
-          <div style={{display:"flex",gap:"clamp(32px,5vw,72px)",alignItems:"center",flexWrap:"wrap"}}>
+          <div className="hero-layout" style={{display:"flex",gap:"clamp(28px,4vw,64px)",alignItems:"center",flexWrap:"nowrap"}}>
 
             {/* LEFT ─ text + KPI */}
-            <div style={{flex:1,minWidth:"280px"}}>
+            <div style={{flex:1,minWidth:0,maxWidth:"calc(100% - 260px)"}}>
               {/* Live badge */}
               <div style={{display:"inline-flex",alignItems:"center",gap:"10px",background:"rgba(249,115,22,0.12)",border:"1px solid rgba(249,115,22,0.3)",borderRadius:"99px",padding:"6px 18px",marginBottom:"clamp(18px,3vw,28px)",backdropFilter:"blur(8px)"}}>
                 <div className="live-dot" style={{width:"8px",height:"8px",borderRadius:"50%",background:"#F97316",boxShadow:"0 0 10px #F97316"}}/>
-                <span style={{fontSize:"11px",fontWeight:700,color:"#FB923C",letterSpacing:"0.12em",textTransform:"uppercase"}}>
+                <span style={{fontSize:"clamp(9px,2.5vw,11px)",fontWeight:700,color:"#FB923C",letterSpacing:"0.05em",textTransform:"uppercase"}}>
                   Live · Ficom PHI · {latest?.period_label||"—"} · as of {latest?.as_of_date||"—"}
                 </span>
               </div>
 
               {/* Title + Logo */}
-              <div style={{display:"flex",alignItems:"flex-start",gap:"clamp(14px,2vw,22px)",marginBottom:"clamp(12px,2vw,18px)",flexWrap:"wrap"}}>
-                <h1 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(36px,5.5vw,68px)",fontWeight:900,lineHeight:1.04,letterSpacing:"-0.03em",color:"white",margin:0}}>
-                  Ficom Usage<br/>
+              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:"clamp(10px,2vw,22px)",marginBottom:"clamp(10px,2vw,18px)"}}>
+                <h1 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(30px,7vw,68px)",fontWeight:900,lineHeight:1.04,letterSpacing:"-0.03em",color:"white",margin:0}}>
+                  Ficom<br/>
                   <span style={{background:"linear-gradient(135deg,#F97316 0%,#FB923C 40%,#FCD34D 100%)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",filter:"drop-shadow(0 0 30px rgba(249,115,22,0.4))"}}>
-                    Monitoring
+                    Utilisation
                   </span>
                 </h1>
-                <div className="ficom-logo-wrap" style={{marginTop:"8px",flexShrink:0}}>
+                <div className="ficom-logo-wrap" style={{marginTop:"4px",flexShrink:0}}>
                   <FicomLogo size={clampVal(64,80)} glow={true}/>
                 </div>
               </div>
 
-              <p style={{fontSize:"clamp(12px,1.4vw,15px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(24px,4vw,40px)",lineHeight:1.7}}>
-                {latest?.total_users||"—"} Ficom users (ADM/RDM) ·{" "}
-                {(latest?.total_ads||0)+(latest?.total_lp||0)>0&&<><strong style={{color:"rgba(255,255,255,0.5)"}}>{latest?.total_ads||0}</strong> ADS + <strong style={{color:"rgba(255,255,255,0.5)"}}>{latest?.total_lp||0}</strong> LP field · </>}
-                <strong style={{color:"rgba(255,255,255,0.5)"}}>{latest?.selling_days||"—"}</strong> selling days
+              <p style={{fontSize:"clamp(11px,3vw,15px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(16px,4vw,40px)",lineHeight:1.6}}>
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.total_active||"—"}</strong> dari{" "}
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.total_users||"—"}</strong> Ficom users (ADM/RDM) sudah login{" "}
+                {latest?.total_users&&latest?.total_active&&latest.total_users===latest.total_active&&(
+                  <span style={{fontSize:"10px",color:"rgba(239,68,68,0.8)",background:"rgba(239,68,68,0.12)",padding:"1px 8px",borderRadius:"99px",fontStyle:"italic"}}>⚠️ perlu re-upload dengan master yang benar</span>
+                )}{" "}· <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.selling_days||"—"}</strong> selling days
               </p>
 
               {/* KPI GRID 3×2 */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(7px,1.2vw,12px)",maxWidth:"580px"}}>
+              <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(7px,1.2vw,12px)",width:"100%",maxWidth:"560px"}}>
                 {[
-                  {n:<AnimCount to={latest?.total_users||0} delay={0}/>,    l:"Total Users",   i:"👥", c:"white",   bg:"rgba(255,255,255,0.06)", bo:"rgba(255,255,255,0.1)"},
-                  {n:<AnimCount to={latest?.total_trained||0} delay={80}/>, l:"Trained ✅",    i:"🎓", c:"#FCD34D", bg:"rgba(252,211,77,0.1)",   bo:"rgba(252,211,77,0.25)"},
-                  {n:<AnimCount to={latest?.total_active||0} delay={160}/>, l:"Active Users",  i:"💚", c:"#4ADE80", bg:"rgba(34,197,94,0.1)",    bo:"rgba(34,197,94,0.25)"},
-                  {n:<AnimCount to={latest?.avg_compliance||0} suffix="%" dec={1} delay={240}/>,l:"Avg Compliance",i:"📊",c:"#60A5FA",bg:"rgba(59,130,246,0.1)",bo:"rgba(59,130,246,0.2)"},
-                  {n:<AnimCount to={latest?.total_high||0} delay={320}/>,   l:"≥91% Users 🏆", i:"⭐", c:"#4ADE80", bg:"rgba(34,197,94,0.1)",    bo:"rgba(34,197,94,0.2)"},
-                  {n:<AnimCount to={latest?.total_low||0} delay={400}/>,    l:"<50% Users ⚠️", i:"🔴", c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.04)",bo:"rgba(255,255,255,0.08)"},
+                  {n:<AnimCount to={latest?.total_users?Math.round((latest.total_active||0)/latest.total_users*100):0} suffix="%" delay={0}/>, l:latest?.total_users===latest?.total_active?"Utilisasi ⚠️":"Utilisasi",    i:"📊", c:"#4ADE80", bg:"rgba(34,197,94,0.12)",  bo:"rgba(34,197,94,0.3)"},
+                  {n:<AnimCount to={latest?.total_active||0} delay={80}/>,  l:"Aktif Login",  i:"✅", c:"white",   bg:"rgba(255,255,255,0.06)", bo:"rgba(255,255,255,0.1)"},
+                  {n:<AnimCount to={latest?.total_users||0} delay={160}/>,  l:"Total Users",  i:"👥", c:"rgba(255,255,255,0.45)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
+                  {n:<AnimCount to={latest?.avg_compliance||0} suffix="%" dec={1} delay={240}/>,l:"Avg Compliance",i:"📈",c:"#60A5FA",bg:"rgba(59,130,246,0.1)",bo:"rgba(59,130,246,0.2)"},
+                  {n:<AnimCount to={latest?.total_high||0} delay={320}/>,   l:"≥91% Users 🏆",i:"⭐", c:"#4ADE80", bg:"rgba(34,197,94,0.1)",   bo:"rgba(34,197,94,0.2)"},
+                  {n:<AnimCount to={latest?.total_low||0} delay={400}/>,    l:"<50% Users ⚠️",i:"🔴", c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.04)",bo:"rgba(255,255,255,0.08)"},
                 ].map((s,i)=>(
-                  <div key={i} className="kpi-card" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(10px,1.5vw,15px)",border:`1px solid ${s.bo}`,textAlign:"center",backdropFilter:"blur(12px)",animation:"fadeUp 0.6s ease both",animationDelay:`${i*0.08}s`,position:"relative",overflow:"hidden"}}>
+                  <div key={i} className="kpi-card" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(8px,2.5vw,15px)",border:`1px solid ${s.bo}`,textAlign:"center",backdropFilter:"blur(12px)",animation:"fadeUp 0.6s ease both",animationDelay:`${i*0.08}s`,position:"relative",overflow:"hidden"}}>
                     <div style={{position:"absolute",top:0,left:0,right:0,height:"1px",background:`linear-gradient(90deg,transparent,${s.bo},transparent)`}}/>
                     <div style={{fontSize:"clamp(14px,2vw,20px)",marginBottom:"5px"}}>{s.i}</div>
-                    <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,21px)",fontWeight:900,color:s.c,lineHeight:1,marginBottom:"5px"}}>{s.n}</div>
-                    <div style={{fontSize:"clamp(7px,0.65vw,9px)",color:"rgba(255,255,255,0.3)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>{s.l}</div>
+                    <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(16px,4vw,21px)",fontWeight:900,color:s.c,lineHeight:1,marginBottom:"5px"}}>{s.n}</div>
+                    <div style={{fontSize:"clamp(8px,1.8vw,9px)",color:"rgba(255,255,255,0.3)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.03em"}}>{s.l}</div>
                   </div>
                 ))}
               </div>
             </div>
 
             {/* RIGHT ─ Donut + Bar Chart */}
-            <div style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:"24px"}}>
+            <div className="hero-right" style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:"20px",minWidth:"220px"}}>
               {/* Donut */}
               <div style={{position:"relative"}}>
                 <Donut
-                  high={latest?.total_high||0}
-                  medium={latest?.total_medium||0}
-                  low={latest?.total_low||0}
+                  high={latest?.total_active||0}
+                  medium={0}
+                  low={(latest?.total_users||0)-(latest?.total_active||0)}
                   total={latest?.total_users||1}
-                  size={clampVal(160,200)}
+                  size={typeof window!=="undefined"&&window.innerWidth<640?140:180}
                 />
                 {/* Glow ring */}
                 <div style={{position:"absolute",inset:"-8px",borderRadius:"50%",background:"radial-gradient(circle,rgba(249,115,22,0.08),transparent 65%)",pointerEvents:"none"}}/>
               </div>
               {/* Legend */}
-              <div style={{display:"flex",flexDirection:"column",gap:"6px",minWidth:"180px"}}>
+              <div className="donut-legend" style={{display:"flex",flexDirection:"column",gap:"6px",minWidth:"140px"}}>
                 {[
-                  {l:"≥91% (High)",     c:"#22C55E",v:latest?.total_high||0},
-                  {l:"51–90% (Medium)", c:"#F97316",v:latest?.total_medium||0},
-                  {l:"<50% (Low)",      c:"#EF4444",v:latest?.total_low||0},
+                  {l:"Aktif Login ✅",   c:"#22C55E",v:latest?.total_active||0},
+                  {l:"Belum Aktif ❌",   c:"#EF4444",v:(latest?.total_users||0)-(latest?.total_active||0)},
                 ].map((d,i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",gap:"8px"}}>
                     <div style={{width:"8px",height:"8px",borderRadius:"50%",background:d.c,boxShadow:`0 0 6px ${d.c}80`,flexShrink:0}}/>
@@ -578,7 +832,7 @@ export default function FicomPage() {
                 ))}
               </div>
               {/* Bar mini chart */}
-              <div style={{opacity:0.9}}><HeroChart latest={latest}/></div>
+              <div className="hero-chart" style={{opacity:0.9}}><HeroChart latest={latest}/></div>
             </div>
           </div>
         </div>
@@ -587,16 +841,16 @@ export default function FicomPage() {
 
       {/* ── WHITE CONTENT ── */}
       <div style={{background:"#F6F7FA",borderRadius:"28px 28px 0 0",marginTop:"-6px"}}>
-        <div style={{maxWidth:"1200px",margin:"0 auto",padding:"clamp(20px,3vw,36px) clamp(20px,5vw,80px)"}}>
+        <div style={{maxWidth:"1200px",margin:"0 auto",padding:"clamp(16px,3vw,36px) clamp(12px,4vw,80px)"}}>
 
           {/* Glossary */}
           <div style={{background:"white",borderRadius:"16px",border:"1px solid rgba(0,0,0,0.07)",padding:"clamp(12px,1.5vw,18px)",marginBottom:"clamp(14px,2vw,20px)",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
             <div style={{fontWeight:700,fontSize:"12px",color:"#333",marginBottom:"10px"}}>📖 Role Mapping & Compliance</div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"8px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,160px),1fr))",gap:"8px"}}>
               {[
-                {term:"ADS/ADM (GRSM)",  def:"Area Distributor Supervisor/Manager — field Ficom users", c:"#A855F7"},
-                {term:"RDM (NSM)",        def:"Regional Distribution Manager — monitors multiple ADMs",   c:"#3B82F6"},
-                {term:"ADS field (m_master)",def:"ADS/LP assigned to distributors — tracked separately", c:"#F97316"},
+                {term:"Utilisasi",        def:"% ADM/RDM yang sudah LOGIN ke Ficom minimal 1x dalam periode",         c:"#4ADE80"},
+                {term:"ADS/ADM (GRSM)",  def:"Area Distributor Supervisor/Manager — pengguna Ficom di lapangan",      c:"#A855F7"},
+                {term:"RDM (NSM)",        def:"Regional Distribution Manager — monitoring via Ficom",                  c:"#3B82F6"},
                 {term:"Compliance %",     def:`Unique login days ÷ ${latest?.selling_days||"N"} selling days × 100`, c:"#22C55E"},
               ].map((g,i)=>(
                 <div key={i} style={{padding:"8px 12px",background:"#F8F9FA",borderRadius:"10px",borderLeft:`3px solid ${g.c}`}}>
@@ -617,7 +871,7 @@ export default function FicomPage() {
                   <div style={{fontSize:"11px",color:"rgba(255,255,255,0.4)"}}>Data dari MasterDataFiicom_m_master.xlsx · Tracked terpisah dari WebFicom login</div>
                 </div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:"8px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(110px,1fr))",gap:"8px"}}>
                 {[
                   {l:"Total ADS",v:latest?.total_ads||0,c:"#FB923C"},
                   {l:"Total LP",v:latest?.total_lp||0,c:"#FCD34D"},
@@ -652,7 +906,7 @@ export default function FicomPage() {
           <div style={{background:"white",borderRadius:"16px",border:"1px solid rgba(0,0,0,0.07)",padding:"clamp(14px,2vw,22px)",marginBottom:"clamp(14px,2vw,20px)",boxShadow:"0 2px 10px rgba(0,0,0,0.04)"}}>
             <h2 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,18px)",fontWeight:800,marginBottom:"4px",color:"#111"}}>🗺️ Compliance by Area</h2>
             <p style={{fontSize:"10px",color:"#bbb",marginBottom:"14px"}}>Click area → lihat sub-area breakdown · Click "View Users" → lihat semua user</p>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,185px),1fr))",gap:"clamp(8px,1.2vw,12px)"}}>
+            <div className="area-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,160px),1fr))",gap:"clamp(8px,1.2vw,12px)"}}>
               {latestAreas
                 .filter(a=>areaFilter==="ALL"||a.aor===areaFilter)
                 .map((a,i)=>{
@@ -670,13 +924,15 @@ export default function FicomPage() {
                           <div style={{fontSize:"10px",color:"#aaa",marginTop:"1px"}}>{a.total_users} users</div>
                         </div>
                         <div style={{textAlign:"right"}}>
-                          <div style={{fontSize:"clamp(18px,2vw,22px)",fontWeight:900,color:compColor(a.avg_compliance),fontFamily:"'Bricolage Grotesque',sans-serif"}}>{a.avg_compliance.toFixed(0)}%</div>
-                          <div style={{fontSize:"9px",color:"#aaa"}}>avg</div>
+                          <div style={{fontSize:"clamp(18px,2vw,22px)",fontWeight:900,color:a.total_users?compColor(Math.round(a.active/a.total_users*100)):col,fontFamily:"'Bricolage Grotesque',sans-serif"}}>{a.total_users?Math.round(a.active/a.total_users*100):0}%</div>
+                          <div style={{fontSize:"9px",color:"#aaa"}}>utilisasi</div>
                         </div>
                       </div>
-                      <div style={{height:"5px",background:`${col}15`,borderRadius:"99px",marginBottom:"10px",overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${Math.min(a.avg_compliance,100)}%`,background:`linear-gradient(90deg,${col},${col}88)`,borderRadius:"99px"}}/>
+                      {/* compliance bar */}
+                      <div style={{height:"5px",background:`${col}15`,borderRadius:"99px",marginBottom:"4px",overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${a.total_users?Math.min(a.active/a.total_users*100,100):0}%`,background:`linear-gradient(90deg,${col},${col}88)`,borderRadius:"99px"}}/>
                       </div>
+                      <div style={{fontSize:"9px",color:"#aaa",marginBottom:"8px"}}>avg compliance: {a.avg_compliance.toFixed(0)}%</div>
                       {/* Mini 3-tier breakdown */}
                       <div style={{display:"flex",gap:"4px",marginBottom:"10px"}}>
                         {[{v:a.high_count,c:"#22C55E",l:"≥91%"},{v:a.medium_count,c:"#F97316",l:"51–90%"},{v:a.low_count,c:"#EF4444",l:"<50%"}].map((b,bi)=>(
@@ -706,7 +962,7 @@ export default function FicomPage() {
                 <h2 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,18px)",fontWeight:800,color:"#111"}}>
                   👤 User Detail <span style={{fontSize:"12px",fontWeight:400,color:"#bbb"}}>({filteredUsers.length}/{latestUsers.length})</span>
                 </h2>
-                <p style={{fontSize:"10px",color:"#bbb",marginTop:"3px"}}>Click header to sort · {latest?.period_label}</p>
+                <p style={{fontSize:"10px",color:"#bbb",marginTop:"3px"}}>Click header → sort · Click row → detail user · {latest?.period_label}</p>
               </div>
               <div style={{display:"flex",gap:"7px",flexWrap:"wrap",alignItems:"center"}}>
                 <input placeholder="🔍 Name / ID / Sub-AOR..." value={search} onChange={e=>setSearch(e.target.value)}
@@ -721,8 +977,8 @@ export default function FicomPage() {
                 </div>
               </div>
             </div>
-            <div style={{overflowX:"auto"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",minWidth:"700px"}}>
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",minWidth:"640px"}}>
                 <thead>
                   <tr style={{borderBottom:"2px solid #F0F0F0"}}>
                     {[
@@ -742,8 +998,9 @@ export default function FicomPage() {
                   {filteredUsers.map((u,i)=>{
                     const col=AOR_COLORS[u.aor]||"#888"
                     return (
-                      <tr key={i} style={{borderBottom:"1px solid #F8F8F8",transition:"background 0.12s"}}
-                        onMouseEnter={e=>{e.currentTarget.style.background="#F8F9FA"}}
+                      <tr key={i} style={{borderBottom:"1px solid #F8F8F8",transition:"background 0.12s",cursor:"pointer"}}
+                        onClick={()=>setDetailUser(u)}
+                        onMouseEnter={e=>{e.currentTarget.style.background="#F0F7FF"}}
                         onMouseLeave={e=>{e.currentTarget.style.background="transparent"}}>
                         <td style={{padding:"9px 10px",fontSize:"11px",color:"#aaa",fontFamily:"monospace"}}>{u.user_id}</td>
                         <td style={{padding:"9px 10px",fontSize:"12px",fontWeight:600,color:"#111",maxWidth:"170px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.username}</td>
@@ -790,6 +1047,7 @@ export default function FicomPage() {
       {/* Popups */}
       {areaPopup&&<AreaPopup aor={areaPopup} users={latestUsers.filter(u=>u.aor===areaPopup)} onClose={()=>setAreaPopup(null)}/>}
       {userPopup&&<UserPopup users={latestUsers.filter(u=>u.aor===userPopup)} aorLabel={userPopup} onClose={()=>setUserPopup(null)}/>}
+      {detailUser&&<UserDetailPopup user={detailUser} onClose={()=>setDetailUser(null)}/>}
 
       <style dangerouslySetInnerHTML={{__html:`
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -800,7 +1058,39 @@ export default function FicomPage() {
         @keyframes orb2    { 0%,100%{transform:translate(0,0)} 50%{transform:translate(25px,-25px)} }
         @keyframes gridSlide { from{backgroundPosition:0 0} to{backgroundPosition:48px 48px} }
         @keyframes particle { 0%,100%{opacity:0;transform:translateY(0) scale(0)} 40%,60%{opacity:0.6;transform:translateY(-20px) scale(1)} }
-        @media(max-width:640px){ .kpi-card{ animation: none !important; } }
+        @media(max-width:640px){
+          .kpi-card { animation: none !important; }
+          .kpi-grid { grid-template-columns: repeat(2,1fr) !important; }
+          .hero-right { flex-direction: row !important; flex-wrap: wrap !important; justify-content: center !important; gap: 14px !important; min-width: unset !important; width: 100% !important; }
+          .hero-chart { display: none !important; }
+          .hero-layout { gap: 20px !important; flex-wrap: wrap !important; }
+          .hero-layout > div:first-child { max-width: 100% !important; }
+          .donut-legend { flex-direction: row !important; flex-wrap: wrap !important; gap: 8px !important; min-width: unset !important; }
+          .donut-legend > div { gap: 5px !important; }
+        }
+        @media(max-width:400px){
+          .kpi-grid { grid-template-columns: repeat(2,1fr) !important; gap: 6px !important; }
+          .area-grid { grid-template-columns: repeat(2,1fr) !important; }
+        }
+        @media(max-width:360px){
+          .area-grid { grid-template-columns: 1fr !important; }
+        }
+        @media(max-width:640px){
+          .popup-backdrop { align-items: flex-end !important; }
+          .popup-backdrop > div {
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+            max-height: 88vh !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            border-left: none !important;
+            border-right: none !important;
+            border-bottom: none !important;
+          }
+        }
+        @media(min-width:641px){
+          .popup-backdrop { align-items: center !important; padding: 16px !important; }
+        }
       `}}/>
     </div>
   )
