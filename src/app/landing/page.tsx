@@ -1,6 +1,9 @@
 "use client"
 import PasswordGate from "./PasswordGate"
+import LandingNav from "./components/LandingNav"
 import { useState, useEffect, useRef } from "react"
+import { supabase } from "@/lib/supabase"
+import type { LandingTutorial, LandingInfographic } from "@/lib/types"
 
 const C = {
   primary: "#E8381A",
@@ -35,71 +38,6 @@ function useInView(ref: React.RefObject<HTMLElement | null>, threshold = 0.15) {
     return () => obs.disconnect()
   }, [ref, threshold])
   return inView
-}
-
-// ── NavBar ────────────────────────────────────────────────────
-function NavBar() {
-  const [scrolled, setScrolled] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
-  useEffect(() => {
-    const fn = () => setScrolled(window.scrollY > 30)
-    window.addEventListener("scroll", fn, { passive:true })
-    return () => window.removeEventListener("scroll", fn)
-  }, [])
-  const scrollTo = (id:string) => { document.getElementById(id)?.scrollIntoView({behavior:"smooth"}); setMenuOpen(false) }
-
-  return (
-    <>
-      <nav style={{
-        position:"fixed",top:0,left:0,right:0,zIndex:100,height:"64px",
-        background:scrolled?"rgba(255,255,255,0.97)":"transparent",
-        backdropFilter:scrolled?"blur(16px)":"none",
-        borderBottom:scrolled?`1px solid ${C.border}`:"none",
-        transition:"all 0.3s", padding:"0 clamp(20px,5vw,80px)",
-        display:"flex",alignItems:"center",justifyContent:"space-between",
-      }}>
-        <div style={{display:"flex",alignItems:"center",gap:"10px",cursor:"pointer"}} onClick={()=>scrollTo("hero")}>
-          <div style={{width:"36px",height:"36px",borderRadius:"10px",background:`linear-gradient(135deg,${C.primary},${C.primaryLight})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:"18px",boxShadow:`0 4px 12px ${C.primary}40`}}>🍃</div>
-          <div>
-            <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontWeight:800,fontSize:"15px",lineHeight:1,color:C.dark}}>PHI Support</div>
-            <div style={{fontSize:"10px",color:C.gray,letterSpacing:"0.1em",textTransform:"uppercase"}}>Mayora Indah</div>
-          </div>
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:"4px"}} className="desktop-nav">
-          {[{label:"About",href:"/landing/about"},{label:"Applications",href:"/landing/applications"},{label:"Utilisation",href:"/landing/utilisation"},{label:"Supporting",href:"/landing/supporting"}].map(n=>(
-            <a key={n.label} href={n.href}
-              style={{background:"none",border:"none",cursor:"pointer",padding:"8px 14px",borderRadius:"8px",fontSize:"14px",fontWeight:500,color:C.dark,fontFamily:"'DM Sans',sans-serif",transition:"all 0.15s",textDecoration:"none",display:"inline-block"}}
-              onMouseEnter={e=>{e.currentTarget.style.background=C.grayLight}}
-              onMouseLeave={e=>{e.currentTarget.style.background="none"}}>
-              {n.label}
-            </a>
-          ))}
-          <button onClick={()=>window.location.href="/landing/supporting"}
-            style={{marginLeft:"8px",background:C.primary,border:"none",cursor:"pointer",padding:"9px 22px",borderRadius:"99px",fontSize:"13px",fontWeight:700,color:"white",fontFamily:"'DM Sans',sans-serif",boxShadow:`0 4px 14px ${C.primary}40`,transition:"all 0.2s"}}
-            onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 8px 20px ${C.primary}50`}}
-            onMouseLeave={e=>{e.currentTarget.style.transform="none";e.currentTarget.style.boxShadow=`0 4px 14px ${C.primary}40`}}>
-            Get Started →
-          </button>
-        </div>
-
-        <button onClick={()=>setMenuOpen(v=>!v)} className="mobile-menu-btn"
-          style={{background:"none",border:`1.5px solid ${C.border}`,borderRadius:"8px",padding:"6px 10px",cursor:"pointer",display:"none"}}>
-          <div style={{width:"18px",height:"2px",background:C.dark,marginBottom:"4px",transition:"all 0.2s",transform:menuOpen?"rotate(45deg) translate(4px, 4px)":"none"}}/>
-          <div style={{width:"18px",height:"2px",background:C.dark,marginBottom:"4px",opacity:menuOpen?0:1,transition:"all 0.2s"}}/>
-          <div style={{width:"18px",height:"2px",background:C.dark,transition:"all 0.2s",transform:menuOpen?"rotate(-45deg) translate(4px, -4px)":"none"}}/>
-        </button>
-      </nav>
-      {menuOpen && (
-        <div style={{position:"fixed",top:"64px",left:0,right:0,zIndex:99,background:"white",borderBottom:`1px solid ${C.border}`,padding:"16px 24px 24px",boxShadow:"0 8px 24px rgba(0,0,0,0.1)"}}>
-          {[{label:"About",href:"/landing/about"},{label:"Applications",href:"/landing/applications"},{label:"Utilisation",href:"/landing/utilisation"},{label:"Supporting",href:"/landing/supporting"}].map(n=>(
-            <a key={n.label} href={n.href} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 0",fontSize:"16px",fontWeight:500,color:C.dark,borderBottom:`1px solid ${C.border}`,fontFamily:"'DM Sans',sans-serif",textDecoration:"none"}}>{n.label}</a>
-          ))}
-          <button onClick={()=>scrollTo("supporting")} style={{marginTop:"16px",width:"100%",background:C.primary,border:"none",cursor:"pointer",padding:"14px",borderRadius:"12px",fontSize:"15px",fontWeight:700,color:"white",fontFamily:"'DM Sans',sans-serif"}}>Get Started →</button>
-        </div>
-      )}
-    </>
-  )
 }
 
 // ── Hero ──────────────────────────────────────────────────────
@@ -365,11 +303,23 @@ function Stats() {
 function SupportingPreview() {
   const ref = useRef<HTMLDivElement>(null)
   const inView = useInView(ref)
-  const infos = [
-    {emoji:"🗺️",title:"SFA User Flow",tag:"SFA",color:"#E8F5E9",accent:"#43A047"},
-    {emoji:"📊",title:"Ficom Finance Report",tag:"Ficom",color:"#FFF3E0",accent:"#FB8C00"},
-    {emoji:"📱",title:"Ficom Lite Guide",tag:"Ficom Lite",color:"#E3F2FD",accent:"#1E88E5"},
-  ]
+  const [tutorials, setTutorials] = useState<LandingTutorial[]>([])
+  const [infographics, setInfographics] = useState<LandingInfographic[]>([])
+
+  useEffect(() => {
+    supabase.from("landing_tutorials").select("app_id,app_name,emoji,improvements").order("app_id")
+      .then(({ data }) => { if (data) setTutorials(data as LandingTutorial[]) })
+    supabase.from("landing_infographics").select("*").order("order_index")
+      .then(({ data }) => { if (data) setInfographics(data as LandingInfographic[]) })
+  }, [])
+
+  const APP_COLORS: Record<string, string> = {
+    matrix: "#7C3AED", sfa: "#E8381A", ficom: "#FB8C00", "ficom-lite": "#1E88E5"
+  }
+  const APP_BG: Record<string, string> = {
+    matrix: "#EDE9FE", sfa: "#FEF0ED", ficom: "#FFF3E0", "ficom-lite": "#E3F2FD"
+  }
+
   return (
     <section id="supporting" ref={ref} style={{padding:"clamp(60px,10vw,120px) clamp(20px,5vw,80px)",background:C.white}}>
       <div style={{maxWidth:"1100px",margin:"0 auto"}}>
@@ -381,44 +331,77 @@ function SupportingPreview() {
           <p style={{fontSize:"clamp(14px,1.5vw,16px)",color:C.gray,maxWidth:"480px",margin:"0 auto",lineHeight:1.7}}>Visual references and step-by-step tutorials — everything your team needs, in one place.</p>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,440px),1fr))",gap:"clamp(16px,2vw,24px)",marginBottom:"clamp(32px,4vw,48px)"}}>
+
+          {/* Infographics card */}
           <div style={{background:C.grayLight,borderRadius:"24px",padding:"clamp(24px,3vw,32px)",opacity:inView?1:0,transition:"all 0.6s 0.1s"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"20px"}}>
               <div>
                 <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(18px,2vw,22px)",fontWeight:800}}>🖼️ Infographics</div>
-                <div style={{fontSize:"12px",color:C.gray,marginTop:"2px"}}>Visual reference materials</div>
+                <div style={{fontSize:"12px",color:C.gray,marginTop:"2px"}}>{infographics.length > 0 ? `${infographics.length} visual tersedia` : "Visual reference materials"}</div>
               </div>
               <a href="/landing/infographics" style={{background:C.primary,color:"white",textDecoration:"none",padding:"8px 16px",borderRadius:"99px",fontSize:"12px",fontWeight:700}}>View All →</a>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"10px"}}>
-              {infos.map((inf,i)=>(
-                <div key={i} style={{background:inf.color,borderRadius:"14px",padding:"clamp(12px,1.5vw,16px)",textAlign:"center",transition:"all 0.2s"}}
-                  onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.04)"}}
-                  onMouseLeave={e=>{e.currentTarget.style.transform="none"}}>
-                  <div style={{fontSize:"clamp(20px,3vw,28px)",marginBottom:"6px"}}>{inf.emoji}</div>
-                  <div style={{fontSize:"10px",fontWeight:700,color:inf.accent,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"4px"}}>{inf.tag}</div>
-                  <div style={{fontSize:"clamp(10px,1.2vw,11px)",fontWeight:600,color:C.dark,lineHeight:1.3}}>{inf.title}</div>
-                </div>
-              ))}
-            </div>
+            {infographics.length > 0 ? (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"10px"}}>
+                {infographics.slice(0,3).map((inf,i)=>(
+                  <div key={inf.id} style={{background:"white",borderRadius:"14px",padding:"clamp(12px,1.5vw,16px)",textAlign:"center",transition:"all 0.2s",overflow:"hidden"}}
+                    onMouseEnter={e=>{e.currentTarget.style.transform="scale(1.04)"}}
+                    onMouseLeave={e=>{e.currentTarget.style.transform="none"}}>
+                    {inf.image_url
+                      ? <img src={inf.image_url} alt={inf.title} style={{width:"100%",height:"60px",objectFit:"cover",borderRadius:"8px",marginBottom:"6px"}}/>
+                      : <div style={{fontSize:"clamp(20px,3vw,28px)",marginBottom:"6px"}}>🖼️</div>
+                    }
+                    <div style={{fontSize:"10px",fontWeight:700,color:C.primary,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"4px"}}>{inf.tag}</div>
+                    <div style={{fontSize:"clamp(10px,1.2vw,11px)",fontWeight:600,color:C.dark,lineHeight:1.3}}>{inf.title}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"10px"}}>
+                {[{emoji:"🗺️",title:"SFA User Flow",tag:"SFA"},{emoji:"📊",title:"Ficom Report",tag:"Ficom"},{emoji:"📱",title:"Ficom Lite",tag:"Lite"}].map((inf,i)=>(
+                  <div key={i} style={{background:"#E8F5E9",borderRadius:"14px",padding:"clamp(12px,1.5vw,16px)",textAlign:"center"}}>
+                    <div style={{fontSize:"clamp(20px,3vw,28px)",marginBottom:"6px"}}>{inf.emoji}</div>
+                    <div style={{fontSize:"10px",fontWeight:700,color:"#43A047",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:"4px"}}>{inf.tag}</div>
+                    <div style={{fontSize:"clamp(10px,1.2vw,11px)",fontWeight:600,color:C.dark,lineHeight:1.3}}>{inf.title}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Tutorials card */}
           <div style={{background:C.dark,borderRadius:"24px",padding:"clamp(24px,3vw,32px)",color:"white",position:"relative",overflow:"hidden",opacity:inView?1:0,transition:"all 0.6s 0.2s"}}>
             <div style={{position:"absolute",top:"-20px",right:"-20px",width:"150px",height:"150px",borderRadius:"50%",background:`${C.primary}25`,filter:"blur(30px)",pointerEvents:"none"}}/>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"20px"}}>
               <div>
                 <div style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(18px,2vw,22px)",fontWeight:800}}>📖 Tutorial System</div>
-                <div style={{fontSize:"12px",color:"rgba(255,255,255,0.5)",marginTop:"2px"}}>Step-by-step guides</div>
+                <div style={{fontSize:"12px",color:"rgba(255,255,255,0.5)",marginTop:"2px"}}>{tutorials.length > 0 ? `${tutorials.length} aplikasi tersedia` : "Step-by-step guides"}</div>
               </div>
               <a href="/landing/tutorials" style={{background:"rgba(255,255,255,0.15)",color:"white",textDecoration:"none",padding:"8px 16px",borderRadius:"99px",fontSize:"12px",fontWeight:700,border:"1px solid rgba(255,255,255,0.2)"}}>View All →</a>
             </div>
-            {[{app:"SFA",steps:4,emoji:"📊"},{app:"Ficom",steps:3,emoji:"💰"},{app:"Ficom Lite",steps:3,emoji:"📱"}].map((t,i)=>(
-              <div key={i} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"clamp(10px,1.5vw,14px) clamp(12px,1.5vw,16px)",background:"rgba(255,255,255,0.07)",borderRadius:"12px",marginBottom:"8px",border:"1px solid rgba(255,255,255,0.08)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
-                  <span style={{fontSize:"18px"}}>{t.emoji}</span>
-                  <span style={{fontSize:"clamp(13px,1.4vw,14px)",fontWeight:600}}>{t.app}</span>
-                </div>
-                <span style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontWeight:600}}>{t.steps} steps →</span>
-              </div>
-            ))}
+            {(tutorials.length > 0 ? tutorials : [
+              {app_id:"sfa",app_name:"SFA",emoji:"📊",improvements:[{steps:[{},{},{}]},{steps:[{}]}]},
+              {app_id:"ficom",app_name:"Ficom",emoji:"💰",improvements:[{steps:[{},{}]},{steps:[{}]}]},
+              {app_id:"ficom-lite",app_name:"Ficom Lite",emoji:"📱",improvements:[{steps:[{},{},{}]}]},
+            ] as LandingTutorial[]).map((t,i)=>{
+              const totalSteps = (t.improvements??[]).reduce((n,imp)=>n+(imp.steps?.length??0),0)
+              const totalImps  = (t.improvements??[]).length
+              const color = APP_COLORS[t.app_id] ?? "#6B7280"
+              const bg    = APP_BG[t.app_id]    ?? "#F4F4F2"
+              return (
+                <a key={t.app_id} href={`/landing/tutorials?app=${t.app_id}`} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"clamp(10px,1.5vw,14px) clamp(12px,1.5vw,16px)",background:"rgba(255,255,255,0.07)",borderRadius:"12px",marginBottom:"8px",border:"1px solid rgba(255,255,255,0.08)",textDecoration:"none",transition:"all 0.2s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.background="rgba(255,255,255,0.12)"}}
+                  onMouseLeave={e=>{e.currentTarget.style.background="rgba(255,255,255,0.07)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:"10px"}}>
+                    <span style={{fontSize:"18px"}}>{t.emoji}</span>
+                    <span style={{fontSize:"clamp(13px,1.4vw,14px)",fontWeight:600,color:"white"}}>{t.app_name}</span>
+                  </div>
+                  <span style={{fontSize:"11px",color:"rgba(255,255,255,0.4)",fontWeight:600}}>
+                    {totalImps} improvement · {totalSteps} langkah →
+                  </span>
+                </a>
+              )
+            })}
           </div>
         </div>
       </div>
@@ -483,7 +466,7 @@ export default function LandingPage() {
   return (
     <div style={{fontFamily:"'DM Sans',sans-serif",color:C.dark,overflowX:"hidden"}}>
       <PasswordGate/>
-      <NavBar/>
+      <LandingNav/>
       <Hero/>
       <About/>
       <Applications/>

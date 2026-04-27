@@ -54,3 +54,38 @@ export interface UserFlow {
   created_at: string
   updated_at: string
 }
+
+// ── Landing Page Types ────────────────────────────────────────
+
+export interface TutorialStep {
+  id: string
+  title: string
+  desc: string
+  imageUrl: string
+}
+
+export interface TutorialImprovement {
+  id: string
+  name: string
+  steps: TutorialStep[]
+}
+
+export interface LandingTutorial {
+  id: string
+  app_id: string
+  app_name: string
+  emoji: string
+  improvements: TutorialImprovement[]
+  updated_at: string
+}
+
+export interface LandingInfographic {
+  id: string
+  title: string
+  tag: string
+  description: string
+  image_url: string
+  order_index: number
+  created_at: string
+  updated_at: string
+}

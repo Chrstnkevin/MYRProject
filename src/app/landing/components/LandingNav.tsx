@@ -7,8 +7,9 @@ const NAV_LINKS = [
   { label: "Home",         href: "/landing" },
   { label: "About",        href: "/landing/about" },
   { label: "Applications", href: "/landing/applications" },
-  { label: "Stats",        href: "/landing/stats" },
-  { label: "Supporting",   href: "/landing/supporting" },
+  { label: "Utilisation",  href: "/landing/utilisation" },
+  { label: "Tutorials",    href: "/landing/tutorials" },
+  { label: "Infographic",  href: "/landing/infographics" },
 ]
 
 export default function LandingNav() {
