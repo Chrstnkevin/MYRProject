@@ -6,7 +6,7 @@ import {
   ChevronUp, ChevronDown, X, ClipboardPaste, CheckCircle2,
   AlertCircle, Eye, EyeOff, Loader2, ArrowLeft,
   FolderOpen, FileText, Clock, CheckCircle, XCircle,
-  Edit3, Save, RefreshCw, Layers
+  Edit3, Save, RefreshCw, Layers, MessageSquare, Copy, Check
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -93,6 +93,7 @@ export default function ScenarioTestPage() {
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving]         = useState(false)
   const [preview, setPreview]       = useState(false)
+  const [showPesanModal, setShowPesanModal] = useState(false)
   const [pasteTarget, setPasteTarget] = useState<{entryId:string;subId?:string}|null>(null)
   const [toast, setToast]           = useState<{msg:string;type:"ok"|"err"}|null>(null)
 
@@ -343,6 +344,9 @@ export default function ScenarioTestPage() {
           </div>
         </div>
         <div style={{display:"flex",gap:"8px"}}>
+          <button className="btn btn-ghost" onClick={()=>setShowPesanModal(true)}>
+            <MessageSquare size={14}/> Generate Pesan
+          </button>
           <button className="btn btn-ghost" onClick={()=>setPreview(v=>!v)}>
             {preview?<EyeOff size={14}/>:<Eye size={14}/>} Preview
           </button>
@@ -400,12 +404,191 @@ export default function ScenarioTestPage() {
 
       {preview && <PreviewPanel header={header} entries={entries}/>}
       {toast && <ToastEl msg={toast.msg} type={toast.type}/>}
+      {showPesanModal && (
+        <GeneratePesanModal
+          header={header}
+          entries={entries}
+          onClose={() => setShowPesanModal(false)}
+        />
+      )}
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 }
 
 // ── Paste Zone ────────────────────────────────────────────────
+// ── Generate Pesan Grup Modal ────────────────────────────────
+function GeneratePesanModal({ header, entries, onClose }: {
+  header: FormHeader; entries: TestEntry[]; onClose: () => void
+}) {
+  const [pic, setPic]           = useState("")
+  const [picRole, setPicRole]   = useState("SS")
+  const [channel, setChannel]   = useState("whatsapp")
+  const [copied, setCopied]     = useState(false)
+  const textareaRef             = useRef<HTMLTextAreaElement>(null)
+
+  // Determine overall doc status
+  const hasNotOk  = entries.some(e => e.status === "NOT OK")
+  const hasInProg = entries.some(e => e.status === "IN PROGRESS")
+  const allOk     = entries.every(e => e.status === "OK")
+  const docStatus = hasNotOk ? "NOT OK" : hasInProg ? "IN PROGRESS" : allOk ? "OK" : "DRAFT"
+
+  // Build numbered test result lines — group sub-rows under parent
+  const buildLines = () => {
+    const seen = new Set<number>()
+    const lines: string[] = []
+    entries.forEach(e => {
+      if (!seen.has(e.no)) {
+        seen.add(e.no)
+        const statusEmoji = e.status === "OK" ? "✅" : e.status === "NOT OK" ? "❌" : e.status === "IN PROGRESS" ? "🔄" : "⬜"
+        lines.push(`${e.no}. ${e.object} ${statusEmoji} ${e.status || "-"}`)
+      }
+    })
+    return lines
+  }
+
+  const statusLine = docStatus === "NOT OK"
+    ? `dengan status *NOT OK* ❌`
+    : docStatus === "OK"
+    ? `dengan status *OK* ✅`
+    : docStatus === "IN PROGRESS"
+    ? `dengan status *IN PROGRESS* 🔄`
+    : `(DRAFT)`
+
+  const docTitle = header.judulDokumen || `${header.aplikasi}_${header.modul}`
+  const lines    = buildLines()
+
+  const pesan = `Dear @${pic}${picRole ? ` ${picRole}` : ""}
+
+Berikut terlampir dokumen testing *${docTitle}* ${statusLine}.
+
+Berikut adalah hasil testingnya:
+${lines.join("\n")}
+
+Mohon untuk direview kembali. Terimakasih 🙏`
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(pesan)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      if (textareaRef.current) {
+        textareaRef.current.select()
+        document.execCommand("copy")
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2500)
+      }
+    }
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,0.45)", backdropFilter:"blur(4px)" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div style={{ background:"var(--card)", borderRadius:"var(--radius)", padding:"24px", width:"min(560px,95vw)", maxHeight:"90vh", overflowY:"auto", boxShadow:"0 24px 64px rgba(0,0,0,0.2)", border:"1px solid var(--border)" }}>
+
+        {/* Header */}
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"20px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:"10px" }}>
+            <div style={{ width:36, height:36, borderRadius:10, background:"var(--accent-muted)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <MessageSquare size={18} color="var(--accent)"/>
+            </div>
+            <div>
+              <div style={{ fontSize:"15px", fontWeight:700, color:"var(--text)" }}>Generate Pesan Grup</div>
+              <div style={{ fontSize:"11px", color:"var(--text3)" }}>Pesan siap kirim ke WhatsApp / Telegram</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", color:"var(--text3)", padding:6, borderRadius:8 }}>
+            <X size={16}/>
+          </button>
+        </div>
+
+        {/* Document preview */}
+        <div style={{ background:"var(--surface2)", borderRadius:"var(--radius-sm)", padding:"12px 14px", marginBottom:"18px", border:"1px solid var(--border)" }}>
+          <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:8 }}>Dokumen</div>
+          <div style={{ fontSize:"13px", fontWeight:700, color:"var(--text)", marginBottom:4 }}>{docTitle || "—"}</div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            <span style={{ fontSize:11, background:"var(--surface3)", color:"var(--text3)", padding:"2px 8px", borderRadius:99 }}>{header.aplikasi || "—"}</span>
+            <span style={{ fontSize:11, background:"var(--surface3)", color:"var(--text3)", padding:"2px 8px", borderRadius:99 }}>{header.modul || "—"}</span>
+            <span style={{ fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:99, background: docStatus==="OK"?"#dcfce7": docStatus==="NOT OK"?"#fee2e2": docStatus==="IN PROGRESS"?"#fef9c3":"var(--surface3)", color: docStatus==="OK"?"#15803d": docStatus==="NOT OK"?"#b91c1c": docStatus==="IN PROGRESS"?"#854d0e":"var(--text3)" }}>
+              {docStatus}
+            </span>
+          </div>
+        </div>
+
+        {/* PIC input */}
+        <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:10, marginBottom:14 }}>
+          <div>
+            <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", marginBottom:5 }}>Nama PIC (tanpa @)</div>
+            <input className="input" placeholder="Mario MDP" value={pic} onChange={e => setPic(e.target.value)} style={{ fontSize:13 }}/>
+          </div>
+          <div>
+            <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", marginBottom:5 }}>Role</div>
+            <select className="input" value={picRole} onChange={e => setPicRole(e.target.value)} style={{ fontSize:13, cursor:"pointer" }}>
+              <option value="SS">SS</option>
+              <option value="MDP SS">MDP SS</option>
+              <option value="SPV">SPV</option>
+              <option value="Manager">Manager</option>
+              <option value="Team">Team</option>
+              <option value="">—</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Test results preview */}
+        <div style={{ marginBottom:14 }}>
+          <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.1em" }}>Hasil Testing ({entries.length} entri)</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+            {buildLines().map((line, i) => {
+              const isOk    = line.includes("✅")
+              const isNotOk = line.includes("❌")
+              const isInProg= line.includes("🔄")
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px", borderRadius:8, fontSize:13, background: isNotOk?"#fee2e2": isOk?"#dcfce7": isInProg?"#fef9c3":"var(--surface2)", color: isNotOk?"#b91c1c": isOk?"#15803d": isInProg?"#854d0e":"var(--text)" }}>
+                  {line}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Preview pesan */}
+        <div style={{ marginBottom:18 }}>
+          <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.1em" }}>Preview Pesan</div>
+          <div style={{ background:"var(--surface2)", borderRadius:"var(--radius-sm)", border:"1px solid var(--border)", overflow:"hidden" }}>
+            {/* WhatsApp chat bubble style */}
+            <div style={{ padding:"10px 14px", background:"#e5ddd5", borderRadius:"var(--radius-sm) var(--radius-sm) 0 0", display:"flex", alignItems:"center", gap:6 }}>
+              <div style={{ width:8, height:8, borderRadius:"50%", background:"#25D366" }}/>
+              <span style={{ fontSize:11, color:"#555", fontWeight:600 }}>WhatsApp Preview</span>
+            </div>
+            <div style={{ padding:"12px 14px", background:"#ece5dd", minHeight:100 }}>
+              <div style={{ background:"white", borderRadius:"0 12px 12px 12px", padding:"10px 14px", maxWidth:"90%", boxShadow:"0 1px 2px rgba(0,0,0,0.1)", fontSize:13, lineHeight:1.65, color:"#111", whiteSpace:"pre-wrap", wordBreak:"break-word" }}>
+                {pic ? pesan : <span style={{ color:"#aaa", fontStyle:"italic" }}>Isi nama PIC di atas untuk preview pesan...</span>}
+              </div>
+            </div>
+          </div>
+          <textarea ref={textareaRef} readOnly value={pesan} style={{ position:"absolute", left:"-9999px", opacity:0 }}/>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+          <button onClick={onClose} className="btn btn-ghost" style={{ fontSize:13 }}>Batal</button>
+          <button onClick={handleCopy} disabled={!pic.trim()} className="btn btn-primary" style={{ fontSize:13, gap:8, opacity: !pic.trim()?0.5:1 }}>
+            {copied ? <><Check size={14}/> Tersalin!</> : <><Copy size={14}/> Copy Pesan</>}
+          </button>
+        </div>
+
+        {copied && (
+          <div style={{ marginTop:12, padding:"8px 12px", background:"#dcfce7", border:"1px solid #86efac", borderRadius:8, fontSize:12, fontWeight:600, color:"#15803d", textAlign:"center", animation:"fadeIn .2s ease" }}>
+            ✅ Pesan berhasil disalin! Tinggal paste ke WhatsApp/Telegram.
+          </div>
+        )}
+      </div>
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}`}</style>
+    </div>
+  )
+}
+
 function PasteZone({active,imageCount,onActivate}:{active:boolean;imageCount:number;onActivate:()=>void}) {
   return (
     <div onClick={onActivate} style={{border:`2px dashed ${active?"var(--accent)":"var(--border2)"}`,borderRadius:"var(--radius-sm)",padding:"8px 14px",display:"flex",alignItems:"center",gap:"8px",cursor:"pointer",background:active?"var(--accent-muted)":"var(--surface2)",transition:"all 0.15s"}}>
