@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useState, useMemo, useRef } from "react"
+import { useEffect, useState, useMemo, useRef, useCallback } from "react"
 import { supabase } from "@/lib/supabase"
 import {
-  Database, CheckCircle2, Clock, AlertTriangle, X, Upload,
-  ChevronRight, Bell, Calendar, Server, Search, Filter,
-  Save, Image as ImageIcon, Trash2, Eye
+  Database, CheckCircle2, Clock, AlertTriangle, X,
+  ChevronRight, Bell, Calendar, Server, Search,
+  Save, Image as ImageIcon, Trash2, FileSpreadsheet, FileText, Loader2
 } from "lucide-react"
 import ModalOverlay from "@/components/layout/ModalOverlay"
 import MotivationBanner from "@/components/layout/MotivationBanner"
@@ -128,6 +128,203 @@ const WEEKLY_TARGET = 2
 const MONTHS = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
 const PAGE_SIZE = 20
 
+// ─── Export Helpers ────────────────────────────────────────────────────────────
+
+/** Build flat export rows from merged list + current month/year */
+function buildExportRows(
+  mergedList: Array<{ master: typeof MASTER_DATA[0]; entry: RestoreEntry | null }>,
+  selectedMonth: number,
+  selectedYear: number
+) {
+  return mergedList.map(({ master, entry }) => ({
+    "Area":                 master.area,
+    "Server":               master.server,
+    "ADP Code":             master.adp_code,
+    "ADP Name":             master.adp_name,
+    "PIC PHI":              master.pic_phi,
+    "Month":                MONTHS[selectedMonth - 1],
+    "Year":                 selectedYear,
+    "Restore Date":         entry?.restore_date ?? "",
+    "Trans Date":           entry?.trans_date ?? "",
+    "Backup Size":          entry?.backup_size ?? "",
+    "Tools Version":        entry?.backup_tools_version ?? "",
+    "Restore Status":       entry?.restore_status ?? "",
+    "PIC Restore":          entry?.pic_restore ?? "",
+    "Done Restore":         entry?.done_restore ? "Yes" : "No",
+  }))
+}
+
+/** Export to Excel (.xlsx) — pakai xlsx npm package */
+async function exportToExcel(
+  rows: ReturnType<typeof buildExportRows>,
+  filename: string
+) {
+  const XLSX = await import("xlsx")
+  const ws = XLSX.utils.json_to_sheet(rows)
+  ws["!cols"] = [
+    { wch: 6 }, { wch: 8 }, { wch: 10 }, { wch: 36 }, { wch: 8 },
+    { wch: 6 }, { wch: 6 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+    { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 },
+  ]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Restore PHI")
+  XLSX.writeFile(wb, filename)
+}
+
+/** Export to PDF — pakai jspdf + jspdf-autotable npm package */
+async function exportToPDF(
+  mergedList: Array<{ master: typeof MASTER_DATA[0]; entry: RestoreEntry | null }>,
+  filename: string,
+  title: string,
+  onProgress: (step: string, pct: number) => void
+) {
+  onProgress("Loading PDF engine...", 5)
+
+  const { jsPDF } = await import("jspdf")
+  // ✅ Correct pattern for Next.js: import autoTable as default, call it as a function
+  // Do NOT use (autoTableMod as any).default(jsPDF) — that patches prototype which fails
+  const { default: autoTable } = await import("jspdf-autotable")
+
+  onProgress("Preparing data...", 15)
+
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" })
+  const PW  = doc.internal.pageSize.getWidth()
+  const PH  = doc.internal.pageSize.getHeight()
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  doc.setFontSize(16); doc.setFont("helvetica", "bold"); doc.setTextColor(232, 56, 26)
+  doc.text("Restore DB PHI — Report", 14, 16)
+  doc.setFontSize(9); doc.setFont("helvetica", "normal"); doc.setTextColor(80, 80, 80)
+  doc.text(title, 14, 22)
+  doc.text(`Generated: ${new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}`, 14, 27)
+
+  onProgress("Building summary table...", 30)
+
+  const rows = mergedList.map(({ master, entry }) => [
+    master.area, master.server, master.adp_code, master.adp_name, master.pic_phi,
+    entry?.restore_date ? new Date(entry.restore_date).toLocaleDateString("id-ID") : "—",
+    entry?.trans_date   ? new Date(entry.trans_date).toLocaleDateString("id-ID")   : "—",
+    entry?.backup_size?.toLocaleString() ?? "—",
+    entry?.restore_status ?? "—",
+    entry?.pic_restore    ?? "—",
+    entry?.done_restore   ? "Yes" : "No",
+  ])
+
+  const headers = ["Area","Server","ADP Code","ADP Name","PIC PHI","Restore Date","Trans Date","Backup Size","Status","PIC Restore","Done"]
+
+  // ✅ autoTable(doc, options) — the correct functional API for jspdf-autotable v3+
+  autoTable(doc, {
+    head: [headers],
+    body: rows,
+    startY: 32,
+    styles:             { fontSize: 6.5, cellPadding: 1.8, overflow: "linebreak" },
+    headStyles:         { fillColor: [232, 56, 26], textColor: 255, fontStyle: "bold", fontSize: 7 },
+    alternateRowStyles: { fillColor: [255, 247, 245] },
+    columnStyles:       { 3: { cellWidth: 38 }, 10: { halign: "center" } },
+    didDrawCell: (data: any) => {
+      if (data.section !== "body" || data.column.index !== 10) return
+      const val = String(data.cell.raw ?? "")
+      const { x, y, width: w, height: h } = data.cell
+      if (val === "Yes") {
+        doc.setFillColor(220, 252, 231); doc.rect(x, y, w, h, "F")
+        doc.setTextColor(22, 163, 74); doc.setFontSize(6.5)
+        doc.text("✓ Yes", x + w / 2, y + h / 2 + 1, { align: "center" })
+      } else if (val === "No") {
+        doc.setFillColor(254, 242, 242); doc.rect(x, y, w, h, "F")
+        doc.setTextColor(220, 38, 38); doc.setFontSize(6.5)
+        doc.text("✗ No", x + w / 2, y + h / 2 + 1, { align: "center" })
+      }
+    },
+    didParseCell: (data: any) => {
+      if (data.section === "body" && data.column.index === 10)
+        data.cell.styles.textColor = [255, 255, 255]
+    },
+  })
+
+  onProgress("Adding screenshots...", 50)
+
+  // ── Screenshot pages ──────────────────────────────────────────────────────
+  const withShots = mergedList.filter(({ entry }) =>
+    entry && (entry.screenshot_1 || entry.screenshot_2 || entry.screenshot_3)
+  )
+  for (let idx = 0; idx < withShots.length; idx++) {
+    const { master, entry } = withShots[idx]
+    if (!entry) continue
+    onProgress(`Screenshots (${idx + 1}/${withShots.length})...`, 50 + Math.round((idx / withShots.length) * 40))
+
+    const shots = [entry.screenshot_1, entry.screenshot_2, entry.screenshot_3].filter(Boolean) as string[]
+    if (!shots.length) continue
+
+    doc.addPage("a4", "landscape")
+    doc.setFillColor(232, 56, 26); doc.rect(0, 0, PW, 12, "F")
+    doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.setTextColor(255, 255, 255)
+    doc.text(`${master.adp_name}  ·  ${master.area}  ·  Server ${master.server}  ·  ${master.adp_code}`, 8, 8)
+
+    doc.setFontSize(7.5); doc.setFont("helvetica", "normal"); doc.setTextColor(50, 50, 50)
+    const meta = [
+      `PIC PHI: ${master.pic_phi}`,
+      entry.restore_date  ? `Restore: ${new Date(entry.restore_date).toLocaleDateString("id-ID")}` : "",
+      entry.restore_status ? `Status: ${entry.restore_status}` : "",
+      entry.pic_restore   ? `PIC: ${entry.pic_restore}` : "",
+    ].filter(Boolean).join("   |   ")
+    doc.text(meta, 8, 18)
+
+    const margin = 8, topY = 22
+    const availW = PW - margin * 2
+    const availH = PH - topY - 10
+    const cols = shots.length === 1 ? 1 : shots.length === 2 ? 2 : 3
+    const slotW = (availW - (cols - 1) * 4) / cols
+
+    for (let s = 0; s < shots.length; s++) {
+      const slotX = margin + s * (slotW + 4)
+      try {
+        // Load image to get natural dimensions for aspect-ratio-correct fit
+        const { dataUrl, natW, natH } = await new Promise<{ dataUrl: string; natW: number; natH: number }>((res, rej) => {
+          const img = new window.Image()
+          img.onload = () => {
+            const canvas = document.createElement("canvas")
+            canvas.width  = img.naturalWidth
+            canvas.height = img.naturalHeight
+            canvas.getContext("2d")!.drawImage(img, 0, 0)
+            res({ dataUrl: canvas.toDataURL("image/png"), natW: img.naturalWidth, natH: img.naturalHeight })
+          }
+          img.onerror = rej
+          img.src = shots[s]
+        })
+
+        // Fit image inside slot while preserving aspect ratio (letterbox)
+        const ratio   = natW / natH
+        let drawW = slotW
+        let drawH = slotW / ratio
+        if (drawH > availH) { drawH = availH; drawW = availH * ratio }
+
+        // Center within slot
+        const drawX = slotX + (slotW - drawW) / 2
+        const drawY = topY  + (availH - drawH) / 2
+
+        doc.addImage(dataUrl, "PNG", drawX, drawY, drawW, drawH, `img_${idx}_${s}`, "NONE")
+      } catch {
+        doc.setDrawColor(200); doc.setFillColor(245, 245, 245)
+        doc.rect(slotX, topY, slotW, availH, "FD")
+        doc.setFontSize(8); doc.setTextColor(180)
+        doc.text("Image unavailable", slotX + slotW / 2, topY + availH / 2, { align: "center" })
+      }
+      doc.setFontSize(7); doc.setTextColor(120)
+      doc.text(`Screenshot ${s + 1}`, slotX + slotW / 2, topY + availH + 4, { align: "center" })
+    }
+  }
+
+  onProgress("Finalizing...", 95)
+  const pageCount = (doc as any).internal.getNumberOfPages()
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i); doc.setFontSize(6.5); doc.setTextColor(180)
+    doc.text(`Page ${i} / ${pageCount}`, PW - 14, PH - 4, { align: "right" })
+  }
+
+  doc.save(filename)
+  onProgress("Done!", 100)
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function getWeekNumber(d: Date): number {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
@@ -177,6 +374,10 @@ export default function RestorePhiPage() {
   const [selectedYear] = useState(currentYear)
   const [page, setPage] = useState(1)
 
+  // ── Export state ──────────────────────────────────────────────────────────
+  const [exporting, setExporting] = useState<"excel" | "pdf" | null>(null)
+  const [exportProgress, setExportProgress] = useState({ step: "", pct: 0 })
+
   // Paste screenshot handler
   const handlePaste = (idx: number, e: React.ClipboardEvent) => {
     const item = Array.from(e.clipboardData.items).find(i => i.type.startsWith("image/"))
@@ -199,7 +400,6 @@ export default function RestorePhiPage() {
   })
   const [screenshots, setScreenshots] = useState<(string | null)[]>([null, null, null])
   const [saving, setSaving] = useState(false)
-  const fileRefs = [useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null), useRef<HTMLInputElement>(null)]
 
   const load = async () => {
     setLoading(true)
@@ -229,6 +429,38 @@ export default function RestorePhiPage() {
       return { master: m, entry: entry || null }
     })
   }, [entries])
+
+  // ── handleExport — must be after mergedList ────────────────────────────────
+  const handleExport = useCallback(async (type: "excel" | "pdf") => {
+    setExporting(type)
+    setExportProgress({ step: "Mempersiapkan data...", pct: 0 })
+    try {
+      const monthLabel = MONTHS[selectedMonth - 1]
+      const base = `Restore_PHI_${monthLabel}_${selectedYear}`
+      if (type === "excel") {
+        setExportProgress({ step: "Menyusun spreadsheet...", pct: 30 })
+        const rows = buildExportRows(mergedList, selectedMonth, selectedYear)
+        await exportToExcel(rows, `${base}.xlsx`)
+        setExportProgress({ step: "Selesai!", pct: 100 })
+      } else {
+        const title = `${monthLabel} ${selectedYear}  ·  ${mergedList.filter(m => m.entry?.done_restore).length}/${mergedList.length} Done`
+        await exportToPDF(
+          mergedList,
+          `${base}.pdf`,
+          title,
+          (step, pct) => setExportProgress({ step, pct })
+        )
+      }
+    } catch (err) {
+      console.error("Export error:", err)
+      alert(`Export gagal: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setTimeout(() => {
+        setExporting(null)
+        setExportProgress({ step: "", pct: 0 })
+      }, 800)
+    }
+  }, [mergedList, selectedMonth, selectedYear])
 
   // Stats
   const doneThisMonth = entries.filter(e => e.done_restore && e.month === selectedMonth).length
@@ -285,11 +517,6 @@ export default function RestorePhiPage() {
       setForm({ trans_date: "", backup_size: "", backup_tools_version: "24.05.00", restore_status: "Success", pic_restore: "Kevin" })
       setScreenshots([null, null, null])
     }
-  }
-
-  const handleScreenshot = async (idx: number, file: File) => {
-    const b64 = await fileToBase64(file)
-    setScreenshots(prev => { const n = [...prev]; n[idx] = b64; return n })
   }
 
   const handleSave = async () => {
@@ -481,6 +708,34 @@ export default function RestorePhiPage() {
           <div style={{ fontSize: 12, color: "var(--text3)", whiteSpace: "nowrap", background: "var(--surface3)", padding: "6px 12px", borderRadius: "var(--radius-sm)" }}>
             {filtered.length} / {TOTAL_MASTER} entries
           </div>
+
+          {/* ── Export Buttons ── */}
+          <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
+            <button
+              onClick={() => handleExport("excel")}
+              disabled={!!exporting}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: "var(--radius-sm)", border: "1.5px solid #16a34a40", background: exporting === "excel" ? "#16a34a" : "#f0fdf4", color: exporting === "excel" ? "white" : "#16a34a", cursor: exporting ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", transition: "all 0.2s", whiteSpace: "nowrap", opacity: exporting && exporting !== "excel" ? 0.5 : 1 }}
+              onMouseEnter={e => { if (!exporting) { e.currentTarget.style.background = "#16a34a"; e.currentTarget.style.color = "white" } }}
+              onMouseLeave={e => { if (!exporting) { e.currentTarget.style.background = "#f0fdf4"; e.currentTarget.style.color = "#16a34a" } }}
+            >
+              {exporting === "excel"
+                ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Exporting...</>
+                : <><FileSpreadsheet size={13} /> Export Excel</>
+              }
+            </button>
+            <button
+              onClick={() => handleExport("pdf")}
+              disabled={!!exporting}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: "var(--radius-sm)", border: "1.5px solid #dc262640", background: exporting === "pdf" ? "#dc2626" : "#fff5f5", color: exporting === "pdf" ? "white" : "#dc2626", cursor: exporting ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, fontFamily: "inherit", transition: "all 0.2s", whiteSpace: "nowrap", opacity: exporting && exporting !== "pdf" ? 0.5 : 1 }}
+              onMouseEnter={e => { if (!exporting) { e.currentTarget.style.background = "#dc2626"; e.currentTarget.style.color = "white" } }}
+              onMouseLeave={e => { if (!exporting) { e.currentTarget.style.background = "#fff5f5"; e.currentTarget.style.color = "#dc2626" } }}
+            >
+              {exporting === "pdf"
+                ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Exporting...</>
+                : <><FileText size={13} /> Export PDF</>
+              }
+            </button>
+          </div>
         </div>
       </div>
 
@@ -647,45 +902,42 @@ export default function RestorePhiPage() {
                 </div>
 
                 {/* Right column — Screenshots */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div className="label">Screenshot (Ctrl+V atau Upload)</div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginTop: -6, marginBottom: 4 }}>
-                    Klik area screenshot lalu tekan <kbd style={{ background: "var(--surface3)", border: "1px solid var(--border2)", borderRadius: 4, padding: "1px 5px", fontFamily: "monospace", fontSize: 11 }}>Ctrl+V</kbd> untuk paste langsung dari snipping tool
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div className="label">Screenshot</div>
+                  <div style={{ fontSize: 11, color: "var(--text3)", marginTop: -4, marginBottom: 2, lineHeight: 1.5 }}>
+                    Klik salah satu kotak di bawah, lalu tekan{" "}
+                    <kbd style={{ background: "var(--surface3)", border: "1px solid var(--border2)", borderRadius: 4, padding: "1px 6px", fontFamily: "monospace", fontSize: 11 }}>Ctrl+V</kbd>{" "}
+                    untuk paste langsung dari Snipping Tool.
                   </div>
                   {[0, 1, 2].map(idx => (
                     <div key={idx}>
-                      <input type="file" accept="image/*" ref={fileRefs[idx]} style={{ display: "none" }}
-                        onChange={e => { const f = e.target.files?.[0]; if (f) handleScreenshot(idx, f) }} />
                       {screenshots[idx] ? (
+                        /* ── Image preview ── */
                         <div style={{ position: "relative", borderRadius: "var(--radius-sm)", overflow: "hidden", border: "1px solid var(--border)" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={screenshots[idx]!} alt={`Screenshot ${idx + 1}`} style={{ width: "100%", height: 110, objectFit: "cover", display: "block" }} />
-                          <div style={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 4 }}>
-                            <button onClick={() => fileRefs[idx].current?.click()}
-                              style={{ background: "rgba(0,0,0,0.55)", border: "none", borderRadius: 5, padding: "4px 8px", color: "white", cursor: "pointer", fontSize: 11 }}>
-                              <Upload size={11} />
-                            </button>
-                            <button onClick={() => setScreenshots(prev => { const n = [...prev]; n[idx] = null; return n })}
-                              style={{ background: "rgba(192,57,43,0.8)", border: "none", borderRadius: 5, padding: "4px 8px", color: "white", cursor: "pointer" }}>
-                              <Trash2 size={11} />
-                            </button>
-                          </div>
-                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.45)", padding: "4px 8px", fontSize: 10, color: "white" }}>
+                          {/* Only show delete — no upload button */}
+                          <button
+                            onClick={() => setScreenshots(prev => { const n = [...prev]; n[idx] = null; return n })}
+                            title="Hapus screenshot"
+                            style={{ position: "absolute", top: 6, right: 6, background: "rgba(192,57,43,0.85)", border: "none", borderRadius: 6, padding: "4px 8px", color: "white", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+                            <Trash2 size={11} /> Hapus
+                          </button>
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.45)", padding: "4px 10px", fontSize: 10, color: "white" }}>
                             Screenshot {idx + 1}
                           </div>
                         </div>
                       ) : (
+                        /* ── Paste zone — click to focus, then Ctrl+V ── */
                         <div
                           tabIndex={0}
                           onPaste={e => handlePaste(idx, e)}
-                          onClick={() => fileRefs[idx].current?.click()}
-                          style={{ width: "100%", height: 110, border: "2px dashed var(--border2)", borderRadius: "var(--radius-sm)", background: "var(--surface2)", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, color: "var(--text3)", transition: "all 0.15s", outline: "none" }}
-                          onFocus={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--accent2)"; (e.currentTarget as HTMLElement).style.background = "var(--accent-muted)" }}
-                          onBlur={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border2)"; (e.currentTarget as HTMLElement).style.background = "var(--surface2)" }}
-                          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--accent2)"; (e.currentTarget as HTMLElement).style.color = "var(--accent)" }}
-                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border2)"; (e.currentTarget as HTMLElement).style.color = "var(--text3)" }}>
-                          <ImageIcon size={18} />
-                          <span style={{ fontSize: 11, fontWeight: 600 }}>Screenshot {idx + 1}</span>
-                          <span style={{ fontSize: 10 }}>Klik upload · Ctrl+V paste</span>
+                          style={{ width: "100%", height: 100, border: "2px dashed var(--border2)", borderRadius: "var(--radius-sm)", background: "var(--surface2)", cursor: "text", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, color: "var(--text3)", transition: "border-color 0.15s, background 0.15s, color 0.15s", outline: "none" }}
+                          onFocus={e => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--accent-muted)"; e.currentTarget.style.color = "var(--accent)" }}
+                          onBlur={e => { e.currentTarget.style.borderColor = "var(--border2)"; e.currentTarget.style.background = "var(--surface2)"; e.currentTarget.style.color = "var(--text3)" }}>
+                          <ImageIcon size={16} />
+                          <span style={{ fontSize: 11, fontWeight: 700 }}>Screenshot {idx + 1}</span>
+                          <span style={{ fontSize: 10 }}>Klik di sini → Ctrl+V</span>
                         </div>
                       )}
                     </div>
@@ -711,7 +963,67 @@ export default function RestorePhiPage() {
         </ModalOverlay>
       )}
 
+      {/* ── Export Loading Modal ── */}
+      {exporting && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "var(--card)", borderRadius: 20, padding: "36px 40px", minWidth: 320, maxWidth: 400, width: "90%", boxShadow: "0 32px 80px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column", alignItems: "center", gap: 20, animation: "modal-pop 0.25s cubic-bezier(0.34,1.56,0.64,1)" }}>
+
+            {/* Icon */}
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: exporting === "pdf" ? "#fef2f2" : "#f0fdf4", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+              {exporting === "pdf"
+                ? <FileText size={28} color="#dc2626" />
+                : <FileSpreadsheet size={28} color="#16a34a" />
+              }
+              {/* Spinning ring */}
+              <svg style={{ position: "absolute", inset: 0, animation: "spin 1.2s linear infinite" }} width={64} height={64} viewBox="0 0 64 64">
+                <circle cx={32} cy={32} r={28} fill="none" strokeWidth={3}
+                  stroke={exporting === "pdf" ? "#dc2626" : "#16a34a"}
+                  strokeDasharray="44 132" strokeLinecap="round" />
+              </svg>
+            </div>
+
+            {/* Title */}
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text)", marginBottom: 4 }}>
+                {exporting === "pdf" ? "Generating PDF..." : "Generating Excel..."}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text3)", minHeight: 18 }}>
+                {exportProgress.step}
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div style={{ width: "100%", height: 8, background: "var(--surface3)", borderRadius: 99, overflow: "hidden" }}>
+              <div style={{
+                height: "100%", borderRadius: 99,
+                background: exporting === "pdf"
+                  ? "linear-gradient(90deg,#dc2626,#f87171)"
+                  : "linear-gradient(90deg,#16a34a,#4ade80)",
+                width: `${exportProgress.pct}%`,
+                transition: "width 0.4s cubic-bezier(0.4,0,0.2,1)",
+              }} />
+            </div>
+
+            {/* Percentage */}
+            <div style={{ fontSize: 24, fontWeight: 900, color: exporting === "pdf" ? "#dc2626" : "#16a34a", letterSpacing: "-0.04em" }}>
+              {exportProgress.pct}%
+            </div>
+
+            {exporting === "pdf" && (
+              <div style={{ fontSize: 11, color: "var(--text3)", textAlign: "center", lineHeight: 1.5 }}>
+                PDF mencakup tabel ringkasan + halaman screenshot<br />per entry yang sudah Done
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes modal-pop {
+          from { opacity: 0; transform: scale(0.85); }
+          to   { opacity: 1; transform: scale(1); }
+        }
         @media (max-width: 768px) {
           .progress-cards {
             grid-template-columns: 1fr !important;

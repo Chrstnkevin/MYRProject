@@ -457,206 +457,220 @@ function ViewerPage({ app, initialImpId, locked = false }: { app: TutorialApp; i
       {shareModal && imp && <ShareModal app={app} impName={imp.name} shareUrl={shareUrl} loadingUrl={loadingShareUrl} onClose={() => setShareModal(false)} />}
 
       {/* ── Topbar ── */}
-      <div style={{ height: 54, flexShrink: 0, background: "white", borderBottom: "1px solid rgba(0,0,0,0.07)", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, zIndex: 20 }}>
+      <div style={{ height: 52, flexShrink: 0, background: "white", borderBottom: "1px solid rgba(0,0,0,0.07)", display: "flex", alignItems: "center", padding: "0 12px", gap: 8, zIndex: 20 }}>
 
         {/* Back — hidden when locked */}
         {!locked && (
-          <a href="/landing/tutorials" style={{ fontSize: 13, fontWeight: 600, color: "#9CA3AF", textDecoration: "none", padding: "5px 9px", borderRadius: 8, transition: "all 0.15s" }}
-            onMouseEnter={e => { e.currentTarget.style.background = "#F4F4F2"; e.currentTarget.style.color = "#111" }}
-            onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#9CA3AF" }}>←</a>
+          <a href="/landing/tutorials" style={{ fontSize: 18, fontWeight: 600, color: "#9CA3AF", textDecoration: "none", padding: "6px 8px", borderRadius: 8, lineHeight: 1, flexShrink: 0 }}>←</a>
         )}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 8, background: s.light, border: `1px solid ${s.color}25` }}>
-          <span style={{ fontSize: 15 }}>{app.emoji}</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: s.color }}>{app.appName}</span>
+        {/* App badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: 8, background: s.light, border: `1px solid ${s.color}25`, flexShrink: 0, minWidth: 0 }}>
+          <span style={{ fontSize: 14 }}>{app.emoji}</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: s.color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "80px" }}>{app.appName}</span>
         </div>
 
-        {locked && (
-          <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 8, background: "#F4F4F2", fontSize: 11, fontWeight: 600, color: "#9CA3AF" }}>
-            🔗 Shared link
-          </div>
-        )}
-
-        <div style={{ width: 1, height: 20, background: "rgba(0,0,0,0.1)" }} />
-
-        <button id="ham-btn" onClick={() => setDrawerOpen(v => !v)} style={{ background: "none", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#6B7280", display: "none", alignItems: "center", gap: 5 }}>
-          ☰ Steps
-        </button>
-        <div id="mob-prog" style={{ flex: 1, height: 4, background: "#E5E7EB", borderRadius: 99, overflow: "hidden", display: "none" }}>
+        {/* Progress bar — fills flex space */}
+        <div style={{ flex: 1, height: 4, background: "#E5E7EB", borderRadius: 99, overflow: "hidden", minWidth: 0 }}>
           <div style={{ height: "100%", width: `${prog}%`, background: s.grad, borderRadius: 99, transition: "width 0.4s cubic-bezier(0.4,0,0.2,1)" }} />
         </div>
 
-        <div style={{ flex: 1 }} />
+        {/* Step counter */}
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#9CA3AF", flexShrink: 0, whiteSpace: "nowrap" }}>
+          {stepIdx + 1}/{totalSteps}
+        </div>
 
-        {/* Share button */}
-        <button onClick={openShare} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: 10, border: `1.5px solid ${s.color}35`, background: s.light, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: s.color, transition: "all 0.2s", whiteSpace: "nowrap" }}
+        {/* Improvement switcher — desktop only, hidden when locked */}
+        {!locked && (
+          <div id="imp-dropdown" style={{ position: "relative", flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+            <button onClick={() => setDropOpen(v => !v)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 8, border: `1.5px solid ${s.color}30`, background: s.light, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 700, color: s.color, whiteSpace: "nowrap", maxWidth: 180, overflow: "hidden" }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{imp.name}</span>
+              <svg width="9" height="9" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0, transform: dropOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
+                <path d="M2 4l4 4 4-4" stroke={s.color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+            {dropOpen && (
+              <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "white", borderRadius: 14, border: "1px solid rgba(0,0,0,0.09)", boxShadow: "0 16px 48px rgba(0,0,0,0.13)", overflow: "hidden", zIndex: 50, minWidth: 240, animation: "dd-in 0.15s ease" }}>
+                <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontSize: 10, fontWeight: 800, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  {imps.length} Improvement{imps.length > 1 ? "s" : ""} — {app.appName}
+                </div>
+                {imps.map((im, i) => (
+                  <button key={im.id} onClick={() => goImp(i)} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "11px 14px", border: "none", cursor: "pointer", textAlign: "left", background: i === activeImpIdx ? s.light : "white", borderLeft: i === activeImpIdx ? `3px solid ${s.color}` : "3px solid transparent", fontFamily: "inherit", transition: "background 0.15s" }}
+                    onMouseEnter={e => { if (i !== activeImpIdx) e.currentTarget.style.background = "#F9FAFB" }}
+                    onMouseLeave={e => { if (i !== activeImpIdx) e.currentTarget.style.background = "white" }}>
+                    <div style={{ width: 24, height: 24, borderRadius: "50%", flexShrink: 0, background: i === activeImpIdx ? s.color : "#E5E7EB", color: i === activeImpIdx ? "white" : "#9CA3AF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800 }}>{i + 1}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: i === activeImpIdx ? 700 : 500, color: i === activeImpIdx ? s.color : "#111" }}>{im.name}</div>
+                      <div style={{ fontSize: 11, color: "#9CA3AF" }}>{im.steps?.length ?? 0} steps</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ONE share button — always in topbar */}
+        <button onClick={openShare} style={{ flexShrink: 0, width: 34, height: 34, borderRadius: 10, border: `1.5px solid ${s.color}30`, background: s.light, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: s.color, transition: "all 0.2s" }}
           onMouseEnter={e => { e.currentTarget.style.background = s.color; e.currentTarget.style.color = "white" }}
           onMouseLeave={e => { e.currentTarget.style.background = s.light; e.currentTarget.style.color = s.color }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
             <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
           </svg>
-          Share
         </button>
-
-        {/* Improvement dropdown — hidden when locked */}
-        {!locked && (
-          <>
-            <span id="imp-label" style={{ fontSize: 12, color: "#9CA3AF" }}>Improvement:</span>
-            <div style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
-              <button onClick={() => setDropOpen(v => !v)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 10, border: `1.5px solid ${s.color}35`, background: s.light, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 700, color: s.color, transition: "all 0.2s", whiteSpace: "nowrap", maxWidth: "clamp(160px,30vw,340px)" }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{imp.name}</span>
-                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" style={{ flexShrink: 0, transform: dropOpen ? "rotate(180deg)" : "none", transition: "transform 0.2s" }}>
-                  <path d="M2 4l4 4 4-4" stroke={s.color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              {dropOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: "white", borderRadius: 14, border: "1px solid rgba(0,0,0,0.09)", boxShadow: "0 16px 48px rgba(0,0,0,0.13)", overflow: "hidden", zIndex: 50, minWidth: "clamp(220px,35vw,400px)", animation: "dd-in 0.15s ease" }}>
-                  <div style={{ padding: "10px 14px 8px", borderBottom: "1px solid rgba(0,0,0,0.06)", fontSize: 10, fontWeight: 800, color: "#9CA3AF", textTransform: "uppercase", letterSpacing: "0.1em" }}>
-                    {imps.length} Improvement{imps.length > 1 ? "s" : ""} — {app.appName}
-                  </div>
-                  {imps.map((im, i) => (
-                    <button key={im.id} onClick={() => goImp(i)} style={{ display: "flex", alignItems: "center", gap: 11, width: "100%", padding: "12px 14px", border: "none", cursor: "pointer", textAlign: "left", background: i === activeImpIdx ? s.light : "white", borderLeft: i === activeImpIdx ? `3px solid ${s.color}` : "3px solid transparent", fontFamily: "inherit", transition: "background 0.15s" }}
-                      onMouseEnter={e => { if (i !== activeImpIdx) e.currentTarget.style.background = "#F9FAFB" }}
-                      onMouseLeave={e => { if (i !== activeImpIdx) e.currentTarget.style.background = "white" }}>
-                      <div style={{ width: 26, height: 26, borderRadius: "50%", flexShrink: 0, background: i === activeImpIdx ? s.color : "#E5E7EB", color: i === activeImpIdx ? "white" : "#9CA3AF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800 }}>{i + 1}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: i === activeImpIdx ? 700 : 500, color: i === activeImpIdx ? s.color : "#111" }}>{im.name}</div>
-                        <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 1 }}>{im.steps?.length ?? 0} step{(im.steps?.length ?? 0) !== 1 ? "s" : ""}</div>
-                      </div>
-                      {i === activeImpIdx && <div style={{ fontSize: 11, fontWeight: 700, color: s.color, background: `${s.color}15`, borderRadius: 99, padding: "2px 8px", whiteSpace: "nowrap" }}>Active ✓</div>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
-        {/* In locked mode: plain improvement name label */}
-        {locked && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 10, border: `1.5px solid ${s.color}35`, background: s.light, fontSize: 13, fontWeight: 700, color: s.color, maxWidth: "clamp(160px,30vw,340px)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {imp.name}
-          </div>
-        )}
       </div>
 
       {/* ── Body ── */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden", position: "relative", minHeight: 0 }}>
         {drawerOpen && <div onClick={() => setDrawerOpen(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)", zIndex: 30, backdropFilter: "blur(2px)", animation: "fade-in 0.2s ease" }} />}
 
-        {/* Sidebar */}
-        <div id="sidebar" style={{ width: 248, flexShrink: 0, background: "white", borderRight: "1px solid rgba(0,0,0,0.07)", display: "flex", flexDirection: "column", overflow: "hidden", zIndex: 31 }}>
-          <div style={{ padding: "14px 16px 10px", flexShrink: 0 }}>
-            <div style={{ background: s.light, borderRadius: 10, padding: "9px 12px", border: `1px solid ${s.color}20` }}>
+        {/* Sidebar — desktop only, drawer on mobile */}
+        <div id="sidebar" style={{ width: 240, flexShrink: 0, background: "white", borderRight: "1px solid rgba(0,0,0,0.07)", display: "flex", flexDirection: "column", overflow: "hidden", zIndex: 31 }}>
+          <div style={{ padding: "12px 14px 8px", flexShrink: 0 }}>
+            <div style={{ background: s.light, borderRadius: 10, padding: "8px 11px", border: `1px solid ${s.color}20` }}>
               {locked
-                ? <div style={{ fontSize: 10, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>🔗 Shared Tutorial</div>
-                : <div style={{ fontSize: 10, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>Improvement {activeImpIdx + 1} of {imps.length}</div>
+                ? <div style={{ fontSize: 9, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>🔗 Shared</div>
+                : <div style={{ fontSize: 9, fontWeight: 700, color: s.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 2 }}>Improvement {activeImpIdx + 1}/{imps.length}</div>
               }
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#111", lineHeight: 1.3 }}>{imp.name}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#111", lineHeight: 1.3 }}>{imp.name}</div>
             </div>
           </div>
-          <div style={{ padding: "0 16px 8px", fontSize: 10, fontWeight: 800, color: "#D1D5DB", letterSpacing: "0.12em", textTransform: "uppercase", flexShrink: 0 }}>Steps</div>
+          <div style={{ padding: "0 14px 6px", fontSize: 9, fontWeight: 800, color: "#D1D5DB", letterSpacing: "0.12em", textTransform: "uppercase", flexShrink: 0 }}>Steps</div>
           <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
             {imp.steps?.map((st, i) => {
               const active = i === stepIdx, past = i < stepIdx
               return (
                 <div key={st.id} onClick={() => { goStep(i); setDrawerOpen(false) }}
-                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", background: active ? s.light : "transparent", borderRight: active ? `3px solid ${s.color}` : "3px solid transparent", borderLeft: "3px solid transparent", cursor: "pointer", transition: "all 0.2s" }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: active ? s.light : "transparent", borderRight: active ? `3px solid ${s.color}` : "3px solid transparent", borderLeft: "3px solid transparent", cursor: "pointer", transition: "all 0.2s" }}
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#F9FAFB" }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent" }}>
-                  <div style={{ width: 26, height: 26, borderRadius: "50%", flexShrink: 0, background: active ? s.color : past ? `${s.color}25` : "#E5E7EB", color: active ? "white" : past ? s.color : "#9CA3AF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 800, transition: "all 0.3s", boxShadow: active ? `0 4px 12px ${s.color}35` : "none" }}>
+                  <div style={{ width: 24, height: 24, borderRadius: "50%", flexShrink: 0, background: active ? s.color : past ? `${s.color}22` : "#E5E7EB", color: active ? "white" : past ? s.color : "#9CA3AF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, transition: "all 0.3s", boxShadow: active ? `0 4px 10px ${s.color}35` : "none" }}>
                     {past ? "✓" : i + 1}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: active ? 700 : 400, color: active ? "#111" : "#4B5563", lineHeight: 1.35, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{st.title}</div>
+                    <div style={{ fontSize: 11, fontWeight: active ? 700 : 400, color: active ? "#111" : "#4B5563", lineHeight: 1.3, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{st.title}</div>
                   </div>
                 </div>
               )
             })}
           </div>
-          <div style={{ padding: "12px 16px 14px", borderTop: "1px solid rgba(0,0,0,0.06)", flexShrink: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-              <span style={{ fontSize: 11, color: "#9CA3AF" }}>Progress</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{Math.round(prog)}%</span>
+          <div style={{ padding: "10px 14px 12px", borderTop: "1px solid rgba(0,0,0,0.06)", flexShrink: 0 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: "#9CA3AF" }}>Progress</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: s.color }}>{Math.round(prog)}%</span>
             </div>
-            <div style={{ height: 5, background: "#E5E7EB", borderRadius: 99, overflow: "hidden" }}>
+            <div style={{ height: 4, background: "#E5E7EB", borderRadius: 99, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${prog}%`, background: s.grad, borderRadius: 99, transition: "width 0.4s cubic-bezier(0.4,0,0.2,1)" }} />
             </div>
-            <div style={{ fontSize: 10, color: "#D1D5DB", textAlign: "center", marginTop: 6 }}>Scroll / ↑↓ / swipe to navigate</div>
           </div>
         </div>
 
-        {/* Content */}
+        {/* ── Content area ── */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+          {/* Top progress strip */}
           <div style={{ height: 3, flexShrink: 0, background: s.grad, width: `${prog}%`, transition: "width 0.4s cubic-bezier(0.4,0,0.2,1)", alignSelf: "flex-start" }} />
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "clamp(14px,2.5vh,28px) clamp(16px,3vw,48px) clamp(10px,2vh,20px)", overflow: "hidden" }}>
+
+          {/* DESKTOP: normal column layout */}
+          <div id="desktop-content" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", padding: "20px 36px 16px", overflow: "hidden" }}>
             <SlideView id={`${activeImpIdx}-${stepIdx}`} dir={dir}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: "clamp(8px,1.5vh,14px)", flexShrink: 0 }}>
-                <div style={{ display: "inline-flex", alignItems: "center", gap: 6, background: s.light, borderRadius: 99, padding: "4px 11px", border: `1px solid ${s.color}22` }}>
+              {/* Step badge + dots */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexShrink: 0 }}>
+                <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: s.light, borderRadius: 99, padding: "3px 10px", border: `1px solid ${s.color}20` }}>
                   <div style={{ width: 5, height: 5, borderRadius: "50%", background: s.color }} />
                   <span style={{ fontSize: 10, fontWeight: 800, color: s.color, letterSpacing: "0.08em", textTransform: "uppercase" }}>Step {stepIdx + 1} / {totalSteps}</span>
                 </div>
-                <div style={{ display: "flex", gap: 5 }}>
+                <div style={{ display: "flex", gap: 4 }}>
                   {imp.steps?.map((_, i) => (
-                    <div key={i} onClick={() => goStep(i)} style={{ height: 6, width: i === stepIdx ? 20 : 6, borderRadius: 99, background: i === stepIdx ? s.color : i < stepIdx ? `${s.color}45` : "#E5E7EB", cursor: "pointer", transition: "all 0.35s cubic-bezier(0.4,0,0.2,1)" }} />
+                    <div key={i} onClick={() => goStep(i)} style={{ height: 5, width: i === stepIdx ? 18 : 5, borderRadius: 99, background: i === stepIdx ? s.color : i < stepIdx ? `${s.color}45` : "#E5E7EB", cursor: "pointer", transition: "all 0.35s cubic-bezier(0.4,0,0.2,1)" }} />
                   ))}
                 </div>
-                <button onClick={openShare} style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 10px", borderRadius: 99, border: `1px solid ${s.color}25`, background: s.light, cursor: "pointer", fontSize: 10, fontWeight: 700, color: s.color, fontFamily: "inherit" }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-                  </svg>
-                  Share this tutorial
-                </button>
               </div>
 
-              <h1 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: "clamp(18px,3.2vh,34px)", fontWeight: 900, lineHeight: 1.1, letterSpacing: "-0.025em", color: "#111", marginBottom: "clamp(6px,1vh,10px)", flexShrink: 0 }}>{step.title}</h1>
-              <p style={{ fontSize: "clamp(12px,1.8vh,15px)", color: "#6B7280", lineHeight: 1.7, marginBottom: "clamp(8px,1.5vh,16px)", flexShrink: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{step.desc}</p>
+              <h1 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: "clamp(18px,3vh,32px)", fontWeight: 900, lineHeight: 1.1, letterSpacing: "-0.025em", color: "#111", marginBottom: 8, flexShrink: 0 }}>{step.title}</h1>
+              <p style={{ fontSize: "clamp(12px,1.6vh,14px)", color: "#6B7280", lineHeight: 1.7, marginBottom: 12, flexShrink: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{step.desc}</p>
 
               <StepImage imageUrl={step.imageUrl} emoji={app.emoji} color={s.color} light={s.light} />
 
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0, marginTop: "clamp(8px,1.5vh,16px)" }}>
-                <button onClick={() => goStep(stepIdx - 1)} disabled={stepIdx === 0} style={{ padding: "8px 18px", borderRadius: 99, border: "1.5px solid #E5E7EB", background: "white", cursor: stepIdx === 0 ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, color: stepIdx === 0 ? "#D1D5DB" : "#374151", fontFamily: "inherit", transition: "all 0.2s" }}
-                  onMouseEnter={e => { if (stepIdx > 0) { e.currentTarget.style.background = "#F9FAFB"; e.currentTarget.style.borderColor = "#9CA3AF" } }}
-                  onMouseLeave={e => { e.currentTarget.style.background = "white"; e.currentTarget.style.borderColor = "#E5E7EB" }}>← Previous</button>
+              {/* Nav buttons */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginTop: 12 }}>
+                <button onClick={() => goStep(stepIdx - 1)} disabled={stepIdx === 0}
+                  style={{ padding: "8px 16px", borderRadius: 99, border: "1.5px solid #E5E7EB", background: "white", cursor: stepIdx === 0 ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, color: stepIdx === 0 ? "#D1D5DB" : "#374151", fontFamily: "inherit", transition: "all 0.2s" }}>← Prev</button>
 
                 {stepIdx < totalSteps - 1 ? (
-                  <button onClick={() => goStep(stepIdx + 1)} style={{ padding: "8px 20px", borderRadius: 99, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 5px 18px ${s.color}30`, transition: "all 0.2s" }}
-                    onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = `0 9px 24px ${s.color}40` }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = `0 5px 18px ${s.color}30` }}>Next →</button>
+                  <button onClick={() => goStep(stepIdx + 1)}
+                    style={{ padding: "8px 18px", borderRadius: 99, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 4px 14px ${s.color}30`, transition: "all 0.2s" }}>Next →</button>
                 ) : !locked && activeImpIdx < imps.length - 1 ? (
-                  <button onClick={() => goImp(activeImpIdx + 1)} style={{ padding: "8px 20px", borderRadius: 99, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 5px 18px ${s.color}30`, transition: "all 0.2s" }}>Next Improvement →</button>
+                  <button onClick={() => goImp(activeImpIdx + 1)}
+                    style={{ padding: "8px 18px", borderRadius: 99, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 4px 14px ${s.color}30` }}>Next Improvement →</button>
                 ) : (
                   <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => setStepIdx(0)} style={{ padding: "8px 16px", borderRadius: 99, background: s.light, border: `1.5px solid ${s.color}35`, cursor: "pointer", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit" }}>🔄 Restart</button>
-                    {!locked && <a href="/landing/tutorials" style={{ padding: "8px 16px", borderRadius: 99, background: "#F4F4F2", border: "1.5px solid #E5E7EB", textDecoration: "none", fontSize: 13, fontWeight: 700, color: "#6B7280", fontFamily: "inherit", display: "inline-flex", alignItems: "center" }}>✅ Done</a>}
+                    <button onClick={() => setStepIdx(0)} style={{ padding: "8px 14px", borderRadius: 99, background: s.light, border: `1.5px solid ${s.color}30`, cursor: "pointer", fontSize: 12, fontWeight: 700, color: s.color, fontFamily: "inherit" }}>🔄 Restart</button>
+                    {!locked && <a href="/landing/tutorials" style={{ padding: "8px 14px", borderRadius: 99, background: "#F4F4F2", border: "1.5px solid #E5E7EB", textDecoration: "none", fontSize: 12, fontWeight: 700, color: "#6B7280", fontFamily: "inherit", display: "inline-flex", alignItems: "center" }}>✅ Done</a>}
                   </div>
                 )}
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "#D1D5DB" }}>{stepIdx + 1}/{totalSteps}</span>
               </div>
             </SlideView>
           </div>
-        </div>
-      </div>
 
-      {/* Mobile bottom nav */}
-      <div id="mob-nav" style={{ display: "none", borderTop: "1px solid rgba(0,0,0,0.08)", background: "white", padding: "10px 14px", flexDirection: "row", gap: 8, alignItems: "center", flexShrink: 0, zIndex: 19 }}>
-        <button onClick={() => goStep(stepIdx - 1)} disabled={stepIdx === 0} style={{ flex: 1, padding: "10px", borderRadius: 12, border: "1.5px solid #E5E7EB", background: "white", cursor: stepIdx === 0 ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, color: stepIdx === 0 ? "#D1D5DB" : "#374151", fontFamily: "inherit" }}>← Prev</button>
-        <button onClick={() => setDrawerOpen(true)} style={{ padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${s.color}30`, background: s.light, cursor: "pointer", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit", whiteSpace: "nowrap" }}>{stepIdx + 1}/{totalSteps}</button>
-        <button onClick={openShare} style={{ padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${s.color}30`, background: s.light, cursor: "pointer", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit" }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-          </svg>
-        </button>
-        {stepIdx < totalSteps - 1 ? (
-          <button onClick={() => goStep(stepIdx + 1)} style={{ flex: 1, padding: "10px", borderRadius: 12, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 4px 14px ${s.color}30` }}>Next →</button>
-        ) : (
-          locked
-            ? <button onClick={() => setStepIdx(0)} style={{ flex: 1, padding: "10px", borderRadius: 12, background: s.light, border: `1.5px solid ${s.color}30`, cursor: "pointer", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit" }}>🔄 Restart</button>
-            : <a href="/landing/tutorials" style={{ flex: 1, padding: "10px", borderRadius: 12, background: s.light, border: `1.5px solid ${s.color}30`, textDecoration: "none", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit", textAlign: "center" }}>✅ Done</a>
-        )}
+          {/* MOBILE: horizontal card swipe */}
+          <div id="mobile-content" style={{ display: "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+            {/* Horizontal step carousel */}
+            <div style={{ flex: 1, minHeight: 0, position: "relative", overflow: "hidden" }}>
+              <div style={{
+                display: "flex",
+                height: "100%",
+                transform: `translateX(-${stepIdx * 100}%)`,
+                transition: "transform 0.32s cubic-bezier(0.4,0,0.2,1)",
+                willChange: "transform",
+              }}>
+                {imp.steps?.map((st, i) => (
+                  <div key={st.id} style={{ minWidth: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "16px 16px 12px", overflow: "hidden" }}>
+                    {/* Step badge */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexShrink: 0 }}>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: s.light, borderRadius: 99, padding: "3px 10px", border: `1px solid ${s.color}20` }}>
+                        <div style={{ width: 5, height: 5, borderRadius: "50%", background: s.color }} />
+                        <span style={{ fontSize: 10, fontWeight: 800, color: s.color, letterSpacing: "0.08em", textTransform: "uppercase" }}>Step {i + 1} / {totalSteps}</span>
+                      </div>
+                    </div>
+                    <h2 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: 20, fontWeight: 900, lineHeight: 1.15, color: "#111", marginBottom: 6, flexShrink: 0 }}>{st.title}</h2>
+                    <p style={{ fontSize: 13, color: "#6B7280", lineHeight: 1.6, marginBottom: 12, flexShrink: 0, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{st.desc}</p>
+                    {/* Image fills remaining space */}
+                    <StepImage imageUrl={st.imageUrl} emoji={app.emoji} color={s.color} light={s.light} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Mobile bottom bar */}
+            <div style={{ borderTop: "1px solid rgba(0,0,0,0.07)", background: "white", padding: "10px 14px", display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+              {/* Step dots */}
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                {imp.steps?.map((_, i) => (
+                  <div key={i} onClick={() => goStep(i)} style={{ height: 6, width: i === stepIdx ? 18 : 6, borderRadius: 99, background: i === stepIdx ? s.color : i < stepIdx ? `${s.color}50` : "#E5E7EB", cursor: "pointer", transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)", flexShrink: 0 }} />
+                ))}
+              </div>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Prev */}
+              <button onClick={() => goStep(stepIdx - 1)} disabled={stepIdx === 0}
+                style={{ width: 40, height: 40, borderRadius: 12, border: "1.5px solid #E5E7EB", background: "white", cursor: stepIdx === 0 ? "not-allowed" : "pointer", fontSize: 16, color: stepIdx === 0 ? "#D1D5DB" : "#374151", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>←</button>
+
+              {/* Next / Done */}
+              {stepIdx < totalSteps - 1 ? (
+                <button onClick={() => goStep(stepIdx + 1)}
+                  style={{ height: 40, padding: "0 18px", borderRadius: 12, background: s.grad, border: "none", cursor: "pointer", fontSize: 14, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 4px 12px ${s.color}30`, flexShrink: 0 }}>Next →</button>
+              ) : !locked && activeImpIdx < imps.length - 1 ? (
+                <button onClick={() => goImp(activeImpIdx + 1)}
+                  style={{ height: 40, padding: "0 14px", borderRadius: 12, background: s.grad, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, color: "white", fontFamily: "inherit", boxShadow: `0 4px 12px ${s.color}30`, flexShrink: 0 }}>Next →</button>
+              ) : (
+                <button onClick={() => setStepIdx(0)}
+                  style={{ height: 40, padding: "0 14px", borderRadius: 12, background: s.light, border: `1.5px solid ${s.color}30`, cursor: "pointer", fontSize: 13, fontWeight: 700, color: s.color, fontFamily: "inherit", flexShrink: 0 }}>🔄 Restart</button>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       <style>{`
@@ -665,15 +679,24 @@ function ViewerPage({ app, initialImpId, locked = false }: { app: TutorialApp; i
         @keyframes fade-in { from{opacity:0;}to{opacity:1;} }
         ::-webkit-scrollbar{width:4px;}
         ::-webkit-scrollbar-thumb{background:#E5E7EB;border-radius:4px;}
-        @media(max-width:768px){
-          #sidebar{position:absolute!important;top:0;left:0;bottom:0;transform:${drawerOpen ? "translateX(0)" : "translateX(-100%)"};box-shadow:4px 0 24px rgba(0,0,0,0.14);transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);}
-          #ham-btn{display:flex!important;}
-          #mob-prog{display:block!important;}
-          #mob-nav{display:flex!important;}
-          #imp-label{display:none!important;}
+
+        /* ── MOBILE ── */
+        @media(max-width:720px){
+          #sidebar{
+            position:absolute!important;top:0;left:0;bottom:0;
+            transform:${drawerOpen ? "translateX(0)" : "translateX(-100%)"};
+            box-shadow:4px 0 24px rgba(0,0,0,0.14);
+            transition:transform 0.28s cubic-bezier(0.4,0,0.2,1);
+          }
+          #imp-dropdown{ display:none!important; }
+          #desktop-content{ display:none!important; }
+          #mobile-content{ display:flex!important; }
         }
-        @media(min-width:769px){
-          #sidebar{transform:none!important;transition:none!important;}
+        /* ── DESKTOP ── */
+        @media(min-width:721px){
+          #sidebar{ transform:none!important; transition:none!important; }
+          #desktop-content{ display:flex!important; }
+          #mobile-content{ display:none!important; }
         }
       `}</style>
     </div>
@@ -740,8 +763,9 @@ export default function TutorialsPage() {
     )
 
     // Token valid — find app and improvement
-    const sharedApp = apps.find(a => a.id === tokenResolved.appId)
-    const sharedImp = sharedApp?.improvements.find(i => i.id === tokenResolved.impId)
+    const resolved = tokenResolved as { appId: string; impId: string }
+    const sharedApp = apps.find(a => a.id === resolved.appId)
+    const sharedImp = sharedApp?.improvements.find(i => i.id === resolved.impId)
     if (!sharedApp || !sharedImp) return (
       <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#FAFAFA", flexDirection: "column", gap: 12, fontFamily: "'DM Sans',sans-serif" }}>
         <div style={{ fontSize: 32 }}>🔍</div>

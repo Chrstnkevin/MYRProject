@@ -17,6 +17,8 @@ interface PastedImage { id: string; dataUrl: string; label: string }
 interface SubSection {
   id: string
   deskripsi: string
+  tanggal: string
+  status: "OK" | "NOT OK" | "IN PROGRESS" | ""
   images: PastedImage[]
 }
 
@@ -57,7 +59,9 @@ const newEntry = (no: number): TestEntry => ({
 })
 
 const newSubSection = (): SubSection => ({
-  id: crypto.randomUUID(), deskripsi:"", images:[]
+  id: crypto.randomUUID(), deskripsi: "",
+  tanggal: new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }),
+  status: "", images: []
 })
 
 function calcDocStatus(entries: TestEntry[]): ScenarioDoc["doc_status"] {
@@ -700,8 +704,8 @@ function EntryCard({entry,idx,total,activePasteTarget,onUpdate,onRemove,onMoveUp
                 borderLeft:"3px solid var(--accent2)",
               }}>
                 {/* Sub-section header */}
-                <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"8px"}}>
-                  <span style={{fontSize:"11px",fontWeight:700,color:"var(--accent2)",background:"var(--accent-muted)",padding:"2px 8px",borderRadius:"99px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:"8px",marginBottom:"10px"}}>
+                  <span style={{fontSize:"11px",fontWeight:700,color:"var(--accent2)",background:"var(--accent-muted)",padding:"2px 8px",borderRadius:"99px",flexShrink:0}}>
                     Sub {ssIdx+1}
                   </span>
                   <div style={{flex:1}}/>
@@ -709,6 +713,32 @@ function EntryCard({entry,idx,total,activePasteTarget,onUpdate,onRemove,onMoveUp
                     onClick={()=>removeSubSection(ss.id)}>
                     <X size={13}/>
                   </button>
+                </div>
+
+                {/* Tanggal + Status row */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 160px",gap:"8px",marginBottom:"8px"}}>
+                  <div>
+                    <label className="label" style={{display:"block",marginBottom:"4px"}}>TANGGAL TEST</label>
+                    <input className="input" placeholder="dd/mm/yyyy"
+                      value={ss.tanggal ?? ""}
+                      onChange={e=>updateSubSection(ss.id,"tanggal",e.target.value)}/>
+                  </div>
+                  <div>
+                    <label className="label" style={{display:"block",marginBottom:"4px"}}>STATUS</label>
+                    <select className="input"
+                      style={{
+                        color: ENTRY_STATUS_COLOR[ss.status ?? ""],
+                        background: ENTRY_STATUS_BG[ss.status ?? ""],
+                        fontWeight:700, fontSize:"12px"
+                      }}
+                      value={ss.status ?? ""}
+                      onChange={e=>updateSubSection(ss.id,"status",e.target.value)}>
+                      <option value="">– Status –</option>
+                      <option value="OK">✅ OK</option>
+                      <option value="NOT OK">❌ NOT OK</option>
+                      <option value="IN PROGRESS">🔄 IN PROGRESS</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Deskripsi */}
@@ -782,6 +812,34 @@ function PreviewPanel({header,entries}:{header:FormHeader;entries:TestEntry[]}) 
                     </td>
                   </tr>
                 )}
+                {/* Sub-sections in preview */}
+                {(e.subSections||[]).map((ss, ssIdx) => (
+                  <Fragment key={`ss-${ss.id}`}>
+                    <tr style={{borderBottom:"1px solid var(--border)",background:"#fafaf8"}}>
+                      <td style={{padding:"5px 10px",color:"var(--text3)",fontSize:"11px"}}>↳</td>
+                      <td colSpan={2} style={{padding:"5px 10px",fontSize:"11px",color:"var(--text2)",fontStyle:"italic"}}>
+                        <span style={{fontSize:"10px",fontWeight:700,color:"var(--accent2)",background:"var(--accent-muted)",padding:"1px 6px",borderRadius:"99px",marginRight:"6px"}}>Sub {ssIdx+1}</span>
+                        {ss.deskripsi||"–"}
+                      </td>
+                      <td style={{padding:"5px 10px",fontSize:"11px",whiteSpace:"nowrap",color:"var(--text3)"}}>{ss.tanggal||"–"}</td>
+                      <td style={{padding:"5px 10px",fontSize:"11px",fontWeight:700,color:ENTRY_STATUS_COLOR[ss.status??""]}}>
+                        {ss.status||"–"}
+                      </td>
+                    </tr>
+                    {ss.images.length > 0 && (
+                      <tr style={{background:"#fafaf8",borderBottom:"1px solid var(--border)"}}>
+                        <td/><td colSpan={4} style={{padding:"6px 10px"}}>
+                          <div style={{display:"flex",gap:"6px",flexWrap:"wrap"}}>
+                            {ss.images.map(img=>(
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img key={img.id} src={img.dataUrl} alt="" style={{maxWidth:"120px",maxHeight:"70px",objectFit:"contain",border:"1px solid var(--border)",borderRadius:"4px"}}/>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
               </Fragment>
             ))}
           </tbody>
