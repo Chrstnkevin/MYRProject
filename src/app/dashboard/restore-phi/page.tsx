@@ -241,76 +241,118 @@ async function exportToPDF(
     },
   })
 
-  onProgress("Adding screenshots...", 50)
+  // ── Screenshot pages: 2 entries per page, max 3 screenshots each ────────────
+  // Layout per page (landscape A4):
+  //   ┌─────────────────────── ENTRY 1 ───────────────────────┐  ← top half
+  //   │ [mini header bar]  name · area · server · code        │
+  //   │ [meta: PIC, date, status]                             │
+  //   │ [ shot 1 ]   [ shot 2 ]   [ shot 3 ]                  │
+  //   ├─────────────────────── ENTRY 2 ───────────────────────┤  ← bottom half
+  //   │ ...same structure...                                  │
+  //   └───────────────────────────────────────────────────────┘
+  //
+  // Each "row" height = (PH - top margin - gap - bottom margin) / 2
+  // Header bar = 7mm, meta line = 5mm, images fill remaining row height
 
-  // ── Screenshot pages ──────────────────────────────────────────────────────
   const withShots = mergedList.filter(({ entry }) =>
     entry && (entry.screenshot_1 || entry.screenshot_2 || entry.screenshot_3)
   )
-  for (let idx = 0; idx < withShots.length; idx++) {
-    const { master, entry } = withShots[idx]
-    if (!entry) continue
-    onProgress(`Screenshots (${idx + 1}/${withShots.length})...`, 50 + Math.round((idx / withShots.length) * 40))
 
+  // Helper: load image → { dataUrl, natW, natH }
+  const loadImg = (src: string): Promise<{ dataUrl: string; natW: number; natH: number }> =>
+    new Promise((res, rej) => {
+      const img = new window.Image()
+      img.onload = () => {
+        const c = document.createElement("canvas")
+        c.width = img.naturalWidth; c.height = img.naturalHeight
+        c.getContext("2d")!.drawImage(img, 0, 0)
+        res({ dataUrl: c.toDataURL("image/png"), natW: img.naturalWidth, natH: img.naturalHeight })
+      }
+      img.onerror = rej
+      img.src = src
+    })
+
+  // Helper: draw one entry block at a given Y origin
+  const drawEntryBlock = async (
+    { master, entry }: typeof withShots[0],
+    blockX: number, blockY: number, blockW: number, blockH: number,
+    entryGlobalIdx: number
+  ) => {
+    if (!entry) return
     const shots = [entry.screenshot_1, entry.screenshot_2, entry.screenshot_3].filter(Boolean) as string[]
-    if (!shots.length) continue
 
-    doc.addPage("a4", "landscape")
-    doc.setFillColor(232, 56, 26); doc.rect(0, 0, PW, 12, "F")
-    doc.setFontSize(9); doc.setFont("helvetica", "bold"); doc.setTextColor(255, 255, 255)
-    doc.text(`${master.adp_name}  ·  ${master.area}  ·  Server ${master.server}  ·  ${master.adp_code}`, 8, 8)
+    const headerH = 7
+    const metaH   = 5
+    const labelH  = 4
+    const imgAreaY = blockY + headerH + metaH + 1
+    const imgAreaH = blockH - headerH - metaH - labelH - 2
 
-    doc.setFontSize(7.5); doc.setFont("helvetica", "normal"); doc.setTextColor(50, 50, 50)
+    // Mini header bar
+    doc.setFillColor(232, 56, 26)
+    doc.rect(blockX, blockY, blockW, headerH, "F")
+    doc.setFontSize(7); doc.setFont("helvetica", "bold"); doc.setTextColor(255, 255, 255)
+    // Truncate name if too long
+    const nameText = `${master.adp_name}  ·  ${master.area}  ·  Svr ${master.server}  ·  ${master.adp_code}`
+    doc.text(nameText, blockX + 3, blockY + headerH - 2, { maxWidth: blockW - 6 })
+
+    // Meta line
+    doc.setFontSize(6); doc.setFont("helvetica", "normal"); doc.setTextColor(60, 60, 60)
     const meta = [
-      `PIC PHI: ${master.pic_phi}`,
-      entry.restore_date  ? `Restore: ${new Date(entry.restore_date).toLocaleDateString("id-ID")}` : "",
+      master.pic_phi ? `PIC: ${master.pic_phi}` : "",
+      entry.restore_date   ? `Restore: ${new Date(entry.restore_date).toLocaleDateString("id-ID")}` : "",
       entry.restore_status ? `Status: ${entry.restore_status}` : "",
-      entry.pic_restore   ? `PIC: ${entry.pic_restore}` : "",
-    ].filter(Boolean).join("   |   ")
-    doc.text(meta, 8, 18)
+      entry.pic_restore    ? `PIC Restore: ${entry.pic_restore}` : "",
+    ].filter(Boolean).join("  |  ")
+    doc.text(meta, blockX + 3, blockY + headerH + metaH - 1, { maxWidth: blockW - 6 })
 
-    const margin = 8, topY = 22
-    const availW = PW - margin * 2
-    const availH = PH - topY - 10
-    const cols = shots.length === 1 ? 1 : shots.length === 2 ? 2 : 3
-    const slotW = (availW - (cols - 1) * 4) / cols
+    // Screenshots
+    const cols  = shots.length === 1 ? 1 : shots.length === 2 ? 2 : 3
+    const gap   = 2
+    const slotW = (blockW - gap * (cols - 1)) / cols
 
     for (let s = 0; s < shots.length; s++) {
-      const slotX = margin + s * (slotW + 4)
+      const slotX = blockX + s * (slotW + gap)
       try {
-        // Load image to get natural dimensions for aspect-ratio-correct fit
-        const { dataUrl, natW, natH } = await new Promise<{ dataUrl: string; natW: number; natH: number }>((res, rej) => {
-          const img = new window.Image()
-          img.onload = () => {
-            const canvas = document.createElement("canvas")
-            canvas.width  = img.naturalWidth
-            canvas.height = img.naturalHeight
-            canvas.getContext("2d")!.drawImage(img, 0, 0)
-            res({ dataUrl: canvas.toDataURL("image/png"), natW: img.naturalWidth, natH: img.naturalHeight })
-          }
-          img.onerror = rej
-          img.src = shots[s]
-        })
-
-        // Fit image inside slot while preserving aspect ratio (letterbox)
-        const ratio   = natW / natH
-        let drawW = slotW
-        let drawH = slotW / ratio
-        if (drawH > availH) { drawH = availH; drawW = availH * ratio }
-
-        // Center within slot
-        const drawX = slotX + (slotW - drawW) / 2
-        const drawY = topY  + (availH - drawH) / 2
-
-        doc.addImage(dataUrl, "PNG", drawX, drawY, drawW, drawH, `img_${idx}_${s}`, "NONE")
+        const { dataUrl, natW, natH } = await loadImg(shots[s])
+        const ratio = natW / natH
+        let dW = slotW, dH = slotW / ratio
+        if (dH > imgAreaH) { dH = imgAreaH; dW = imgAreaH * ratio }
+        const dX = slotX + (slotW - dW) / 2
+        const dY = imgAreaY + (imgAreaH - dH) / 2
+        doc.addImage(dataUrl, "PNG", dX, dY, dW, dH, `e${entryGlobalIdx}s${s}`, "NONE")
       } catch {
-        doc.setDrawColor(200); doc.setFillColor(245, 245, 245)
-        doc.rect(slotX, topY, slotW, availH, "FD")
-        doc.setFontSize(8); doc.setTextColor(180)
-        doc.text("Image unavailable", slotX + slotW / 2, topY + availH / 2, { align: "center" })
+        doc.setDrawColor(200); doc.setFillColor(248, 248, 248)
+        doc.rect(slotX, imgAreaY, slotW, imgAreaH, "FD")
+        doc.setFontSize(6); doc.setTextColor(180)
+        doc.text("unavailable", slotX + slotW / 2, imgAreaY + imgAreaH / 2, { align: "center" })
       }
-      doc.setFontSize(7); doc.setTextColor(120)
-      doc.text(`Screenshot ${s + 1}`, slotX + slotW / 2, topY + availH + 4, { align: "center" })
+      // Screenshot label
+      doc.setFontSize(5.5); doc.setTextColor(140)
+      doc.text(`SS ${s + 1}`, slotX + slotW / 2, imgAreaY + imgAreaH + labelH - 1, { align: "center" })
+    }
+
+    // Separator line at bottom of block (skip for last block on page)
+    doc.setDrawColor(220); doc.setLineWidth(0.3)
+    doc.line(blockX, blockY + blockH - 0.5, blockX + blockW, blockY + blockH - 0.5)
+  }
+
+  const pageMargin = 6
+  const pageGap    = 3   // gap between the 2 entry rows
+  const usableW    = PW - pageMargin * 2
+  const usableH    = PH - pageMargin * 2
+  const blockH     = (usableH - pageGap) / 2  // half page per entry
+
+  for (let i = 0; i < withShots.length; i += 2) {
+    doc.addPage("a4", "landscape")
+    onProgress(`Screenshots page ${Math.floor(i / 2) + 1}/${Math.ceil(withShots.length / 2)}...`,
+      50 + Math.round((i / withShots.length) * 40))
+
+    // Top entry
+    await drawEntryBlock(withShots[i], pageMargin, pageMargin, usableW, blockH, i)
+
+    // Bottom entry (if exists)
+    if (withShots[i + 1]) {
+      await drawEntryBlock(withShots[i + 1], pageMargin, pageMargin + blockH + pageGap, usableW, blockH, i + 1)
     }
   }
 
