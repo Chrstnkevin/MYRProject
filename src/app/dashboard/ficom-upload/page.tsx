@@ -2,8 +2,8 @@
 // Also add "ficom-upload" route to your dashboard sidebar/nav
 
 "use client"
-import { useState, useRef, useCallback } from "react"
-import { Upload, CheckCircle, AlertCircle, RefreshCw, FileSpreadsheet, Eye, Trash2, ArrowRight, Database } from "lucide-react"
+import { useState, useRef, useCallback, useEffect, useMemo } from "react"
+import { Upload, CheckCircle, AlertCircle, RefreshCw, FileSpreadsheet, Eye, Trash2, Search, ChevronDown, TriangleAlert } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
@@ -40,14 +40,19 @@ interface UserRow {
   aor: string; sub_aor: string; rdm_name: string
   usage_days: number; selling_days: number; compliance_pct: number
   last_usage_date: string | null; trained: number; training_date: string | null
+  activity_count?: number; master_name?: string; master_position?: string
 }
 
 // ── Parsers ────────────────────────────────────────────────────
+// LOGIC BARU:
+// - Denominator = master PERMANEN dari utilisasi_master_users (ADM + RDM saja)
+// - Numerator   = WF yang muncul di EDI Log Activity (aktif login)
+// - Compliance  = usage_days / selling_days
+// - Supports: CSV pipe-delimited (EDI_Log_Activity_Detail_brt.csv) OR XLSX
 async function parseFicomExcels(
   ediFile: File,
-  trainingFile: File,
   onProgress: (msg: string) => void,
-  masterFile?: File | null
+  masterFile?: File | null   // optional m_master for ADS/LP count only
 ): Promise<ParsedFicomData> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const XLSX = (await import("xlsx")) as any
@@ -55,253 +60,196 @@ async function parseFicomExcels(
   const fmtDate = (v: unknown): string | null => {
     if (!v) return null
     if (v instanceof Date) return isNaN(v.getTime()) ? null : v.toISOString().split("T")[0]
-    const d = new Date(v as string)
+    const strVal = String(v).trim()
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(strVal)) {
+      const [dd, mm, yyyy] = strVal.split("/")
+      return `${yyyy}-${mm}-${dd}`
+    }
+    const d = new Date(strVal)
     return isNaN(d.getTime()) ? null : d.toISOString().split("T")[0]
   }
   const s = (v: unknown) => String(v || "").trim()
 
-  // ── 1. Parse EDI usage log ──
-  onProgress("⏳ Reading EDI usage log...")
-  const ediBuf = await ediFile.arrayBuffer()
-  const ediWb = XLSX.read(ediBuf, { type: "array", cellDates: true })
-  
-  // Try multiple sheet names (EDI file might be the raw or processed version)
-  const ediSheetName = ediWb.SheetNames.includes("Sheet1") ? "Sheet1"
-    : ediWb.SheetNames.includes("EDI Log Activity raw data") ? "EDI Log Activity raw data"
-    : ediWb.SheetNames[0]
-  
-  const ediWs = ediWb.Sheets[ediSheetName]
-  const ediRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ediWs, { raw: false, dateNF: "yyyy-mm-dd" })
+  // ── 1. Load MASTER from Supabase (ADM + RDM only — ADS tidak bisa akses Ficom) ──
+  onProgress("⏳ Loading master users from Supabase (ADM + RDM)...")
+  const { data: masterData, error: masterErr } = await supabase
+    .from("utilisasi_master_users")
+    .select("user_login, sales_name, position, is_active")
+    .in("position", ["ADM", "RDM"])
+  if (masterErr) throw new Error(`Master load error: ${masterErr.message}`)
 
-  // Find the period (month of data)
-  const allDates: string[] = []
-  const userMap = new Map<string, {
-    username: string; position: string; aor: string; sub_aor: string; rdm_name: string
-    dates: Set<string>; last_date: string | null
+  const masterMap = new Map<string, { name: string; position: string; is_active: boolean }>()
+  for (const u of masterData ?? []) {
+    masterMap.set(u.user_login.toUpperCase(), {
+      name: u.sales_name, position: u.position, is_active: u.is_active
+    })
+  }
+  const masterActive = [...masterMap.values()].filter(u => u.is_active)
+  onProgress(`✅ Master: ${masterActive.length} active ADM/RDM (denominator utilisasi Ficom)`)
+
+  // ── 2. Parse EDI — detect format ──
+  onProgress("⏳ Reading EDI Log Activity...")
+
+  // userActivity: user_login -> { dates: Set<string>, aor, sub_aor, rdm_name }
+  const userActivity = new Map<string, {
+    dates: Set<string>; aor: string; sub_aor: string; rdm_name: string
   }>()
+  const allDates: string[] = []
 
-  for (const r of ediRows) {
-    const uid = s(r["User ID"])
-    const dt = fmtDate(r["Date of Usage"])
-    const aor = s(r["AOR"])
-    const pos = s(r["Position"]) // ADM or RDM
+  const isCsv = ediFile.name.toLowerCase().endsWith(".csv")
 
-    if (!uid || !aor) continue
-    if (!userMap.has(uid)) {
-      userMap.set(uid, {
-        username: s(r["Username"]),
-        position: pos,
-        aor,
-        sub_aor: s(r["SUB-AOR"]),
-        rdm_name: s(r["RDM"]),
-        dates: new Set(),
-        last_date: null,
-      })
+  if (isCsv) {
+    // CSV: aplikasi|modul|tanggal|waktu|username|nama_user|emp_type_id|...|grsm_nm|nsm_id|nsm_nm
+    // idx:  0      | 1   | 2     | 3   | 4      | 5       | 6         |...|12     |13    |14
+    const text = await ediFile.text()
+    const lines = text.split("\n")
+    const delim = lines[0]?.includes("|") ? "|" : ","
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].trim().split(delim)
+      if (cols.length < 5) continue
+      const uid    = cols[4]?.replace(/"/g, "").trim().toUpperCase()
+      const dtRaw  = cols[2]?.replace(/"/g, "").trim()
+      const grsmNm = cols[12]?.replace(/"/g, "").trim() ?? ""
+      if (!uid?.startsWith("WF")) continue
+      const dt  = fmtDate(dtRaw)
+      const aor = getAreaFromName(grsmNm)
+      if (!userActivity.has(uid)) userActivity.set(uid, { dates: new Set(), aor, sub_aor: "", rdm_name: grsmNm })
+      if (dt) { userActivity.get(uid)!.dates.add(dt); allDates.push(dt) }
     }
-    if (dt) {
-      userMap.get(uid)!.dates.add(dt)
-      allDates.push(dt)
+  } else {
+    // XLSX: columns "User ID", "Date of Usage", "AOR", "SUB-AOR", "RDM"
+    const ediBuf = await ediFile.arrayBuffer()
+    const ediWb  = XLSX.read(ediBuf, { type: "array", cellDates: true })
+    const ediWs  = ediWb.Sheets[ediWb.SheetNames.includes("Sheet1") ? "Sheet1" : ediWb.SheetNames[0]]
+    const ediRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ediWs, { raw: false, dateNF: "yyyy-mm-dd" })
+    for (const r of ediRows) {
+      const uid = s(r["User ID"]).toUpperCase()
+      const dt  = fmtDate(r["Date of Usage"])
+      const aor = s(r["AOR"])
+      if (!uid) continue
+      if (!userActivity.has(uid)) userActivity.set(uid, { dates: new Set(), aor, sub_aor: s(r["SUB-AOR"]), rdm_name: s(r["RDM"]) })
+      if (dt) { userActivity.get(uid)!.dates.add(dt); allDates.push(dt) }
     }
   }
 
   if (allDates.length === 0) throw new Error("Tidak ada data usage ditemukan di file EDI")
 
-  // Calculate period metadata
+  // ── 3. Period metadata ──
   const sortedDates = [...new Set(allDates)].sort()
-  const minDate = sortedDates[0]
-  const maxDate = sortedDates[sortedDates.length - 1]
-  const periodMonth = minDate.slice(0, 7) // "2026-04"
-  const asOfDate = maxDate
+  const minDate = sortedDates[0], maxDate = sortedDates[sortedDates.length - 1]
+  const periodMonth = minDate.slice(0, 7)
 
-  // Calculate selling days
-  // Count Mon-Sat from minDate to maxDate
-  const startD = new Date(minDate)
-  const endD = new Date(maxDate)
   let sellingDays = 0
-  const cur = new Date(startD)
-  while (cur <= endD) {
-    if (cur.getDay() !== 0) sellingDays++ // exclude Sunday
-    cur.setDate(cur.getDate() + 1)
-  }
+  const cur = new Date(minDate)
+  while (cur <= new Date(maxDate)) { if (cur.getDay() !== 0) sellingDays++; cur.setDate(cur.getDate() + 1) }
 
-  // Determine period label (Period N based on month)
-  const month = new Date(minDate)
-  const periodNum = month.getMonth() + 1
-  const periodLabel = `Period ${periodNum} (${month.toLocaleDateString("en-US", { month: "long", year: "numeric" })})`
+  const periodD = new Date(minDate)
+  const periodLabel = `Period ${periodD.getMonth() + 1} (${periodD.toLocaleDateString("en-US", { month: "long", year: "numeric" })})`
+  onProgress(`✅ EDI: ${userActivity.size} unique users · ${sellingDays} selling days · ${periodLabel}`)
 
-  onProgress(`✅ EDI: ${userMap.size} users · ${sellingDays} selling days · ${periodLabel}`)
-
-  // ── 2. Parse Ficom_Usage file → extract Training Sched as MASTER ──
-  // Training Sched sheet: REG(AOR), Position, Employee Name, User ID, Training Date
-  // This is the FULL MASTER of all ADM/RDM who should use Ficom
-  onProgress("⏳ Reading master user list from Training Sched...")
-  const trBuf = await trainingFile.arrayBuffer()
-  const trWb = XLSX.read(trBuf, { type: "array", cellDates: true })
-  
-  // Priority: Training Sched sheet (Ficom_Usage file) > Sheet1 (fallback)
-  const trSheetName = trWb.SheetNames.includes("Training Sched") ? "Training Sched"
-    : trWb.SheetNames.includes("Sheet1") ? "Sheet1"
-    : trWb.SheetNames[0]
-  
-  const trWs = trWb.Sheets[trSheetName]
-  const trRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(trWs, { raw: false, dateNF: "yyyy-mm-dd" })
-
-  // Build MASTER map: user_id -> { aor, position, name, training_date }
-  // This gives us WHO SHOULD be using Ficom (the denominator for utilisasi)
-  interface MasterUser { aor: string; position: string; username: string; training_date: string | null }
-  const masterMap = new Map<string, MasterUser>()
-  const trainingMap = new Map<string, string>() // user_id -> training_date (for backward compat)
-  
-  for (const r of trRows) {
-    const uid = s(r["User ID"])
-    if (!uid || uid === "User ID") continue
-    
-    // Training Sched format: REG, Position, Employee Name, User ID, Training Date
-    const aor   = s(r["REG"] || "")
-    const pos   = s(r["Position"] || "")
-    const name  = s(r["Employee Name"] || "")
-    const dt    = fmtDate(r["Training Date"] || r["Date Training"])
-    
-    // Only include valid ADM/RDM/ADS with WF IDs
-    if (uid.startsWith("WF")) {
-      masterMap.set(uid, {
-        aor:  aor || "UNK",
-        position: pos === "RDM" ? "RDM" : "ADM",
-        username: name,
-        training_date: dt,
-      })
-      if (dt) trainingMap.set(uid, dt)
-    }
-  }
-  
-  const masterTotal = masterMap.size
-  onProgress(`✅ Master users: ${masterTotal} ADM/RDM (utilisasi denominator)`)
-
-  // ── 2b. Parse m_master (optional) ──
+  // ── 4. m_master optional (for ADS/LP count in hero) ──
   let totalAds = 0, totalLp = 0
   if (masterFile) {
     onProgress("⏳ Reading m_master...")
     const mBuf = await masterFile.arrayBuffer()
-    const mWb = XLSX.read(mBuf, { type: "array", cellDates: true })
-    const mWs = mWb.Sheets[mWb.SheetNames[0]]
+    const mWb  = XLSX.read(mBuf, { type: "array" })
+    const mWs  = mWb.Sheets[mWb.SheetNames[0]]
     const mRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(mWs, { raw: false })
     for (const r of mRows) {
       const t = s(r["Type"])
       if (t === "ADS") totalAds++
       else if (t === "LP") totalLp++
     }
-    onProgress(`✅ m_master: ${totalAds} ADS + ${totalLp} LP field users`)
   }
 
-  // ── 3. Build UserRow list ──
-  // Use masterMap as the full list — ALL users who should use Ficom
-  // EDI (userMap) provides compliance data for active users
-  // Users in masterMap but NOT in userMap = never logged in (utilisasi = 0)
+  // ── 5. Build UserRows from MASTER (ADM+RDM) ──
+  // Every master user gets a row; EDI provides compliance data
   const VALID_AORS = new Set(["GMA", "MIN", "NOL", "SOL", "VIS"])
   const users: UserRow[] = []
   const aorAgg: Record<string, { users: UserRow[] }> = {}
 
-  // Iterate over MASTER (all who should use Ficom)
-  const masterSource = masterMap.size > 0 ? masterMap : null
+  for (const [uid, master] of masterMap.entries()) {
+    if (!master.is_active) continue  // skip Vacant
 
-  if (masterSource) {
-    // Correct path: master from Training Sched
-    for (const [uid, master] of masterSource) {
-      if (!VALID_AORS.has(master.aor)) continue
-      const ediUser = userMap.get(uid)
-      const uniqueDays = ediUser ? ediUser.dates.size : 0
-      const compliancePct = sellingDays > 0 ? Math.round(uniqueDays / sellingDays * 1000) / 10 : 0
-      const lastDate = ediUser?.dates.size ? [...ediUser.dates].sort().pop()! : null
-      const trainDate = master.training_date
+    const ediInfo   = userActivity.get(uid)
+    const usageDays = ediInfo ? ediInfo.dates.size : 0
+    const compliance = sellingDays > 0 ? Math.round(usageDays / sellingDays * 1000) / 10 : 0
+    const lastDate  = ediInfo?.dates.size ? [...ediInfo.dates].sort().pop()! : null
+    const aor       = ediInfo?.aor && VALID_AORS.has(ediInfo.aor) ? ediInfo.aor : "UNK"
 
-      // AOR and sub_aor: prefer EDI data (more detailed), fallback to master
-      const ediData = ediUser || userMap.get(uid)
-      const aorFinal   = ediData ? ediData.aor    : master.aor
-      const subAorFinal= ediData ? ediData.sub_aor : ""
-      const rdmFinal   = ediData ? ediData.rdm_name: ""
-      const usernameFinal = master.username || (ediData?.username ?? uid)
-
-      const row: UserRow = {
-        period_month: periodMonth,
-        user_id: uid,
-        username: usernameFinal,
-        position: master.position,
-        aor: aorFinal !== "UNK" ? aorFinal : master.aor,
-        sub_aor: subAorFinal,
-        rdm_name: rdmFinal,
-        usage_days: uniqueDays,
-        selling_days: sellingDays,
-        compliance_pct: compliancePct,
-        last_usage_date: lastDate,
-        trained: trainDate ? 1 : 0,
-        training_date: trainDate,
-      }
-      users.push(row)
-      const rowAor = row.aor !== "UNK" ? row.aor : master.aor
-      if (VALID_AORS.has(rowAor)) {
-        if (!aorAgg[rowAor]) aorAgg[rowAor] = { users: [] }
-        aorAgg[rowAor].users.push(row)
-      }
+    const row: UserRow = {
+      period_month: periodMonth,
+      user_id:      uid,
+      username:     master.name || uid,
+      position:     master.position,
+      aor,
+      sub_aor:      ediInfo?.sub_aor || "",
+      rdm_name:     ediInfo?.rdm_name || "",
+      usage_days:   usageDays,
+      selling_days: sellingDays,
+      compliance_pct: compliance,
+      last_usage_date: lastDate,
+      trained:      0,  // training removed from new logic
+      training_date: null,
+      // extra fields for master enrichment
+      activity_count: usageDays,
+      master_name:    master.name,
+      master_position: master.position,
     }
-  } else {
-    // Fallback: use EDI only (old behavior — will give utilisasi ~100%)
-    for (const [uid, u] of userMap) {
-      if (!VALID_AORS.has(u.aor)) continue
-      const uniqueDays = u.dates.size
-      const compliancePct = sellingDays > 0 ? Math.round(uniqueDays / sellingDays * 1000) / 10 : 0
-      const lastDate = u.dates.size > 0 ? [...u.dates].sort().pop()! : null
-      const row: UserRow = {
-        period_month: periodMonth, user_id: uid, username: u.username,
-        position: u.position, aor: u.aor, sub_aor: u.sub_aor, rdm_name: u.rdm_name,
-        usage_days: uniqueDays, selling_days: sellingDays, compliance_pct: compliancePct,
-        last_usage_date: lastDate, trained: trainingMap.has(uid) ? 1 : 0,
-        training_date: trainingMap.get(uid) || null,
-      }
-      users.push(row)
-      if (!aorAgg[u.aor]) aorAgg[u.aor] = { users: [] }
-      aorAgg[u.aor].users.push(row)
+    users.push(row)
+
+    if (VALID_AORS.has(aor)) {
+      if (!aorAgg[aor]) aorAgg[aor] = { users: [] }
+      aorAgg[aor].users.push(row)
     }
   }
 
-  // ── 4. Build AreaRow list ──
-  const areas: AreaRow[] = Object.entries(aorAgg).map(([aor, { users: aUsers }]) => {
-    const total = aUsers.length
-    const trained = aUsers.filter(u => u.trained === 1).length
-    const active = aUsers.filter(u => u.usage_days > 0).length
-    const highCount = aUsers.filter(u => u.compliance_pct >= 91).length
-    const mediumCount = aUsers.filter(u => u.compliance_pct >= 51 && u.compliance_pct < 91).length
-    const lowCount = aUsers.filter(u => u.compliance_pct < 51).length
-    const avgComp = total ? Math.round(aUsers.reduce((s, u) => s + u.compliance_pct, 0) / total * 10) / 10 : 0
-    return {
-      period_month: periodMonth, aor, total_users: total, trained, active,
-      avg_compliance: avgComp, high_count: highCount, medium_count: mediumCount,
-      low_count: lowCount, pct_active: total ? Math.round(active / total * 1000) / 10 : 0,
-    }
-  })
+  // ── 6. AreaRows ──
+  const areas: AreaRow[] = Object.entries(aorAgg).map(([aor, { users: au }]) => ({
+    period_month: periodMonth, aor,
+    total_users:  au.length,
+    trained:      0,
+    active:       au.filter(u => u.usage_days > 0).length,
+    avg_compliance: au.length ? Math.round(au.reduce((s, u) => s + u.compliance_pct, 0) / au.length * 10) / 10 : 0,
+    high_count:   au.filter(u => u.compliance_pct >= 91).length,
+    medium_count: au.filter(u => u.compliance_pct >= 51 && u.compliance_pct < 91).length,
+    low_count:    au.filter(u => u.compliance_pct < 51).length,
+    pct_active:   au.length ? Math.round(au.filter(u => u.usage_days > 0).length / au.length * 1000) / 10 : 0,
+  }))
 
-  // ── 5. Snapshot ──
-  const totalUsers  = users.length  // = masterMap.size filtered by valid AOR
-  const totalTrained = users.filter(u => u.trained === 1).length
-  const totalActive  = users.filter(u => u.usage_days > 0).length  // utilisasi numerator
-  const totalHigh = users.filter(u => u.compliance_pct >= 91).length
-  const totalMedium = users.filter(u => u.compliance_pct >= 51 && u.compliance_pct < 91).length
-  const totalLow = users.filter(u => u.compliance_pct < 51).length
+  // ── 7. Snapshot ──
+  const totalUsers    = users.length
+  const totalActive   = users.filter(u => u.usage_days > 0).length
   const avgCompliance = totalUsers ? Math.round(users.reduce((s, u) => s + u.compliance_pct, 0) / totalUsers * 10) / 10 : 0
 
   const snapshot: SnapshotRow = {
-    period_label: periodLabel, period_month: periodMonth, as_of_date: asOfDate,
-    selling_days: sellingDays, total_users: totalUsers, total_trained: totalTrained,
-    total_active: totalActive, total_high: totalHigh, total_medium: totalMedium,
-    total_low: totalLow, avg_compliance: avgCompliance,
-    pct_trained: totalUsers ? Math.round(totalTrained / totalUsers * 1000) / 10 : 0,
-    pct_active: totalUsers ? Math.round(totalActive / totalUsers * 1000) / 10 : 0,
+    period_label: periodLabel, period_month: periodMonth, as_of_date: maxDate,
+    selling_days: sellingDays, total_users: totalUsers, total_trained: 0,
+    total_active: totalActive,
+    total_high:   users.filter(u => u.compliance_pct >= 91).length,
+    total_medium: users.filter(u => u.compliance_pct >= 51 && u.compliance_pct < 91).length,
+    total_low:    users.filter(u => u.compliance_pct < 51).length,
+    avg_compliance: avgCompliance,
+    pct_trained:  0,
+    pct_active:   totalUsers ? Math.round(totalActive / totalUsers * 1000) / 10 : 0,
     total_ads: totalAds, total_lp: totalLp,
   }
 
   return {
     snapshot, areas, users,
-    summary: { period_label: periodLabel, period_month: periodMonth, as_of_date: asOfDate, selling_days: sellingDays, total_users: totalUsers, total_trained: totalTrained }
+    summary: { period_label: periodLabel, period_month: periodMonth, as_of_date: maxDate, selling_days: sellingDays, total_users: totalUsers, total_trained: 0 }
   }
+}
+
+function getAreaFromName(nm: string): string {
+  const g = nm.toUpperCase()
+  if (["EVIS","WVIS","CVIS","VIS"].some(x => g.includes(x))) return "VIS"
+  if (["USOL","MSOL","LSOL","SOL"].some(x => g.includes(x))) return "SOL"
+  if (["WNOL","CNOL","ENOL","NOL"].some(x => g.includes(x))) return "NOL"
+  if (["NMIN","SMIN","WMIN","MIN"].some(x => g.includes(x))) return "MIN"
+  if (["EGMA","SGMA","NGMA","GMA"].some(x => g.includes(x))) return "GMA"
+  return "UNK"
 }
 
 // ── Upload to Supabase ─────────────────────────────────────────
@@ -335,13 +283,199 @@ async function uploadFicomToSupabase(data: ParsedFicomData, onProgress: (msg: st
   onProgress("🎉 All Ficom data uploaded successfully!")
 }
 
+// ── Ficom Data Viewer ──────────────────────────────────────────
+function FicomDataViewer({ refreshKey }: { refreshKey: number }) {
+  const [periods, setPeriods]     = useState<string[]>([])
+  const [selPeriod, setSelPeriod] = useState("")
+  const [users, setUsers]         = useState<UserRow[]>([])
+  const [loading, setLoading]     = useState(false)
+  const [search, setSearch]       = useState("")
+  const [posFilter, setPosFilter] = useState("ALL")
+  const [statusFilter, setStatusFilter] = useState("ALL")
+  const [deleting, setDeleting]   = useState<string | null>(null)
+
+  // Load available periods
+  useEffect(() => {
+    supabase.from("ficom_snapshots").select("period_month, period_label").order("period_month", { ascending: false })
+      .then(({ data }) => {
+        if (data?.length) {
+          const opts = data.map(d => d.period_month as string)
+          setPeriods(opts)
+          setSelPeriod(opts[0])
+        }
+      })
+  }, [refreshKey])
+
+  // Load users for selected period
+  useEffect(() => {
+    if (!selPeriod) return
+    setLoading(true)
+    supabase.from("ficom_users").select("*").eq("period_month", selPeriod).order("aor").order("username")
+      .then(({ data }) => { setUsers((data ?? []) as UserRow[]); setLoading(false) })
+  }, [selPeriod])
+
+  const filtered = useMemo(() => users.filter(u => {
+    const q = search.toLowerCase()
+    const mQ = !q || u.user_id.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)
+    const mP = posFilter === "ALL" || u.position === posFilter
+    const mS = statusFilter === "ALL" || (statusFilter === "ACTIVE" ? u.usage_days > 0 : u.usage_days === 0)
+    return mQ && mP && mS
+  }), [users, search, posFilter, statusFilter])
+
+  const deleteUser = async (userId: string) => {
+    if (!confirm(`Hapus user ${userId} dari periode ${selPeriod}?`)) return
+    setDeleting(userId)
+    await supabase.from("ficom_users").delete().eq("period_month", selPeriod).eq("user_id", userId)
+    setUsers(p => p.filter(u => u.user_id !== userId))
+    setDeleting(null)
+  }
+
+  const deletePeriod = async () => {
+    if (!confirm(`Hapus SEMUA data periode ${selPeriod}? Ini juga akan hapus snapshot & area data.`)) return
+    await Promise.all([
+      supabase.from("ficom_users").delete().eq("period_month", selPeriod),
+      supabase.from("ficom_areas").delete().eq("period_month", selPeriod),
+      supabase.from("ficom_snapshots").delete().eq("period_month", selPeriod),
+    ])
+    setPeriods(p => p.filter(x => x !== selPeriod))
+    setUsers([])
+    setSelPeriod(prev => periods.find(p => p !== prev) ?? "")
+  }
+
+  const activeCount = users.filter(u => u.usage_days > 0).length
+  const utilisasi = users.length ? Math.round(activeCount / users.length * 100) : 0
+  const AOR_COLORS: Record<string,string> = { GMA:"#F97316",MIN:"#3B82F6",NOL:"#22C55E",SOL:"#EF4444",VIS:"#A855F7" }
+  const compColor = (p: number) => p >= 91 ? "#22C55E" : p >= 51 ? "#F97316" : "#EF4444"
+
+  if (!periods.length) return (
+    <div className="card" style={{ padding: "24px", textAlign: "center", color: "var(--text3)" }}>
+      <div style={{ fontSize: 28, marginBottom: 8 }}>📭</div>
+      <div style={{ fontWeight: 600 }}>Belum ada data tersimpan</div>
+      <div style={{ fontSize: 12, marginTop: 4 }}>Upload EDI di atas untuk mulai menyimpan data</div>
+    </div>
+  )
+
+  return (
+    <div className="card" style={{ overflow: "hidden" }}>
+      {/* Header */}
+      <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "var(--surface)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--text)" }}>📋 Data Tersimpan — Ficom</div>
+
+        {/* Period selector */}
+        <div style={{ position: "relative" }}>
+          <select value={selPeriod} onChange={e => setSelPeriod(e.target.value)}
+            className="input" style={{ fontSize: 12, paddingRight: 28, width: "auto", minWidth: 140 }}>
+            {periods.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+
+        {/* Summary pills */}
+        {!loading && users.length > 0 && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, background: "#FFF3E0", color: "#FB8C00" }}>
+              {activeCount}/{users.length} aktif
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 99, background: utilisasi >= 80 ? "#ECFDF5" : utilisasi >= 60 ? "#FEF3C7" : "#FEF2F2", color: utilisasi >= 80 ? "#16a34a" : utilisasi >= 60 ? "#92400E" : "#dc2626" }}>
+              {utilisasi}% utilisasi
+            </span>
+          </div>
+        )}
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Search */}
+          <div style={{ position: "relative" }}>
+            <Search size={12} style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--text3)" }} />
+            <input className="input" placeholder="Search WF / name…" value={search} onChange={e => setSearch(e.target.value)}
+              style={{ paddingLeft: 26, fontSize: 11, width: 160 }} />
+          </div>
+          <select className="input" style={{ fontSize: 11, width: "auto" }} value={posFilter} onChange={e => setPosFilter(e.target.value)}>
+            <option value="ALL">All Position</option>
+            {["ADM","ADS","RDM"].map(p => <option key={p}>{p}</option>)}
+          </select>
+          <select className="input" style={{ fontSize: 11, width: "auto" }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+            <option value="ALL">All Status</option>
+            <option value="ACTIVE">Aktif</option>
+            <option value="INACTIVE">Tidak Aktif</option>
+          </select>
+          <button onClick={deletePeriod}
+            style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "5px 12px", cursor: "pointer", color: "#dc2626", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+            <Trash2 size={12} /> Hapus Periode
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+            <tr style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+              {["No","User ID","Username","Position","AOR","Usage Days","Selling Days","Compliance","Status",""].map(h => (
+                <th key={h} style={{ padding: "8px 11px", textAlign: "left", fontSize: 10, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.07em", whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={10} style={{ padding: "32px", textAlign: "center", color: "var(--text3)" }}>
+                <RefreshCw size={16} style={{ animation: "spin 1s linear infinite", display: "inline", marginRight: 8 }} />Loading…
+              </td></tr>
+            ) : filtered.length === 0 ? (
+              <tr><td colSpan={10} style={{ padding: "24px", textAlign: "center", color: "var(--text3)" }}>No data found</td></tr>
+            ) : filtered.map((u, i) => {
+              const aorCol = AOR_COLORS[u.aor] ?? "#888"
+              const cp     = u.compliance_pct
+              return (
+                <tr key={u.user_id} style={{ borderBottom: "1px solid var(--border)", background: u.usage_days > 0 ? "transparent" : "var(--surface2)" }}>
+                  <td style={{ padding: "8px 11px", color: "var(--text3)", fontSize: 11 }}>{i + 1}</td>
+                  <td style={{ padding: "8px 11px", fontFamily: "monospace", fontWeight: 700, color: "var(--accent)", fontSize: 11 }}>{u.user_id}</td>
+                  <td style={{ padding: "8px 11px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.username}</td>
+                  <td style={{ padding: "8px 11px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: "var(--surface3)", color: "var(--text2)" }}>{u.position}</span>
+                  </td>
+                  <td style={{ padding: "8px 11px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 99, background: `${aorCol}18`, color: aorCol }}>{u.aor || "—"}</span>
+                  </td>
+                  <td style={{ padding: "8px 11px", fontWeight: 700, color: u.usage_days > 0 ? "var(--text)" : "var(--text3)" }}>{u.usage_days}</td>
+                  <td style={{ padding: "8px 11px", color: "var(--text3)" }}>{u.selling_days}</td>
+                  <td style={{ padding: "8px 11px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ width: 40, height: 5, background: "var(--surface3)", borderRadius: 99, overflow: "hidden", flexShrink: 0 }}>
+                        <div style={{ height: "100%", width: `${Math.min(cp, 100)}%`, background: compColor(cp), borderRadius: 99 }} />
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: compColor(cp) }}>{cp}%</span>
+                    </div>
+                  </td>
+                  <td style={{ padding: "8px 11px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: u.usage_days > 0 ? "#16a34a" : "#9CA3AF" }}>
+                      {u.usage_days > 0 ? "● Aktif" : "○ Tidak Aktif"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "8px 11px" }}>
+                    <button onClick={() => deleteUser(u.user_id)} disabled={deleting === u.user_id}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", opacity: deleting === u.user_id ? 0.5 : 0.6, padding: "3px 6px", borderRadius: 6 }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = "1"} onMouseLeave={e => e.currentTarget.style.opacity = "0.6"}>
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: "8px 14px", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--text3)", display: "flex", justifyContent: "space-between" }}>
+        <span>Showing {filtered.length} of {users.length} users</span>
+        <span style={{ color: "var(--text3)" }}>Period: {selPeriod}</span>
+      </div>
+    </div>
+  )
+}
+
 // ── MAIN PAGE ─────────────────────────────────────────────────
 export default function FicomUploadPage() {
   const ediRef = useRef<HTMLInputElement>(null)
-  const trRef = useRef<HTMLInputElement>(null)
   const [ediFile,    setEdiFile]    = useState<File | null>(null)
-  const [trFile,     setTrFile]     = useState<File | null>(null)
-  const [masterFile, setMasterFile] = useState<File | null>(null) // optional m_master
+  const [masterFile, setMasterFile] = useState<File | null>(null)
   const [parsed, setParsed] = useState<ParsedFicomData | null>(null)
   const [parsing, setParsing] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -349,21 +483,34 @@ export default function FicomUploadPage() {
   const [error, setError] = useState("")
   const [done, setDone] = useState(false)
   const [dragOverEdi, setDragOverEdi] = useState(false)
-  const [dragOverTr, setDragOverTr] = useState(false)
+  const [dupWarning, setDupWarning] = useState("")   // ← duplicate warning
+  const [viewerKey, setViewerKey]   = useState(0)   // ← refresh viewer after upload
 
-  const handleFiles = useCallback(async (edi: File, tr: File, master?: File | null) => {
+  const handleFiles = useCallback(async (edi: File, master?: File | null) => {
     setError(""); setParsed(null); setDone(false); setProgress([])
     setParsing(true)
     try {
-      const data = await parseFicomExcels(edi, tr, msg => setProgress(p => [...p, msg]), master)
+      const data = await parseFicomExcels(edi, msg => setProgress(p => [...p, msg]), master)
       setParsed(data)
+
+      // ── Duplicate check ──────────────────────────────────────
+      const { data: existing } = await supabase
+        .from("ficom_snapshots")
+        .select("period_month, period_label, as_of_date")
+        .eq("period_month", data.summary.period_month)
+        .maybeSingle()
+      if (existing) {
+        setDupWarning(`⚠️ Data periode ${existing.period_month} (${existing.period_label}) sudah ada — as of ${existing.as_of_date}. Klik Upload untuk overwrite, atau Reset untuk batal.`)
+      } else {
+        setDupWarning("")
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal parse file")
     } finally { setParsing(false) }
   }, [])
 
-  const tryParse = useCallback((edi: File | null, tr: File | null, master?: File | null) => {
-    if (edi && tr) handleFiles(edi, tr, master)
+  const tryParse = useCallback((edi: File | null, master?: File | null) => {
+    if (edi) handleFiles(edi, master)
   }, [handleFiles])
 
   const handleUpload = async () => {
@@ -372,12 +519,14 @@ export default function FicomUploadPage() {
     try {
       await uploadFicomToSupabase(parsed, msg => setProgress(p => [...p, msg]))
       setDone(true)
+      setViewerKey(k => k + 1)   // refresh data viewer
+      setDupWarning("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload gagal")
     } finally { setUploading(false) }
   }
 
-  const reset = () => { setEdiFile(null); setTrFile(null); setMasterFile(null); setParsed(null); setProgress([]); setError(""); setDone(false) }
+  const reset = () => { setEdiFile(null); setMasterFile(null); setParsed(null); setProgress([]); setError(""); setDone(false); setDupWarning("") }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
@@ -393,130 +542,39 @@ export default function FicomUploadPage() {
             <h1 style={{ fontSize: "20px", fontWeight: 800, color: "var(--text)", letterSpacing: "-0.02em" }}>Ficom Data Upload</h1>
           </div>
           <p style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "42px" }}>
-            Upload 2 file Excel → parse compliance → update landing page Ficom
+            Upload EDI Log Activity → cross-check dengan MASTERDATAPHI → update landing Ficom
           </p>
         </div>
-        <a href="/landing/utilisation" target="_blank">
+        <a href="/landing/ficom" target="_blank">
           <button className="btn btn-ghost"><Eye size={14} /> Preview Landing</button>
         </a>
       </div>
 
-      {/* Flow */}
-      <div className="card" style={{ padding: "16px 20px" }}>
-        <div style={{ display: "flex", gap: "0", alignItems: "center", flexWrap: "wrap" }}>
-          {[
-            { icon: <FileSpreadsheet size={20} color="#FB8C00" />, label: "EDI Usage", sub: "MasterDataFiicom_EDI.xlsx" },
-            { icon: "+", label: "", sub: "" },
-            { icon: <FileSpreadsheet size={20} color="#43A047" />, label: "Training", sub: "Ficom_Usage-_26Pxx_xxx.xlsx (ada sheet Training Sched)" },
-            { icon: <ArrowRight size={18} color="var(--text3)" />, label: "", sub: "" },
-            { icon: "⚙️", label: "Parse & Calc", sub: "Compliance %" },
-            { icon: <ArrowRight size={18} color="var(--text3)" />, label: "", sub: "" },
-            { icon: <Database size={20} color="#1E88E5" />, label: "Supabase", sub: "3 tables" },
-            { icon: <ArrowRight size={18} color="var(--text3)" />, label: "", sub: "" },
-            { icon: "🌐", label: "Landing", sub: "Ficom tab" },
-          ].map((s, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: "4px", padding: "6px 10px" }}>
-              {s.icon === "+" || s.icon === "⚙️" || s.icon === "🌐"
-                ? <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: s.icon === "+" ? "20px" : "18px", color: s.icon === "+" ? "#bbb" : "inherit" }}>{s.icon}</div>
-                    {s.label && <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text)" }}>{s.label}</div>}
-                    {s.sub && <div style={{ fontSize: "9px", color: "var(--text3)" }}>{s.sub}</div>}
-                  </div>
-                : s.label === ""
-                  ? <span>{s.icon}</span>
-                  : <div style={{ textAlign: "center" }}>
-                      <div style={{ display: "flex", justifyContent: "center", marginBottom: "2px" }}>{s.icon}</div>
-                      <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text)" }}>{s.label}</div>
-                      <div style={{ fontSize: "9px", color: "var(--text3)" }}>{s.sub}</div>
-                    </div>
-              }
-            </div>
-          ))}
+      {/* Info */}
+      <div className="card" style={{ padding: "14px 16px", background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)" }}>
+        <div style={{ fontSize: "11px", fontWeight: 700, color: "#16A34A", marginBottom: "6px" }}>✅ Logic Baru — Master dari MASTERDATAPHI (Supabase)</div>
+        <div style={{ fontSize: "11px", color: "var(--text2)", lineHeight: 1.7 }}>
+          <strong>Denominator</strong> = ADM + RDM dari <code>utilisasi_master_users</code> (~113 users aktif) — ADS tidak dihitung karena tidak bisa akses Ficom<br/>
+          <strong>Numerator</strong> = user yang muncul di EDI Log Activity (aktif login)<br/>
+          <strong>Compliance</strong> = usage_days ÷ selling_days × 100
         </div>
       </div>
 
-      {/* CRITICAL: file instructions */}
-      <div className="card" style={{ padding: "14px 16px", background: "rgba(239,68,68,0.06)", border: "1.5px solid rgba(239,68,68,0.35)" }}>
-        <div style={{ fontSize: "12px", fontWeight: 700, color: "#DC2626", marginBottom: "8px" }}>⚠️ File yang Harus Diupload (Penting!)</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: "10px", fontSize: "11px" }}>
-          <div style={{ background: "rgba(251,140,0,0.08)", borderRadius: "8px", padding: "10px 12px", border: "1px solid rgba(251,140,0,0.2)" }}>
-            <div style={{ fontWeight: 700, color: "#FB8C00", marginBottom: "4px" }}>📁 File 1 — EDI Usage Log</div>
-            <div style={{ color: "var(--text2)", lineHeight: 1.6 }}>
-              <code>MasterDataFiicom_EDI.xlsx</code><br/>
-              → Siapa yang sudah aktif login ke Ficom (pembilang utilisasi)
-            </div>
-          </div>
-          <div style={{ background: "rgba(239,68,68,0.08)", borderRadius: "8px", padding: "10px 12px", border: "1px solid rgba(239,68,68,0.25)" }}>
-            <div style={{ fontWeight: 700, color: "#DC2626", marginBottom: "4px" }}>📁 File 2 — Master User (WAJIB BENAR!)</div>
-            <div style={{ color: "var(--text2)", lineHeight: 1.6 }}>
-              <code style={{ color: "#DC2626" }}>Ficom_Usage-_26Pxx_xxx.xlsx</code><br/>
-              Bukan MasterDataFiicom_training.xlsx!<br/>
-              → Harus ada sheet <strong>"Training Sched"</strong> (113 ADM/RDM)<br/>
-              → Utilisasi = File1 users ÷ File2 total
-            </div>
-          </div>
+      {/* EDI upload */}
+      <div className="card" style={{ padding: "18px" }}>
+        <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "linear-gradient(135deg,#FB8C00,#FFB74D)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 900, color: "white" }}>1</div>
+          EDI Log Activity (CSV atau XLSX)
         </div>
-        <div style={{ marginTop: "8px", fontSize: "10px", color: "#DC2626", fontWeight: 600 }}>
-          ❌ Jika File 2 salah → utilisasi akan muncul 100% (karena master = aktif, circular logic)
-        </div>
-      </div>
-
-      {/* File uploads side by side */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "16px" }}>
-        {/* EDI File */}
-        <div className="card" style={{ padding: "18px" }}>
-          <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "linear-gradient(135deg,#FB8C00,#FFB74D)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 900, color: "white" }}>1</div>
-            EDI Usage Log
-          </div>
-          <div onDrop={e => { e.preventDefault(); setDragOverEdi(false); const f = e.dataTransfer.files[0]; if (f) { setEdiFile(f); tryParse(f, trFile, masterFile) } }}
-            onDragOver={e => { e.preventDefault(); setDragOverEdi(true) }}
-            onDragLeave={() => setDragOverEdi(false)}
-            onClick={() => ediRef.current?.click()}
-            style={{ border: `2px dashed ${dragOverEdi ? "#FB8C00" : ediFile ? "var(--border)" : "var(--border2)"}`, borderRadius: "var(--radius-sm)", padding: "24px", textAlign: "center", cursor: "pointer", background: dragOverEdi ? "rgba(251,140,0,0.06)" : "var(--surface2)", transition: "all 0.2s" }}>
-            <input ref={ediRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) { setEdiFile(f); tryParse(f, trFile, masterFile) }; e.target.value = "" }} />
-            {ediFile
-              ? <div><FileSpreadsheet size={24} color="#FB8C00" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontWeight: 700, fontSize: "12px", color: "var(--text)" }}>{ediFile.name}</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>{(ediFile.size / 1024 / 1024).toFixed(2)} MB</div></div>
-              : <div><Upload size={24} color="var(--text3)" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)" }}>MasterDataFiicom_EDI.xlsx</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>EDI log activity · kolom: AOR, User ID, Username, Date of Usage</div></div>
-            }
-          </div>
-        </div>
-
-        {/* Training File */}
-        <div className="card" style={{ padding: "18px" }}>
-          <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
-            <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "linear-gradient(135deg,#43A047,#66BB6A)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 900, color: "white" }}>2</div>
-            Ficom Usage xlsx (master)
-          </div>
-          <div onDrop={e => { e.preventDefault(); setDragOverTr(false); const f = e.dataTransfer.files[0]; if (f) { setTrFile(f); tryParse(ediFile, f, masterFile) } }}
-            onDragOver={e => { e.preventDefault(); setDragOverTr(true) }}
-            onDragLeave={() => setDragOverTr(false)}
-            onClick={() => trRef.current?.click()}
-            style={{ border: `2px dashed ${dragOverTr ? "#43A047" : trFile ? "var(--border)" : "var(--border2)"}`, borderRadius: "var(--radius-sm)", padding: "24px", textAlign: "center", cursor: "pointer", background: dragOverTr ? "rgba(67,160,71,0.06)" : "var(--surface2)", transition: "all 0.2s" }}>
-            <input ref={trRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) { setTrFile(f); tryParse(ediFile, f, masterFile) }; e.target.value = "" }} />
-            {trFile
-              ? <div><FileSpreadsheet size={24} color="#43A047" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontWeight: 700, fontSize: "12px", color: "var(--text)" }}>{trFile.name}</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>{(trFile.size / 1024 / 1024).toFixed(2)} MB</div></div>
-              : <div><Upload size={24} color="var(--text3)" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)" }}>MasterDataFiicom_training.xlsx</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>Training sched · kolom: User ID + Training Date</div></div>
-            }
-          </div>
-        </div>
-      </div>
-
-      {/* m_master File (optional) */}
-      <div className="card" style={{ padding: "18px", opacity: 0.9 }}>
-        <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
-          <div style={{ width: "20px", height: "20px", borderRadius: "50%", background: "linear-gradient(135deg,#F97316,#FB923C)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 900, color: "white" }}>3</div>
-          Master Data ADS/LP <span style={{ fontSize: "10px", fontWeight: 400, color: "var(--text3)", background: "var(--surface2)", padding: "2px 8px", borderRadius: "99px", marginLeft: "4px" }}>Optional</span>
-        </div>
-        <p style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "12px", marginLeft: "28px" }}>
-          Upload <strong>MasterDataFiicom_m_master.xlsx</strong> untuk menampilkan jumlah ADS & LP di hero section
-        </p>
-        <div
-          onClick={() => { const i = document.createElement("input"); i.type="file"; i.accept=".xlsx,.xls"; i.onchange=(e)=>{ const f=(e.target as HTMLInputElement).files?.[0]; if(f){setMasterFile(f); tryParse(ediFile,trFile,f)} }; i.click() }}
-          style={{ border: `2px dashed ${masterFile ? "var(--border)" : "var(--border2)"}`, borderRadius: "var(--radius-sm)", padding: "16px", textAlign: "center", cursor: "pointer", background: "var(--surface2)", transition: "all 0.2s" }}>
-          {masterFile
-            ? <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)" }}>✅ {masterFile.name} · {(masterFile.size/1024).toFixed(0)} KB</div>
-            : <div style={{ fontSize: "12px", color: "var(--text3)" }}>📂 Click to upload m_master (optional) — columns: SPV ID, Type (ADS/LP)</div>
+        <div onDrop={e => { e.preventDefault(); setDragOverEdi(false); const f = e.dataTransfer.files[0]; if (f) { setEdiFile(f); tryParse(f, masterFile) } }}
+          onDragOver={e => { e.preventDefault(); setDragOverEdi(true) }}
+          onDragLeave={() => setDragOverEdi(false)}
+          onClick={() => ediRef.current?.click()}
+          style={{ border: `2px dashed ${dragOverEdi ? "#FB8C00" : ediFile ? "var(--border)" : "var(--border2)"}`, borderRadius: "var(--radius-sm)", padding: "24px", textAlign: "center", cursor: "pointer", background: dragOverEdi ? "rgba(251,140,0,0.06)" : "var(--surface2)", transition: "all 0.2s" }}>
+          <input ref={ediRef} type="file" accept=".csv,.xlsx,.xls" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) { setEdiFile(f); tryParse(f, masterFile) }; e.target.value = "" }} />
+          {ediFile
+            ? <div><FileSpreadsheet size={24} color="#FB8C00" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontWeight: 700, fontSize: "12px", color: "var(--text)" }}>{ediFile.name}</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>{(ediFile.size / 1024 / 1024).toFixed(2)} MB</div></div>
+            : <div><Upload size={24} color="var(--text3)" style={{ margin: "0 auto 8px", display: "block" }} /><div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)" }}>EDI_Log_Activity_Detail_brt.csv</div><div style={{ fontSize: "11px", color: "var(--text3)" }}>Pipe-delimited CSV atau XLSX · kolom username = WFxxxx</div></div>
           }
         </div>
       </div>
@@ -524,7 +582,7 @@ export default function FicomUploadPage() {
       {parsing && (
         <div className="card" style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: "12px" }}>
           <RefreshCw size={18} color="var(--accent)" style={{ animation: "spin 1s linear infinite", flexShrink: 0 }} />
-          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>Parsing & calculating compliance...</div>
+          <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>Parsing & cross-checking master...</div>
           <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", gap: "4px", maxHeight: "80px", overflowY: "auto" }}>
             {progress.map((p, i) => <div key={i} style={{ fontSize: "11px", color: "var(--text3)" }}>{p}</div>)}
           </div>
@@ -537,46 +595,37 @@ export default function FicomUploadPage() {
         </div>
       )}
 
+      {/* Duplicate warning */}
+      {dupWarning && (
+        <div style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: "10px", padding: "12px 16px", fontSize: "12px", color: "#92400E", display: "flex", gap: "10px", alignItems: "flex-start" }}>
+          <TriangleAlert size={16} style={{ flexShrink: 0, marginTop: 1, color: "#F59E0B" }} />
+          <div>{dupWarning}</div>
+        </div>
+      )}
+
       {/* Preview */}
       {parsed && !done && (
         <div className="card" style={{ padding: "20px" }}>
           <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "16px" }}>📊 Preview Data Hasil Parse</div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: "12px", marginBottom: "16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "10px", marginBottom: "16px" }}>
             {[
-              { l: "Period", v: parsed.summary.period_label, c: "var(--accent)" },
-              { l: "As of Date", v: parsed.summary.as_of_date, c: "var(--accent)" },
-              { l: "Selling Days", v: parsed.summary.selling_days.toString(), c: "#FB8C00" },
-              { l: "Total Users", v: parsed.summary.total_users.toLocaleString(), c: "var(--text)" },
-              { l: "Trained", v: parsed.summary.total_trained.toString(), c: "#43A047" },
-              { l: "Avg Compliance", v: `${parsed.snapshot.avg_compliance}%`, c: "#1E88E5" },
+              { l: "Period",       v: parsed.summary.period_label,              c: "var(--accent)" },
+              { l: "As of Date",   v: parsed.summary.as_of_date,               c: "var(--accent)" },
+              { l: "Selling Days", v: parsed.summary.selling_days.toString(),   c: "#FB8C00" },
+              { l: "Total Users",  v: parsed.summary.total_users.toLocaleString(), c: "var(--text)" },
+              { l: "Aktif",        v: parsed.snapshot.total_active.toString(),  c: "#43A047" },
+              { l: "Utilisasi",    v: `${parsed.snapshot.pct_active}%`,         c: "#1E88E5" },
+              { l: "Avg Compliance", v: `${parsed.snapshot.avg_compliance}%`,  c: "#7C3AED" },
             ].map((s, i) => (
-              <div key={i} style={{ background: "var(--surface2)", borderRadius: "12px", padding: "14px" }}>
-                <div style={{ fontSize: "10px", color: "var(--text3)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px" }}>{s.l}</div>
-                <div style={{ fontSize: "20px", fontWeight: 900, color: s.c, fontFamily: "'Bricolage Grotesque',sans-serif", lineHeight: 1 }}>{s.v}</div>
+              <div key={i} style={{ background: "var(--surface2)", borderRadius: "10px", padding: "12px 14px" }}>
+                <div style={{ fontSize: "9px", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "5px" }}>{s.l}</div>
+                <div style={{ fontSize: "18px", fontWeight: 900, color: s.c, lineHeight: 1 }}>{s.v}</div>
               </div>
             ))}
           </div>
-
-          {/* Area breakdown preview */}
-          <div style={{ marginBottom: "16px" }}>
-            <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text2)", marginBottom: "8px" }}>Compliance by Area:</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "8px" }}>
-              {parsed.areas.sort((a, b) => b.avg_compliance - a.avg_compliance).map((a, i) => (
-                <div key={i} style={{ background: "var(--surface2)", borderRadius: "10px", padding: "10px 12px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                    <span style={{ fontSize: "12px", fontWeight: 700 }}>{a.aor}</span>
-                    <span style={{ fontSize: "12px", fontWeight: 800, color: a.avg_compliance >= 80 ? "#43A047" : a.avg_compliance >= 60 ? "#FB8C00" : "#E8381A" }}>{a.avg_compliance}%</span>
-                  </div>
-                  <div style={{ fontSize: "10px", color: "var(--text3)" }}>{a.total_users} users · ≥91%: {a.high_count} · &lt;50%: {a.low_count}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <div style={{ display: "flex", gap: "10px" }}>
-            <button className="btn btn-primary" onClick={handleUpload} disabled={uploading} style={{ fontSize: "14px", padding: "12px 28px" }}>
-              {uploading ? <><RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={15} /> Upload ke Supabase</>}
+            <button className="btn btn-primary" onClick={handleUpload} disabled={uploading} style={{ fontSize: "14px", padding: "10px 24px" }}>
+              {uploading ? <><RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={15} /> {dupWarning ? "Overwrite & Upload" : "Upload ke Supabase"}</>}
             </button>
             <button className="btn btn-ghost" onClick={reset}><Trash2 size={14} /> Reset</button>
           </div>
@@ -585,9 +634,9 @@ export default function FicomUploadPage() {
 
       {/* Upload progress */}
       {progress.length > 0 && !parsing && (
-        <div className="card" style={{ padding: "20px" }}>
-          <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "12px" }}>Progress Upload</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <div className="card" style={{ padding: "16px 20px" }}>
+          <div style={{ fontWeight: 700, fontSize: "13px", marginBottom: "10px" }}>Progress Upload</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
             {progress.map((p, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: p.startsWith("✅") || p.startsWith("🎉") ? "#43A047" : p.startsWith("❌") ? "#E8381A" : "var(--text2)" }}>
                 {p.startsWith("✅") || p.startsWith("🎉") ? <CheckCircle size={13} color="#43A047" /> : p.startsWith("❌") ? <AlertCircle size={13} color="#E8381A" /> : <RefreshCw size={13} color="var(--accent)" style={{ animation: "spin 1s linear infinite" }} />}
@@ -600,24 +649,30 @@ export default function FicomUploadPage() {
 
       {/* Success */}
       {done && (
-        <div className="card" style={{ padding: "24px", background: "var(--success-bg)", border: "1px solid var(--success)" }}>
+        <div className="card" style={{ padding: "20px", background: "var(--success-bg)", border: "1px solid var(--success)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <CheckCircle size={28} color="var(--success)" />
+            <CheckCircle size={24} color="var(--success)" />
             <div>
-              <div style={{ fontWeight: 800, fontSize: "16px", color: "var(--success)", marginBottom: "4px" }}>Ficom data berhasil diupload! 🎉</div>
-              <div style={{ fontSize: "12px", color: "var(--text2)" }}>
-                {parsed?.summary.total_users} users · {parsed?.summary.period_label} · Avg compliance {parsed?.snapshot.avg_compliance}%
+              <div style={{ fontWeight: 800, fontSize: "15px", color: "var(--success)" }}>Ficom data berhasil diupload! 🎉</div>
+              <div style={{ fontSize: "12px", color: "var(--text2)", marginTop: 2 }}>
+                {parsed?.summary.total_users} users · {parsed?.summary.period_label} · Utilisasi {parsed?.snapshot.pct_active}%
               </div>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
-            <a href="/landing/utilisation" target="_blank">
+          <div style={{ display: "flex", gap: "10px", marginTop: "14px" }}>
+            <a href="/landing/ficom" target="_blank">
               <button className="btn btn-primary"><Eye size={14} /> Lihat Landing Ficom</button>
             </a>
             <button className="btn btn-ghost" onClick={reset}>Upload Periode Baru</button>
           </div>
         </div>
       )}
+
+      {/* ── Data Viewer ── */}
+      <div style={{ borderTop: "2px solid var(--border)", paddingTop: 20 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: "var(--text)", marginBottom: 14 }}>📂 Data Tersimpan & Maintenance</div>
+        <FicomDataViewer refreshKey={viewerKey} />
+      </div>
 
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>

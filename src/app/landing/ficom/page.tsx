@@ -39,18 +39,36 @@ const compColor = (p: number) => p >= 91 ? "#22C55E" : p >= 71 ? "#84CC16" : p >
 const compBg    = (p: number) => p >= 91 ? "#052e16" : p >= 71 ? "#1a2e05" : p >= 51 ? "#431407" : "#450a0a"
 
 async function fetchFicomData() {
-  const [snap, areas, users] = await Promise.all([
+  const [snap, areas, users, master] = await Promise.all([
     supabase.from("ficom_snapshots").select("*").order("period_month"),
     supabase.from("ficom_areas").select("*").order("period_month"),
     supabase.from("ficom_users").select("*").order("username"),
+    supabase.from("utilisasi_master_users").select("user_login, aor, sub_aor"),
   ])
   if (snap.error) throw snap.error
   if (areas.error) throw areas.error
   if (users.error) throw users.error
+
+  // Build master AOR lookup: user_login -> { aor, sub_aor }
+  const masterAOR = new Map<string, { aor: string; sub_aor: string }>()
+  for (const m of master.data ?? []) {
+    masterAOR.set(m.user_login.toUpperCase(), { aor: m.aor ?? "", sub_aor: m.sub_aor ?? "" })
+  }
+
+  // Enrich ficom_users with correct AOR from master (overrides EDI AOR)
+  const enrichedUsers = (users.data ?? []).map(u => {
+    const m = masterAOR.get((u.user_id ?? "").toUpperCase())
+    return {
+      ...u,
+      aor:     (m?.aor     && m.aor     !== "") ? m.aor     : (u.aor     ?? ""),
+      sub_aor: (m?.sub_aor && m.sub_aor !== "") ? m.sub_aor : (u.sub_aor ?? ""),
+    }
+  })
+
   return {
     snapshots: (snap.data||[]) as FicomSnapshot[],
     areas:     (areas.data||[]) as FicomArea[],
-    users:     (users.data||[]) as FicomUser[],
+    users:     enrichedUsers as FicomUser[],
   }
 }
 
@@ -232,7 +250,8 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
               {l:"≥91%",     v:users.filter(u=>u.compliance_pct>=91).length,   c:"#22C55E", bg:"rgba(34,197,94,0.12)"},
               {l:"51–90%",   v:users.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length, c:"#F97316", bg:"rgba(249,115,22,0.12)"},
               {l:"<50%",     v:users.filter(u=>u.compliance_pct<51).length,    c:"#EF4444", bg:"rgba(239,68,68,0.12)"},
-              {l:"Trained ✅",v:users.filter(u=>u.trained===1).length,          c:col,       bg:`${col}15`},
+              {l:"ADM",      v:users.filter(u=>u.position==="ADM").length,     c:"#F97316", bg:"rgba(249,115,22,0.12)"},
+              {l:"RDM",      v:users.filter(u=>u.position==="RDM").length,     c:"#A855F7", bg:"rgba(168,85,247,0.12)"},
             ].map((s,i)=>(
               <div key={i} style={{background:s.bg,borderRadius:"10px",padding:"5px 12px",textAlign:"center",border:`1px solid ${s.c}20`}}>
                 <div style={{fontSize:"16px",fontWeight:900,color:s.c,fontFamily:"'Bricolage Grotesque',sans-serif",lineHeight:1}}>{s.v}</div>
@@ -382,7 +401,7 @@ function UserDetailPopup({ user, onClose }: { user: FicomUser; onClose: () => vo
           {/* Stat grid */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,180px),1fr))",gap:"8px",marginBottom:"16px"}}>
             {[
-              {icon:"📅",label:"Usage Days",   value:`${user.usage_days} / ${user.selling_days} days`, accent:compColor(cp)},
+              {icon:"📅",label:"Usage Days",   value:`${user.usage_days} hari login / ${user.selling_days} selling days`, accent:compColor(cp)},
               {icon:"📊",label:"Compliance",   value:`${cp}%`,                                          accent:compColor(cp)},
               {icon:"🕐",label:"Last Login",   value:user.last_usage_date||"No activity",               accent:"rgba(255,255,255,0.6)"},
               {icon:"👤",label:"RDM",          value:user.rdm_name||"—",                                accent:"rgba(255,255,255,0.6)"},
@@ -468,7 +487,8 @@ function SubAreaPopup({ subAor, users, aor, onUserClick, onBack }: {
               {l:"≥91%",  v:users.filter(u=>u.compliance_pct>=91).length,  c:"#22C55E",bg:"rgba(34,197,94,0.12)"},
               {l:"51–90%",v:users.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length,c:"#F97316",bg:"rgba(249,115,22,0.12)"},
               {l:"<50%",  v:users.filter(u=>u.compliance_pct<51).length,   c:"#EF4444",bg:"rgba(239,68,68,0.12)"},
-              {l:"Trained",v:users.filter(u=>u.trained===1).length,         c:col,       bg:`${col}15`},
+              {l:"ADM",   v:users.filter(u=>u.position==="ADM").length,    c:"#F97316",bg:"rgba(249,115,22,0.12)"},
+              {l:"RDM",   v:users.filter(u=>u.position==="RDM").length,    c:"#A855F7",bg:"rgba(168,85,247,0.12)"},
             ].map((s,i)=>(
               <div key={i} style={{background:s.bg,borderRadius:"8px",padding:"4px 10px",textAlign:"center",border:`1px solid ${s.c}20`}}>
                 <div style={{fontSize:"14px",fontWeight:900,color:s.c,lineHeight:1}}>{s.v}</div>
@@ -670,8 +690,31 @@ export default function FicomPage() {
   // Derived
   const latest       = snapshots[snapshots.length-1]
   const latestMonth  = latest?.period_month||""
-  const latestAreas  = useMemo(()=>areas.filter(a=>a.period_month===latestMonth),[areas,latestMonth])
   const latestUsers  = useMemo(()=>users.filter(u=>u.period_month===latestMonth),[users,latestMonth])
+
+  // Rebuild area stats from users (respects AOR from master, excludes UNK/empty)
+  const latestAreas = useMemo(()=>{
+    const VALID = ["GMA","MIN","NOL","SOL","VIS"]
+    const aorMap: Record<string,{aor:string;total_users:number;active:number;trained:number;avg_compliance:number;high_count:number;medium_count:number;low_count:number;pct_active:number}> = {}
+    for (const aor of VALID) {
+      const au = latestUsers.filter(u => u.aor === aor)
+      if (!au.length) continue
+      const active = au.filter(u => u.usage_days > 0)
+      const avgComp = au.length ? au.reduce((s,u)=>s+u.compliance_pct,0)/au.length : 0
+      aorMap[aor] = {
+        aor,
+        total_users:  au.length,
+        active:       active.length,
+        trained:      au.filter(u=>u.trained===1).length,
+        avg_compliance: Math.round(avgComp*10)/10,
+        high_count:   au.filter(u=>u.compliance_pct>=91).length,
+        medium_count: au.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length,
+        low_count:    au.filter(u=>u.compliance_pct<51).length,
+        pct_active:   au.length ? Math.round(active.length/au.length*100) : 0,
+      }
+    }
+    return Object.values(aorMap)
+  },[latestUsers])
 
   const filteredUsers = useMemo(()=>latestUsers
     .filter(u=>{
@@ -784,15 +827,15 @@ export default function FicomPage() {
                 )}{" "}· <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.selling_days||"—"}</strong> selling days
               </p>
 
-              {/* KPI GRID 3×2 */}
+              {/* KPI GRID — utilisasi + position breakdown */}
               <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(7px,1.2vw,12px)",width:"100%",maxWidth:"560px"}}>
                 {[
-                  {n:<AnimCount to={latest?.total_users?Math.round((latest.total_active||0)/latest.total_users*100):0} suffix="%" delay={0}/>, l:latest?.total_users===latest?.total_active?"Utilisasi ⚠️":"Utilisasi",    i:"📊", c:"#4ADE80", bg:"rgba(34,197,94,0.12)",  bo:"rgba(34,197,94,0.3)"},
-                  {n:<AnimCount to={latest?.total_active||0} delay={80}/>,  l:"Aktif Login",  i:"✅", c:"white",   bg:"rgba(255,255,255,0.06)", bo:"rgba(255,255,255,0.1)"},
-                  {n:<AnimCount to={latest?.total_users||0} delay={160}/>,  l:"Total Users",  i:"👥", c:"rgba(255,255,255,0.45)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
+                  {n:<AnimCount to={latest?.total_users?Math.round((latest.total_active||0)/latest.total_users*100):0} suffix="%" delay={0}/>, l:"Utilisasi", i:"📊", c:"#4ADE80", bg:"rgba(34,197,94,0.12)", bo:"rgba(34,197,94,0.3)"},
+                  {n:<AnimCount to={latest?.total_active||0} delay={80}/>,  l:"Aktif Login", i:"✅", c:"white",   bg:"rgba(255,255,255,0.06)", bo:"rgba(255,255,255,0.1)"},
+                  {n:<AnimCount to={latest?.total_users||0} delay={160}/>,  l:(latest?.total_users||0)>130?"Total ADM+RDM+ADS ⚠️":"Total ADM+RDM", i:"👥", c:(latest?.total_users||0)>130?"#EF4444":"rgba(255,255,255,0.45)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
                   {n:<AnimCount to={latest?.avg_compliance||0} suffix="%" dec={1} delay={240}/>,l:"Avg Compliance",i:"📈",c:"#60A5FA",bg:"rgba(59,130,246,0.1)",bo:"rgba(59,130,246,0.2)"},
-                  {n:<AnimCount to={latest?.total_high||0} delay={320}/>,   l:"≥91% Users 🏆",i:"⭐", c:"#4ADE80", bg:"rgba(34,197,94,0.1)",   bo:"rgba(34,197,94,0.2)"},
-                  {n:<AnimCount to={latest?.total_low||0} delay={400}/>,    l:"<50% Users ⚠️",i:"🔴", c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.04)",bo:"rgba(255,255,255,0.08)"},
+                  {n:<AnimCount to={latest?.total_high||0} delay={320}/>,   l:"≥91% Compliance",i:"⭐", c:"#4ADE80", bg:"rgba(34,197,94,0.1)", bo:"rgba(34,197,94,0.2)"},
+                  {n:<AnimCount to={latest?.total_low||0} delay={400}/>,    l:"<50% Compliance",i:"⚠️", c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.04)",bo:"rgba(255,255,255,0.08)"},
                 ].map((s,i)=>(
                   <div key={i} className="kpi-card" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(8px,2.5vw,15px)",border:`1px solid ${s.bo}`,textAlign:"center",backdropFilter:"blur(12px)",animation:"fadeUp 0.6s ease both",animationDelay:`${i*0.08}s`,position:"relative",overflow:"hidden"}}>
                     <div style={{position:"absolute",top:0,left:0,right:0,height:"1px",background:`linear-gradient(90deg,transparent,${s.bo},transparent)`}}/>
@@ -802,6 +845,35 @@ export default function FicomPage() {
                   </div>
                 ))}
               </div>
+
+              {/* Position breakdown — ADM / RDM */}
+              {latestUsers.length > 0 && (() => {
+                const ROLES = [
+                  { key:"ADM", label:"ADM", color:"#F97316" },
+                  { key:"RDM", label:"RDM", color:"#A855F7" },
+                ]
+                return (
+                  <div style={{display:"flex",gap:"clamp(6px,1vw,10px)",width:"100%",maxWidth:"560px",marginTop:"4px"}}>
+                    {ROLES.map(r=>{
+                      const total  = latestUsers.filter(u=>u.position===r.key).length
+                      const active = latestUsers.filter(u=>u.position===r.key&&u.usage_days>0).length
+                      const pct    = total ? Math.round(active/total*100) : 0
+                      return (
+                        <div key={r.key} style={{flex:1,background:`${r.color}12`,border:`1px solid ${r.color}30`,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(8px,2vw,12px) clamp(10px,2vw,16px)",backdropFilter:"blur(12px)"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                            <span style={{fontSize:"clamp(10px,1.8vw,12px)",fontWeight:800,color:r.color,textTransform:"uppercase",letterSpacing:"0.06em"}}>{r.label}</span>
+                            <span style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,2vw,18px)",fontWeight:900,color:pct>=80?"#4ADE80":pct>=60?"#F97316":"#EF4444"}}>{pct}%</span>
+                          </div>
+                          <div style={{height:4,background:"rgba(255,255,255,0.08)",borderRadius:99,overflow:"hidden",marginBottom:4}}>
+                            <div style={{height:"100%",width:`${pct}%`,background:r.color,borderRadius:99,transition:"width 0.8s cubic-bezier(0.4,0,0.2,1)"}}/>
+                          </div>
+                          <div style={{fontSize:"clamp(8px,1.5vw,10px)",color:"rgba(255,255,255,0.3)"}}>{active} / {total} aktif</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
             </div>
 
             {/* RIGHT ─ Donut + Bar Chart */}
@@ -838,6 +910,19 @@ export default function FicomPage() {
         </div>
       </div>
       {/* ══════════ END HERO ══════════ */}
+
+      {/* Stale data warning — if snapshot still uses 199-user denominator */}
+      {latest && (latest.total_users || 0) > 130 && (
+        <div style={{background:"rgba(239,68,68,0.12)",borderTop:"1px solid rgba(239,68,68,0.3)",padding:"10px clamp(16px,5vw,80px)"}}>
+          <div style={{maxWidth:"1200px",margin:"0 auto",display:"flex",alignItems:"center",gap:10,fontSize:12,color:"#FCA5A5"}}>
+            <span style={{fontSize:16}}>⚠️</span>
+            <span>
+              Data ini menggunakan denominator lama ({latest.total_users} users — termasuk ADS).
+              Jalankan <strong>TRUNCATE ficom_users, ficom_areas, ficom_snapshots RESTART IDENTITY CASCADE</strong> di Supabase lalu upload ulang EDI untuk mendapatkan utilisasi yang akurat (denominator ADM+RDM saja).
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* ── WHITE CONTENT ── */}
       <div style={{background:"#F6F7FA",borderRadius:"28px 28px 0 0",marginTop:"-6px"}}>
@@ -909,6 +994,7 @@ export default function FicomPage() {
             <div className="area-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,160px),1fr))",gap:"clamp(8px,1.2vw,12px)"}}>
               {latestAreas
                 .filter(a=>areaFilter==="ALL"||a.aor===areaFilter)
+                .filter(a=>a.aor && a.aor !== "UNK")
                 .map((a,i)=>{
                   const col=AOR_COLORS[a.aor]||"#888"
                   return (

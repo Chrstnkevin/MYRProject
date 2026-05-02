@@ -142,7 +142,7 @@ function buildExportRows(
     "ADP Code":             master.adp_code,
     "ADP Name":             master.adp_name,
     "PIC PHI":              master.pic_phi,
-    "Month":                MONTHS[selectedMonth - 1],
+    "Month":                entry ? MONTHS[(entry.month ?? 1) - 1] : "",
     "Year":                 selectedYear,
     "Restore Date":         entry?.restore_date ?? "",
     "Trans Date":           entry?.trans_date ?? "",
@@ -412,8 +412,8 @@ export default function RestorePhiPage() {
   const [filterArea, setFilterArea] = useState("all")
   const [filterServer, setFilterServer] = useState("all")
   const [filterDone, setFilterDone] = useState("all")
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth)
-  const [selectedYear] = useState(currentYear)
+  const [selectedMonth, setSelectedMonth] = useState<string>(String(currentMonth))
+  const [selectedYear,  setSelectedYear]  = useState(currentYear)
   const [page, setPage] = useState(1)
 
   // ── Export state ──────────────────────────────────────────────────────────
@@ -430,10 +430,11 @@ export default function RestorePhiPage() {
   }
 
   // Detail modal
-  const [detailItem, setDetailItem] = useState<{ master: typeof MASTER_DATA[0]; entry: RestoreEntry | null } | null>(null)
+  const [detailItem, setDetailItem] = useState<{ master: typeof MASTER_DATA[0]; entry: RestoreEntry | null; done: boolean } | null>(null)
 
   // Form state
   const [form, setForm] = useState({
+    restore_date: new Date().toISOString().split("T")[0],  // manual — bisa diubah
     trans_date: "",
     backup_size: "",
     backup_tools_version: "24.05.00",
@@ -445,47 +446,53 @@ export default function RestorePhiPage() {
 
   const load = async () => {
     setLoading(true)
+    // Selalu load SEMUA data dalam 1 tahun — tidak filter per bulan
+    // Status Done tidak reset per bulan, berlaku sepanjang tahun
     const { data } = await supabase
       .from("restore_phi")
       .select("*")
       .eq("year", selectedYear)
-      .eq("month", selectedMonth)
     if (data) setEntries(data as RestoreEntry[])
     setLoading(false)
   }
 
-  const loadAll = async () => {
-    const { data } = await supabase
-      .from("restore_phi")
-      .select("*")
-      .eq("year", selectedYear)
-    if (data) setEntries(data as RestoreEntry[])
-  }
-
-  useEffect(() => { load() }, [selectedMonth, selectedYear])
+  useEffect(() => { load() }, [selectedYear])  // only reload when year changes
 
   // Build merged list: master + entry data
+  // Entry = latest restore per ADP dalam tahun ini (tidak per bulan)
+  // Filter bulan hanya untuk tampilan kolom Month & Restore Date
   const mergedList = useMemo(() => {
     return MASTER_DATA.map(m => {
-      const entry = entries.find(e => e.adp_code === m.adp_code)
-      return { master: m, entry: entry || null }
+      // Ambil semua entries untuk ADP ini dalam tahun ini
+      const adpEntries = entries.filter(e => e.adp_code === m.adp_code)
+      // Ambil yang paling baru (latest restore_date)
+      const latestEntry = adpEntries.length > 0
+        ? adpEntries.sort((a, b) =>
+            (b.restore_date ?? "").localeCompare(a.restore_date ?? "")
+          )[0]
+        : null
+      // Filter entry untuk tampilan bulan (jika filter bulan aktif)
+      const displayEntry = selectedMonth === "all"
+        ? latestEntry
+        : adpEntries.find(e => e.month === Number(selectedMonth)) ?? latestEntry
+      return { master: m, entry: displayEntry || null, done: latestEntry?.done_restore ?? false }
     })
-  }, [entries])
+  }, [entries, selectedMonth])
 
   // ── handleExport — must be after mergedList ────────────────────────────────
   const handleExport = useCallback(async (type: "excel" | "pdf") => {
     setExporting(type)
     setExportProgress({ step: "Mempersiapkan data...", pct: 0 })
     try {
-      const monthLabel = MONTHS[selectedMonth - 1]
+      const monthLabel = selectedMonth === "all" ? "Semua_Bulan" : MONTHS[Number(selectedMonth) - 1]
       const base = `Restore_PHI_${monthLabel}_${selectedYear}`
       if (type === "excel") {
         setExportProgress({ step: "Menyusun spreadsheet...", pct: 30 })
-        const rows = buildExportRows(mergedList, selectedMonth, selectedYear)
+        const rows = buildExportRows(mergedList, selectedMonth === "all" ? currentMonth : Number(selectedMonth), selectedYear)
         await exportToExcel(rows, `${base}.xlsx`)
         setExportProgress({ step: "Selesai!", pct: 100 })
       } else {
-        const title = `${monthLabel} ${selectedYear}  ·  ${mergedList.filter(m => m.entry?.done_restore).length}/${mergedList.length} Done`
+        const title = `${monthLabel} ${selectedYear}  ·  ${mergedList.filter(m => m.done).length}/${mergedList.length} Done`
         await exportToPDF(
           mergedList,
           `${base}.pdf`,
@@ -505,7 +512,9 @@ export default function RestorePhiPage() {
   }, [mergedList, selectedMonth, selectedYear])
 
   // Stats
-  const doneThisMonth = entries.filter(e => e.done_restore && e.month === selectedMonth).length
+  const doneThisMonth = selectedMonth === "all"
+    ? mergedList.filter(m => m.done).length
+    : entries.filter(e => e.done_restore && e.month === Number(selectedMonth)).length
   const doneThisWeek = entries.filter(e => {
     if (!e.done_restore || !e.restore_date) return false
     return getWeekNumber(new Date(e.restore_date)) === currentWeek && new Date(e.restore_date).getFullYear() === currentYear
@@ -518,7 +527,8 @@ export default function RestorePhiPage() {
       return entries.filter(e => e.done_restore && e.month === m).length
     })
   }, [entries])
-  const doneThisYear = annualData.reduce((a, b) => a + b, 0)
+  // Unique ADPs restored this year (bukan total restore events)
+  const doneThisYear = mergedList.filter(m => m.done).length
 
   // Reminder logic
   const monthlyOk = doneThisMonth >= MONTHLY_TARGET
@@ -530,8 +540,8 @@ export default function RestorePhiPage() {
     return mergedList.filter(({ master }) => {
       if (filterArea !== "all" && master.area !== filterArea) return false
       if (filterServer !== "all" && master.server !== filterServer) return false
-      if (filterDone === "yes" && !entries.find(e => e.adp_code === master.adp_code)?.done_restore) return false
-      if (filterDone === "no" && entries.find(e => e.adp_code === master.adp_code)?.done_restore) return false
+      if (filterDone === "yes" && !mergedList.find(m => m.master.adp_code === master.adp_code)?.done) return false
+      if (filterDone === "no" && mergedList.find(m => m.master.adp_code === master.adp_code)?.done) return false
       if (search && !master.adp_name.toLowerCase().includes(search.toLowerCase()) && !master.adp_code.includes(search)) return false
       return true
     })
@@ -548,6 +558,7 @@ export default function RestorePhiPage() {
     setDetailItem(item)
     if (item.entry) {
       setForm({
+        restore_date: item.entry.restore_date || new Date().toISOString().split("T")[0],
         trans_date: item.entry.trans_date || "",
         backup_size: item.entry.backup_size?.toString() || "",
         backup_tools_version: item.entry.backup_tools_version || "24.05.00",
@@ -556,7 +567,7 @@ export default function RestorePhiPage() {
       })
       setScreenshots([item.entry.screenshot_1 || null, item.entry.screenshot_2 || null, item.entry.screenshot_3 || null])
     } else {
-      setForm({ trans_date: "", backup_size: "", backup_tools_version: "24.05.00", restore_status: "Success", pic_restore: "Kevin" })
+      setForm({ restore_date: new Date().toISOString().split("T")[0], trans_date: "", backup_size: "", backup_tools_version: "24.05.00", restore_status: "Success", pic_restore: "Kevin" })
       setScreenshots([null, null, null])
     }
   }
@@ -564,16 +575,19 @@ export default function RestorePhiPage() {
   const handleSave = async () => {
     if (!detailItem) return
     setSaving(true)
-    const today = new Date().toISOString().split("T")[0]
+    // Month dan year diambil dari restore_date yang diisi manual
+    const restoreDateObj = form.restore_date ? new Date(form.restore_date) : new Date()
+    const entryMonth = restoreDateObj.getMonth() + 1
+    const entryYear  = restoreDateObj.getFullYear()
     const payload = {
       area: detailItem.master.area,
       server: detailItem.master.server,
       adp_code: detailItem.master.adp_code,
       adp_name: detailItem.master.adp_name,
       pic_phi: detailItem.master.pic_phi,
-      month: selectedMonth,
-      year: selectedYear,
-      restore_date: today,
+      month: entryMonth,
+      year: entryYear,
+      restore_date: form.restore_date || null,
       trans_date: form.trans_date || null,
       backup_size: form.backup_size ? Number(form.backup_size) : null,
       backup_tools_version: form.backup_tools_version,
@@ -627,18 +641,18 @@ export default function RestorePhiPage() {
         <div className="card" style={{ padding: 20 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>Progress Tahunan</div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <ProgressRing value={doneThisYear} max={TOTAL_MASTER * 12} size={72} color="var(--accent)" />
+            <ProgressRing value={doneThisYear} max={TOTAL_MASTER} size={72} color="var(--accent)" />
             <div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.04em", lineHeight: 1 }}>{doneThisYear}</div>
-              <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 2 }}>dari {TOTAL_MASTER * 12} total</div>
-              <div style={{ fontSize: 11, marginTop: 6, color: "var(--accent)", fontWeight: 600 }}>{Math.round(doneThisYear / (TOTAL_MASTER * 12) * 100)}% selesai</div>
+              <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 2 }}>dari {TOTAL_MASTER} total ADP</div>
+              <div style={{ fontSize: 11, marginTop: 6, color: "var(--accent)", fontWeight: 600 }}>{Math.round(doneThisYear / TOTAL_MASTER * 100)}% selesai</div>
             </div>
           </div>
           {/* Mini bar per bulan */}
           <div style={{ marginTop: 14, display: "flex", gap: 3, alignItems: "flex-end" }}>
             {annualData.map((v, i) => (
               <div key={i} title={`${MONTHS[i]}: ${v}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                <div style={{ width: "100%", background: i + 1 === selectedMonth ? "var(--accent)" : v > 0 ? "var(--accent3)" : "var(--surface3)", borderRadius: 3, height: Math.max(4, v * 3), transition: "height 0.3s" }} />
+                <div style={{ width: "100%", background: i + 1 === Number(selectedMonth) ? "var(--accent)" : v > 0 ? "var(--accent3)" : "var(--surface3)", borderRadius: 3, height: Math.max(4, v * 3), transition: "height 0.3s" }} />
                 <div style={{ fontSize: 8, color: "var(--text3)" }}>{MONTHS[i].slice(0,1)}</div>
               </div>
             ))}
@@ -649,9 +663,9 @@ export default function RestorePhiPage() {
         <div className="card" style={{ padding: 20, position: "relative", overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Progress Bulanan</div>
-            <select value={selectedMonth} onChange={e => setSelectedMonth(Number(e.target.value))}
+            <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
               className="input" style={{ width: "auto", padding: "3px 8px", fontSize: 11 }}>
-              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+              {MONTHS.map((m, i) => <option key={i} value={String(i + 1)}>{m}</option>)}
             </select>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -709,6 +723,20 @@ export default function RestorePhiPage() {
             <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text3)", pointerEvents: "none" }} />
             <input className="input" placeholder="Cari ADP Name / ADP Code..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 32 }} />
           </div>
+
+          {/* Month + Year selector */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
+              className="input" style={{ width: "auto", fontSize: 12, fontWeight: 600 }}>
+              <option value="all">Semua Bulan</option>
+              {MONTHS.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+            <select value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))}
+              className="input" style={{ width: "auto", fontSize: 12, fontWeight: 600 }}>
+              {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+
           <div className="filter-toggles" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 0, border: "1.5px solid var(--border)", borderRadius: "var(--radius-sm)", overflow: "hidden", background: "var(--surface)" }}>
               {["all",...areas].map((a, i) => (
@@ -797,13 +825,12 @@ export default function RestorePhiPage() {
                 <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "var(--text3)", fontSize: 13 }}>Memuat data...</td></tr>
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "var(--text3)", fontSize: 13 }}>Tidak ada data</td></tr>
-              ) : filtered.map(({ master, entry }) => {
-                const done = entry?.done_restore || false
+              ) : filtered.map(({ master, entry, done }) => {
                 return (
                   <tr key={master.adp_code} style={{ borderBottom: "1px solid var(--border)", transition: "background 0.15s", cursor: "pointer" }}
                     onMouseEnter={e => (e.currentTarget.style.background = "var(--surface2)")}
                     onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                    onClick={() => openDetail({ master, entry })}>
+                    onClick={() => openDetail({ master, entry, done })}>
                     <td style={{ padding: "10px 14px" }}>
                       <span style={{ background: "var(--accent-muted)", color: "var(--accent)", padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700 }}>{master.area}</span>
                     </td>
@@ -818,7 +845,7 @@ export default function RestorePhiPage() {
                     <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--text3)" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                         <Calendar size={12} />
-                        {MONTHS[selectedMonth - 1]} {selectedYear}
+                        {entry ? `${MONTHS[(entry.month ?? 1) - 1]} ${entry.year}` : "—"}
                       </div>
                     </td>
                     <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--text2)" }}>
@@ -900,12 +927,17 @@ export default function RestorePhiPage() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
                 {/* Left column */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  <div className="label">Detail Restore — {MONTHS[selectedMonth - 1]} {selectedYear}</div>
-                  {detailItem.entry?.restore_date && (
-                    <div style={{ background: "var(--success-bg)", border: "1px solid var(--accent-light)", borderRadius: "var(--radius-xs)", padding: "8px 12px", fontSize: 12, color: "var(--success)" }}>
-                      ✓ Restore Date: <strong>{new Date(detailItem.entry.restore_date).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</strong>
+                  <div className="label">Detail Restore — {selectedMonth === "all" ? "Semua Bulan" : MONTHS[Number(selectedMonth) - 1]} {selectedYear}</div>
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", display: "block", marginBottom: 5 }}>
+                      Restore Date <span style={{ color: "var(--danger)", fontWeight: 400 }}>*</span>
+                    </label>
+                    <input type="date" className="input" value={form.restore_date}
+                      onChange={e => setForm(f => ({ ...f, restore_date: e.target.value }))} />
+                    <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 4 }}>
+                      Bulan &amp; tahun data akan mengikuti tanggal restore ini
                     </div>
-                  )}
+                  </div>
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", display: "block", marginBottom: 5 }}>Trans Date</label>
                     <input type="date" className="input" value={form.trans_date} onChange={e => setForm(f => ({ ...f, trans_date: e.target.value }))} />

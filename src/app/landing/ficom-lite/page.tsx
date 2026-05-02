@@ -43,53 +43,35 @@ const compColor = (p:number) => p>=80?"#22C55E":p>=60?"#84CC16":p>=40?"#F97316":
 const LITE_LOGO = "data:image/jpeg;base64,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"
 
 async function fetchFLData() {
-  const [snap, areas, users] = await Promise.all([
+  const [snap, areas, users, master] = await Promise.all([
     supabase.from("fl_snapshots").select("*").order("period_month"),
     supabase.from("fl_areas").select("*").order("aor"),
     supabase.from("fl_users").select("*").order("username"),
+    supabase.from("utilisasi_master_users").select("user_login, aor, sub_aor"),
   ])
   if(snap.error) throw snap.error
+
+  // Enrich fl_users with correct AOR from master
+  const masterAOR = new Map<string,{aor:string;sub_aor:string}>()
+  for (const m of master.data ?? []) {
+    masterAOR.set(m.user_login.toUpperCase(), { aor: m.aor ?? "", sub_aor: m.sub_aor ?? "" })
+  }
+  const enrichedUsers = (users.data ?? []).map(u => {
+    const m = masterAOR.get((u.user_id ?? "").toUpperCase())
+    return {
+      ...u,
+      aor:     (m?.aor     && m.aor     !== "") ? m.aor     : (u.aor     ?? ""),
+      sub_aor: (m?.sub_aor && m.sub_aor !== "") ? m.sub_aor : (u.sub_aor ?? ""),
+    }
+  })
+
   return {
     snapshots: (snap.data||[]) as FLSnapshot[],
     areas:     (areas.data||[]) as FLArea[],
-    users:     (users.data||[]) as FLUser[],
+    users:     enrichedUsers as FLUser[],
   }
 }
 
-// ── Animated Counter ──────────────────────────────────────────
-function AnimCount({ to, suffix="", dec=0, delay=0 }:{ to:number; suffix?:string; dec?:number; delay?:number }) {
-  const [v, setV] = useState(0)
-  useEffect(()=>{
-    const t=setTimeout(()=>{
-      let f=0; const frames=55
-      const tick=()=>{ f++; const e=1-Math.pow(1-f/frames,4); setV(e*to); if(f<frames) requestAnimationFrame(tick) }
-      requestAnimationFrame(tick)
-    },delay)
-    return ()=>clearTimeout(t)
-  },[to,delay])
-  return <>{v.toFixed(dec)}{suffix}</>
-}
-
-// ── Utilisation Ring ──────────────────────────────────────────
-function UtilRing({ pct, size=160, label="utilisasi" }:{ pct:number; size?:number; label?:string }) {
-  const r=size*0.38; const c=2*Math.PI*r; const dash=Math.min(pct,100)/100*c
-  const col = utilColor(pct)
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{overflow:"visible"}}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={size*0.09}/>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={col} strokeWidth={size*0.09}
-        strokeDasharray={`${dash} ${c}`} strokeLinecap="round"
-        transform={`rotate(-90 ${size/2} ${size/2})`}
-        style={{filter:`drop-shadow(0 0 8px ${col}80)`,transition:"stroke-dasharray 1.4s"}}>
-        <animate attributeName="stroke-dasharray" from={`0 ${c}`} to={`${dash} ${c}`} dur="1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
-      </circle>
-      <text x={size/2} y={size/2-4} textAnchor="middle" fontSize={size*0.19} fontWeight="900" fill="white" fontFamily="'Bricolage Grotesque',sans-serif">{pct}%</text>
-      <text x={size/2} y={size/2+size*0.14} textAnchor="middle" fontSize={size*0.09} fill="rgba(255,255,255,0.4)">{label}</text>
-    </svg>
-  )
-}
-
-// ── Role Breakdown Bar ────────────────────────────────────────
 function RoleBreakdown({ snap }:{ snap:FLSnapshot }) {
   const roles = [
     { label:"ADM",  total:snap.total_adm, active:snap.active_adm, pct:snap.pct_adm,  col:"#F97316" },
@@ -317,6 +299,42 @@ function AreaPopup({ aor, areaData, areaUsers, onUserClick, onClose }:{
 }
 
 // ── MAIN PAGE ──────────────────────────────────────────────────
+
+// ── Animated Counter ──────────────────────────────────────────
+function AnimCount({ to, suffix="", dec=0, delay=0 }:{ to:number; suffix?:string; dec?:number; delay?:number }) {
+  const [v, setV] = useState(0)
+  useEffect(()=>{
+    const t=setTimeout(()=>{
+      let f=0; const frames=55
+      const tick=()=>{ f++; const e=1-Math.pow(1-f/frames,4); setV(e*to); if(f<frames) requestAnimationFrame(tick) }
+      requestAnimationFrame(tick)
+    },delay)
+    return ()=>clearTimeout(t)
+  },[to,delay])
+  return <>{v.toFixed(dec)}{suffix}</>
+}
+
+// ── Utilisation Ring ──────────────────────────────────────────
+function UtilRing({ pct, size=160, label="utilisasi" }:{ pct:number; size?:number; label?:string }) {
+  const r=size*0.38; const c=2*Math.PI*r; const dash=Math.min(pct,100)/100*c
+  const col = utilColor(pct)
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{overflow:"visible"}}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={size*0.09}/>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={col} strokeWidth={size*0.09}
+        strokeDasharray={`${dash} ${c}`} strokeLinecap="round"
+        transform={`rotate(-90 ${size/2} ${size/2})`}
+        style={{filter:`drop-shadow(0 0 8px ${col}80)`,transition:"stroke-dasharray 1.4s"}}>
+        <animate attributeName="stroke-dasharray" from={`0 ${c}`} to={`${dash} ${c}`} dur="1.4s" fill="freeze" calcMode="spline" keySplines="0.4 0 0.2 1"/>
+      </circle>
+      <text x={size/2} y={size/2-4} textAnchor="middle" fontSize={size*0.19} fontWeight="900" fill="white" fontFamily="'Bricolage Grotesque',sans-serif">{pct}%</text>
+      <text x={size/2} y={size/2+size*0.14} textAnchor="middle" fontSize={size*0.09} fill="rgba(255,255,255,0.4)">{label}</text>
+    </svg>
+  )
+}
+
+// ── Role Breakdown Bar ────────────────────────────────────────
+// ── Line Chart for Ficom Lite ─────────────────────────────────
 export default function FicomLitePage() {
   const [loading,     setLoading]     = useState(true)
   const [error,       setError]       = useState("")
@@ -365,8 +383,30 @@ export default function FicomLitePage() {
 
   const latest    = snapshots[snapshots.length-1]
   const latestPM  = latest?.period_month||""
-  const latestAreas = useMemo(()=>areas.filter(a=>a.period_month===latestPM),[areas,latestPM])
-  const latestUsers = useMemo(()=>users.filter(u=>u.period_month===latestPM),[users,latestPM])
+
+  // Period selector — default to April if available, else latest
+  const DEFAULT_PERIOD = "2026-04"
+  const [selPeriod, setSelPeriod] = useState("")
+  useEffect(()=>{
+    if(!snapshots.length) return
+    // Filter bulan dengan selling_days >= 3 (skip cut-off months)
+    const validSnaps = snapshots.filter(s => s.selling_days >= 3)
+    const months = validSnaps.map(s=>s.period_month)
+    // Default: April jika ada, jika tidak ambil bulan valid terbaru
+    const def = months.includes(DEFAULT_PERIOD)
+      ? DEFAULT_PERIOD
+      : months.sort().reverse()[0] ?? snapshots[snapshots.length-1].period_month
+    setSelPeriod(def)
+  },[snapshots])
+
+  // selSnap: gunakan periode terpilih, JANGAN fallback ke latest jika selling_days < 3
+  const selSnap = snapshots.find(s=>s.period_month===selPeriod)
+    ?? snapshots.filter(s=>s.selling_days>=3).sort((a,b)=>b.period_month.localeCompare(a.period_month))[0]
+    ?? latest
+  const selPM    = selSnap?.period_month ?? latestPM
+
+  const latestAreas = useMemo(()=>areas.filter(a=>a.period_month===selPM),[areas,selPM])
+  const latestUsers = useMemo(()=>users.filter(u=>u.period_month===selPM),[users,selPM])
 
   const filteredUsers = useMemo(()=>latestUsers
     .filter(u=>{
@@ -397,7 +437,7 @@ export default function FicomLitePage() {
     </div>
   )
 
-  const aktivePct = latest?.utilisation_pct ? Math.round(latest.utilisation_pct) : 0
+  const aktivePct = selSnap?.utilisation_pct ? Math.round(selSnap.utilisation_pct) : 0
 
   return (
     <div style={{fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#111",background:"#030D06",minHeight:"100vh"}}>
@@ -437,7 +477,7 @@ export default function FicomLitePage() {
               <div style={{display:"inline-flex",alignItems:"center",gap:"10px",background:"rgba(34,197,94,0.1)",border:"1px solid rgba(34,197,94,0.3)",borderRadius:"99px",padding:"6px 18px",marginBottom:"clamp(16px,3vw,26px)",backdropFilter:"blur(8px)"}}>
                 <div className="live-dot" style={{width:"8px",height:"8px",borderRadius:"50%",background:FL_GREEN,boxShadow:`0 0 10px ${FL_GREEN}`}}/>
                 <span style={{fontSize:"clamp(9px,2.5vw,11px)",fontWeight:700,color:"#4ADE80",letterSpacing:"0.08em",textTransform:"uppercase"}}>
-                  Live · Ficom Lite PHI · {latest?.period_label||"—"} · as of {latest?.as_of_date||"—"}
+                  Live · Ficom Lite PHI · {selSnap?.period_label||"—"} · as of {selSnap?.as_of_date||"—"}
                 </span>
               </div>
 
@@ -456,20 +496,20 @@ export default function FicomLitePage() {
               </div>
 
               <p style={{fontSize:"clamp(11px,3vw,14px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(18px,4vw,36px)",lineHeight:1.7}}>
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.active_users||"—"}</strong> dari{" "}
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.total_users||"—"}</strong> user (ADM+RDM+ADS) sudah menggunakan Ficom Lite ·{" "}
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.selling_days||"—"}</strong> selling days
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.active_users||"—"}</strong> dari{" "}
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.total_users||"—"}</strong> user (ADM+RDM+ADS) sudah menggunakan Ficom Lite ·{" "}
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.selling_days||"—"}</strong> selling days
               </p>
 
               {/* KPI 3×2 */}
               <div className="fl-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(6px,1.5vw,10px)",width:"100%",maxWidth:"520px"}}>
                 {[
                   {n:<AnimCount to={aktivePct} suffix="%" delay={0}/>,         l:"Utilisasi",   i:"📊",c:utilColor(aktivePct), bg:`rgba(34,197,94,0.1)`,bo:`rgba(34,197,94,0.25)`},
-                  {n:<AnimCount to={latest?.active_users||0} delay={80}/>,      l:"Aktif Login", i:"✅",c:"white",             bg:"rgba(255,255,255,0.05)",bo:"rgba(255,255,255,0.1)"},
-                  {n:<AnimCount to={latest?.total_users||0} delay={160}/>,      l:"Total User",  i:"👥",c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
-                  {n:<AnimCount to={latest?.pct_adm||0} suffix="%" dec={0} delay={240}/>,l:"ADM Util.",i:"🏢",c:"#FB923C",bg:"rgba(249,115,22,0.1)",bo:"rgba(249,115,22,0.2)"},
-                  {n:<AnimCount to={latest?.pct_rdm||0} suffix="%" dec={0} delay={320}/>,l:"RDM Util.",i:"👔",c:"#C084FC",bg:"rgba(168,85,247,0.1)",bo:"rgba(168,85,247,0.2)"},
-                  {n:<AnimCount to={latest?.pct_ss||0} suffix="%" dec={0} delay={400}/>, l:"ADS Util.",i:"🧑",c:"#22D3EE",bg:"rgba(6,182,212,0.1)", bo:"rgba(6,182,212,0.2)"},
+                  {n:<AnimCount to={selSnap?.active_users||0} delay={80}/>,      l:"Aktif Login", i:"✅",c:"white",             bg:"rgba(255,255,255,0.05)",bo:"rgba(255,255,255,0.1)"},
+                  {n:<AnimCount to={selSnap?.total_users||0} delay={160}/>,      l:"Total User",  i:"👥",c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
+                  {n:<AnimCount to={selSnap?.pct_adm||0} suffix="%" dec={0} delay={240}/>,l:"ADM Util.",i:"🏢",c:"#FB923C",bg:"rgba(249,115,22,0.1)",bo:"rgba(249,115,22,0.2)"},
+                  {n:<AnimCount to={selSnap?.pct_rdm||0} suffix="%" dec={0} delay={320}/>,l:"RDM Util.",i:"👔",c:"#C084FC",bg:"rgba(168,85,247,0.1)",bo:"rgba(168,85,247,0.2)"},
+                  {n:<AnimCount to={selSnap?.pct_ss||0} suffix="%" dec={0} delay={400}/>, l:"ADS Util.",i:"🧑",c:"#22D3EE",bg:"rgba(6,182,212,0.1)", bo:"rgba(6,182,212,0.2)"},
                 ].map((s,i)=>(
                   <div key={i} className="fl-kpi" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,13px)",padding:"clamp(8px,2.5vw,14px)",border:`1px solid ${s.bo}`,textAlign:"center",backdropFilter:"blur(12px)",position:"relative",overflow:"hidden",animation:"flFadeUp 0.6s ease both",animationDelay:`${i*0.08}s`}}>
                     <div style={{position:"absolute",top:0,left:0,right:0,height:"1px",background:`linear-gradient(90deg,transparent,${s.bo},transparent)`}}/>
@@ -484,11 +524,129 @@ export default function FicomLitePage() {
             {/* RIGHT */}
             <div className="fl-hero-right" style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:"16px",minWidth:"200px"}}>
               <UtilRing pct={aktivePct} size={170}/>
-              {latest && <RoleBreakdown snap={latest}/>}
+              {selSnap && <RoleBreakdown snap={selSnap}/>}
             </div>
           </div>
         </div>
       </div>
+      {/* ══ TREN UTILISASI ══ */}
+      {snapshots.length > 0 && (
+        <div style={{padding:"clamp(28px,5vw,56px) clamp(16px,5vw,80px)",background:"#060C1A",borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+          <div style={{maxWidth:"1200px",margin:"0 auto"}}>
+
+            {/* Header + period selector */}
+            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:24}}>
+              <div>
+                <div style={{fontSize:"clamp(18px,3vw,26px)",fontWeight:900,color:"white",fontFamily:"'Bricolage Grotesque',sans-serif",letterSpacing:"-0.02em",marginBottom:4}}>
+                  📈 Tren Utilisasi
+                </div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,0.35)"}}>
+                  Ficom Lite · {snapshots.length} periode tersedia · berbasis login (access log)
+                </div>
+              </div>
+              {/* Period selector */}
+              <select value={selPeriod} onChange={e=>setSelPeriod(e.target.value)}
+                style={{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.15)",borderRadius:10,padding:"8px 14px",color:"white",fontSize:13,fontWeight:700,outline:"none",cursor:"pointer"}}>
+                {[...snapshots].filter(s=>s.selling_days>=3).reverse().map(s=>(
+                  <option key={s.period_month} value={s.period_month} style={{background:"#0F172A"}}>
+                    {s.period_label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Trend line chart — utilisasi % per bulan */}
+            {snapshots.length >= 2 && (
+              <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.07)",borderRadius:16,padding:"20px 24px",marginBottom:16}}>
+                <div style={{fontSize:13,fontWeight:700,color:"rgba(255,255,255,0.5)",marginBottom:16}}>Utilisasi % per Bulan</div>
+                <svg viewBox="0 0 700 160" style={{width:"100%",height:160,display:"block"}}>
+                  <defs>
+                    <linearGradient id="fl-trend-grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#22C55E" stopOpacity="0.3"/>
+                      <stop offset="100%" stopColor="#22C55E" stopOpacity="0.02"/>
+                    </linearGradient>
+                  </defs>
+                  {(() => {
+                    const W=700,H=160,PAD={t:20,r:20,b:36,l:44}
+                    const sorted = [...snapshots].filter(s=>s.selling_days>=3).sort((a,b)=>a.period_month.localeCompare(b.period_month))
+                    const vals = sorted.map(s=>s.utilisation_pct)
+                    const maxV = Math.max(...vals,1)
+                    const pts = sorted.map((s,i)=>({
+                      x: PAD.l+(i/(sorted.length-1||1))*(W-PAD.l-PAD.r),
+                      y: PAD.t+(1-s.utilisation_pct/(maxV||1))*(H-PAD.t-PAD.b),
+                      s,
+                    }))
+                    const polyline = pts.map(p=>`${p.x},${p.y}`).join(" ")
+                    const area = `M${pts[0].x},${H-PAD.b} `+pts.map(p=>`L${p.x},${p.y}`).join(" ")+` L${pts[pts.length-1].x},${H-PAD.b} Z`
+                    return <>
+                      {[0,25,50,75,100].map(t=>{
+                        const y=PAD.t+(1-t/(maxV||1))*(H-PAD.t-PAD.b)
+                        return <g key={t}>
+                          <line x1={PAD.l} y1={y} x2={W-PAD.r} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1}/>
+                          <text x={PAD.l-6} y={y+4} textAnchor="end" fontSize={9} fill="rgba(255,255,255,0.3)">{t}%</text>
+                        </g>
+                      })}
+                      <path d={area} fill="url(#fl-trend-grad)"/>
+                      <polyline points={polyline} fill="none" stroke="#22C55E" strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round"/>
+                      {pts.map((p,i)=>{
+                        const isSelected = p.s.period_month === selPeriod
+                        return <g key={i} onClick={()=>setSelPeriod(p.s.period_month)} style={{cursor:"pointer"}}>
+                          <circle cx={p.x} cy={p.y} r={isSelected?8:5} fill={isSelected?"#22C55E":"#22C55E"} stroke={isSelected?"white":"rgba(6,12,26,0.9)"} strokeWidth={isSelected?2.5:2}/>
+                          <text x={p.x} y={H-PAD.b+14} textAnchor="middle" fontSize={9} fill={isSelected?"white":"rgba(255,255,255,0.4)"} fontWeight={isSelected?"700":"400"}>
+                            {p.s.period_month.slice(5).replace("0","")+"/"+p.s.period_month.slice(2,4)}
+                          </text>
+                          <text x={p.x} y={p.y-11} textAnchor="middle" fontSize={10} fontWeight="800" fill={isSelected?"white":"#22C55E"}>
+                            {p.s.utilisation_pct.toFixed(1)}%
+                          </text>
+                        </g>
+                      })}
+                    </>
+                  })()}
+                </svg>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.2)",marginTop:4}}>💡 Klik titik untuk ganti periode yang ditampilkan</div>
+              </div>
+            )}
+
+            {/* Per-role trend bars */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12}}>
+              {(["ADM","RDM","ADS"] as const).map(role=>{
+                const roleKey = role==="ADS" ? "ss" : role.toLowerCase()
+                const color = role==="ADM"?"#F97316":role==="RDM"?"#A855F7":"#06B6D4"
+                const sorted = [...snapshots].filter(s=>s.selling_days>=3).sort((a,b)=>a.period_month.localeCompare(b.period_month))
+                return (
+                  <div key={role} style={{background:"rgba(255,255,255,0.03)",border:`1px solid ${color}20`,borderRadius:14,padding:"14px 18px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                      <span style={{fontSize:12,fontWeight:800,color,textTransform:"uppercase",letterSpacing:"0.06em"}}>{role}</span>
+                      <span style={{fontSize:16,fontWeight:900,color,fontFamily:"'Bricolage Grotesque',sans-serif"}}>
+                        {(selSnap as any)?.[`pct_${roleKey}`]?.toFixed(1) ?? 0}%
+                      </span>
+                    </div>
+                    {/* Mini bar chart per month */}
+                    <div style={{display:"flex",gap:4,alignItems:"flex-end",height:40}}>
+                      {sorted.map((s,i)=>{
+                        const pct = (s as any)[`pct_${roleKey}`] ?? 0
+                        const isSelected = s.period_month === selPeriod
+                        return (
+                          <div key={i} onClick={()=>setSelPeriod(s.period_month)}
+                            style={{flex:1,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                            <div style={{width:"100%",height:`${Math.max(pct/100*36,2)}px`,background:isSelected?color:`${color}50`,borderRadius:"3px 3px 0 0",transition:"all 0.3s"}}/>
+                            <div style={{fontSize:8,color:isSelected?"white":"rgba(255,255,255,0.3)",fontWeight:isSelected?700:400}}>
+                              {s.period_month.slice(5)}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div style={{marginTop:8,fontSize:10,color:"rgba(255,255,255,0.3)"}}>
+                      {(selSnap as any)?.[`active_${roleKey}`] ?? 0}/{(selSnap as any)?.[`total_${roleKey}`] ?? 0} aktif bulan ini
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── WHITE CONTENT ── */}
       <div style={{background:"#F0FDF4",borderRadius:"28px 28px 0 0",marginTop:"-6px"}}>
@@ -578,7 +736,7 @@ export default function FicomLitePage() {
                 <h2 style={{fontFamily:"'Bricolage Grotesque',sans-serif",fontSize:"clamp(14px,1.8vw,18px)",fontWeight:800,color:"#111"}}>
                   👤 User Detail <span style={{fontSize:"12px",fontWeight:400,color:"#bbb"}}>({filteredUsers.length}/{latestUsers.length})</span>
                 </h2>
-                <p style={{fontSize:"10px",color:"#bbb",marginTop:"3px"}}>Click header → sort · Click row → detail · {latest?.period_label}</p>
+                <p style={{fontSize:"10px",color:"#bbb",marginTop:"3px"}}>Click header → sort · Click row → detail · {selSnap?.period_label}</p>
               </div>
               <div style={{display:"flex",gap:"7px",flexWrap:"wrap",alignItems:"center"}}>
                 <input placeholder="🔍 Name / ID..." value={search} onChange={e=>setSearch(e.target.value)}
