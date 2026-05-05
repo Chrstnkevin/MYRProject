@@ -67,6 +67,8 @@ async function parseFicomLite(
     name:string; position:string; is_active:boolean; aor:string; sub_aor:string
   }>()
   for (const u of masterData ?? []) {
+    // Exclude ADS — tidak seharusnya pakai dashboard Ficom Lite
+    if (u.position === "ADS") continue
     supabaseMaster.set(u.user_login.toUpperCase(), {
       name: u.sales_name, position: u.position, is_active: u.is_active,
       aor: u.aor ?? "", sub_aor: u.sub_aor ?? "",
@@ -119,10 +121,17 @@ async function parseFicomLite(
   const months = Object.keys(monthLog).sort()
   if (!months.length) throw new Error("Tidak ada data valid di access log")
 
-  // Count entries per month for logging
-  const monthCounts = Object.entries(monthLog).map(([m,u])=>
-    `${m}:${Object.values(u).reduce((s,v)=>s+v.dates.size,0)}`).join(", ")
-  onProgress(`✅ Access log: ${months.length} bulan terdeteksi (${monthCounts})`)
+  // Filter: hanya simpan bulan yang punya data cukup (>= 3 unique dates)
+  // Bulan dengan < 3 hari kemungkinan cut-off di awal/akhir bulan
+  const validMonths = months.filter(m => monthDates[m]?.size >= 3)
+  if (!validMonths.length) throw new Error("Semua bulan memiliki data kurang dari 3 hari. Pastikan file log lengkap.")
+
+  const skipped = months.filter(m => !validMonths.includes(m))
+  if (skipped.length) onProgress(`ℹ️ Skip bulan dengan data < 3 hari: ${skipped.join(", ")}`)
+
+  const monthCounts = validMonths.map(m =>
+    `${m}:${Object.values(monthLog[m]).reduce((s,v)=>s+v.dates.size,0)}`).join(", ")
+  onProgress(`✅ Access log: ${validMonths.length} bulan valid (${monthCounts})`)
 
   // ── 3. Parse Productivity CSV (opsional) ───────────────────────
   // realisasiLog: month -> uid -> realisasi_days count
@@ -166,7 +175,7 @@ async function parseFicomLite(
   const VALID_AREA = new Set(["GMA","MIN","NOL","SOL","VIS"])
   const results: ParsedFL[] = []
 
-  for (const month of months) {
+  for (const month of validMonths) {
     const loginByUser = monthLog[month]
     const allDatesThisMonth = [...monthDates[month]].sort()
     const minDate = allDatesThisMonth[0]
@@ -450,7 +459,7 @@ export default function FicomLiteUploadPage() {
           → Aktif = muncul di log minimal 1 hari<br/>
           → Compliance = login_days ÷ selling_days (Senin–Sabtu otomatis)<br/>
           <strong>File 2 (Opsional): Productivity CSV</strong> → context realisasi saja, bukan utilisasi utama<br/>
-          Master user = semua 199 user dari <code>utilisasi_master_users</code> (Supabase)
+          Master user = ADM + RDM dari <code>utilisasi_master_users</code> (~107 users aktif) — ADS exclude karena tidak pakai dashboard Ficom Lite
         </div>
       </div>
  

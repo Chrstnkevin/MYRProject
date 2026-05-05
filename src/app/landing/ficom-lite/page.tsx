@@ -63,7 +63,8 @@ async function fetchFLData() {
       aor:     (m?.aor     && m.aor     !== "") ? m.aor     : (u.aor     ?? ""),
       sub_aor: (m?.sub_aor && m.sub_aor !== "") ? m.sub_aor : (u.sub_aor ?? ""),
     }
-  })
+  // Exclude ADS/SS — tidak masuk denominator Ficom Lite
+  }).filter(u => u.role !== "SS" && u.role !== "ADS")
 
   return {
     snapshots: (snap.data||[]) as FLSnapshot[],
@@ -497,7 +498,7 @@ export default function FicomLitePage() {
 
               <p style={{fontSize:"clamp(11px,3vw,14px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(18px,4vw,36px)",lineHeight:1.7}}>
                 <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.active_users||"—"}</strong> dari{" "}
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.total_users||"—"}</strong> user (ADM+RDM+ADS) sudah menggunakan Ficom Lite ·{" "}
+                <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.total_users||"—"}</strong> user (ADM+RDM) sudah menggunakan Ficom Lite ·{" "}
                 <strong style={{color:"rgba(255,255,255,0.6)"}}>{selSnap?.selling_days||"—"}</strong> selling days
               </p>
 
@@ -657,7 +658,7 @@ export default function FicomLitePage() {
             <div style={{fontWeight:700,fontSize:"12px",color:"#333",marginBottom:"10px"}}>📖 Definisi Utilisasi Ficom Lite</div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,160px),1fr))",gap:"8px"}}>
               {[
-                {term:"Utilisasi",       def:"% user (ADM+RDM+ADS) yang pernah login ke Ficom Lite minimal 1x dalam periode",       c:FL_GREEN},
+                {term:"Utilisasi",       def:"% user (ADM+RDM) yang pernah login ke Ficom Lite minimal 1x dalam periode",       c:FL_GREEN},
                 {term:"Compliance %",    def:"Jumlah hari unik login ÷ selling days × 100 (seberapa sering pakai)",                   c:"#10B981"},
                 {term:"ADM",             def:"Area Distribution Manager — target pengguna utama Ficom Lite",                           c:"#F97316"},
                 {term:"RDM",             def:"Regional Distribution Manager — monitor via Ficom Lite",                                 c:"#A855F7"},
