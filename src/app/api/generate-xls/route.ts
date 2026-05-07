@@ -75,10 +75,16 @@ for ent in entries:
     for img in ent.get("images",[]): cur=emb(img.get("dataUrl",""),cur)
     for ss in ent.get("subSections",[]):
         if ss.get("deskripsi"):
+            ss_tgl=ss.get("tanggal",""); ss_st=ss.get("status","")
             ws.row_dimensions[cur].height=ROW_H_PT
             ws[f"D{cur}"]=ss["deskripsi"]
             ws[f"D{cur}"].font=Font(size=11,name="Calibri")
             ws[f"D{cur}"].alignment=Alignment(wrap_text=True,vertical="center")
+            ws[f"E{cur}"]=ss_tgl
+            f11(ws[f"E{cur}"],align="center")
+            ws[f"F{cur}"]=ss_st
+            ws[f"F{cur}"].font=sfont(ss_st)
+            ws[f"F{cur}"].alignment=Alignment(horizontal="center",vertical="center")
             for col in ["B","C","D","E","F"]: lr(ws[f"{col}{cur}"])
             cur+=1
         for img in ss.get("images",[]): cur=emb(img.get("dataUrl",""),cur)

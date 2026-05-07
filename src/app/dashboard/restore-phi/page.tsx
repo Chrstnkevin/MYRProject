@@ -431,6 +431,7 @@ export default function RestorePhiPage() {
 
   // Detail modal
   const [detailItem, setDetailItem] = useState<{ master: typeof MASTER_DATA[0]; entry: RestoreEntry | null; done: boolean } | null>(null)
+  const [picPopup, setPicPopup] = useState<string | null>(null)  // PIC name for popup
 
   // Form state
   const [form, setForm] = useState({
@@ -446,11 +447,11 @@ export default function RestorePhiPage() {
 
   const load = async () => {
     setLoading(true)
-    // Selalu load SEMUA data dalam 1 tahun — tidak filter per bulan
-    // Status Done tidak reset per bulan, berlaku sepanjang tahun
+    // Exclude screenshot columns — bisa sangat berat (base64 images)
+    // Screenshot di-load on-demand saat buka detail
     const { data } = await supabase
       .from("restore_phi")
-      .select("*")
+      .select("id, area, server, adp_code, adp_name, pic_phi, month, year, restore_date, trans_date, backup_size, backup_tools_version, restore_status, pic_restore, done_restore")
       .eq("year", selectedYear)
     if (data) setEntries(data as RestoreEntry[])
     setLoading(false)
@@ -565,7 +566,15 @@ export default function RestorePhiPage() {
         restore_status: item.entry.restore_status || "Success",
         pic_restore: item.entry.pic_restore || "Kevin",
       })
-      setScreenshots([item.entry.screenshot_1 || null, item.entry.screenshot_2 || null, item.entry.screenshot_3 || null])
+      // Load screenshots on-demand — tidak ikut main list query
+      setScreenshots([null, null, null])
+      supabase.from("restore_phi")
+        .select("screenshot_1, screenshot_2, screenshot_3")
+        .eq("id", item.entry.id)
+        .single()
+        .then(({ data }) => {
+          if (data) setScreenshots([data.screenshot_1 || null, data.screenshot_2 || null, data.screenshot_3 || null])
+        })
     } else {
       setForm({ restore_date: new Date().toISOString().split("T")[0], trans_date: "", backup_size: "", backup_tools_version: "24.05.00", restore_status: "Success", pic_restore: "Kevin" })
       setScreenshots([null, null, null])
@@ -689,30 +698,61 @@ export default function RestorePhiPage() {
           </div>
         </div>
 
-        {/* Weekly */}
+        {/* Kontribusi Per Orang */}
         <div className="card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>Progress Mingguan</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <ProgressRing value={doneThisWeek} max={WEEKLY_TARGET} size={72} color={weeklyOk ? "var(--success)" : "var(--info)"} />
-            <div>
-              <div style={{ fontSize: 28, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.04em", lineHeight: 1 }}>{doneThisWeek}</div>
-              <div style={{ fontSize: 12, color: "var(--text3)", marginTop: 2 }}>dari {WEEKLY_TARGET} target/minggu</div>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 6, background: weeklyOk ? "var(--success-bg)" : "var(--info-bg)", color: weeklyOk ? "var(--success)" : "var(--info)", padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 600 }}>
-                {weeklyOk ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                Week {currentWeek}
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>Kontribusi Per Orang</div>
+          {(() => {
+            const PICs = [
+              { name: "Kevin", target: 43, color: "var(--accent)" },
+              { name: "Risky",  target: 42, color: "#F97316" },
+            ]
+            const total = TOTAL_MASTER // 85
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {PICs.map(({ name, target, color }) => {
+                  // Count actual done restores by this PIC this year
+                  const done = entries.filter(e =>
+                    e.done_restore &&
+                    e.pic_restore?.toLowerCase().includes(name.toLowerCase())
+                  ).length
+                  const pct = Math.round(target / total * 100)
+                  return (
+                    <div key={name}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: `${color}20`, border: `2px solid ${color}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color }}>
+                            {name[0]}
+                          </div>
+                          <span onClick={() => setPicPopup(name)}
+                            style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted", textUnderlineOffset: 3 }}>
+                            {name}
+                          </span>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <span style={{ fontSize: 11, color: "var(--text3)" }}>target </span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color, fontFamily: "var(--font-display,sans-serif)", lineHeight: 1 }}>{target}</span>
+                          <span style={{ fontSize: 11, color: "var(--text3)", marginLeft: 4 }}>ADP</span>
+                        </div>
+                      </div>
+                      {/* Progress: done vs target */}
+                      <div style={{ height: 8, background: "var(--surface3)", borderRadius: 99, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(done / target * 100, 100)}%`, background: color, borderRadius: 99, transition: "width 0.6s cubic-bezier(0.4,0,0.2,1)" }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text3)", marginTop: 3 }}>
+                        <span>{done} sudah selesai</span>
+                        <span>{done > 0 ? Math.round(done / target * 100) : 0}% dari target</span>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                  <span style={{ color: "var(--text3)" }}>Total {selectedYear}</span>
+                  <span style={{ fontWeight: 700, color: "var(--text)" }}>{total} ADP</span>
+                </div>
               </div>
-            </div>
-          </div>
-          <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-xs)", padding: "8px 10px", textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--accent)" }}>{doneThisMonth}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)" }}>Done bulan ini</div>
-            </div>
-            <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-xs)", padding: "8px 10px", textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text2)" }}>{TOTAL_MASTER - doneThisMonth}</div>
-              <div style={{ fontSize: 10, color: "var(--text3)" }}>Belum done</div>
-            </div>
-          </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -1113,7 +1153,55 @@ export default function RestorePhiPage() {
             grid-template-columns: 1fr !important;
           }
         }
-      `}</style>
+      `}
+      {/* PIC Detail Popup */}
+      {picPopup && (() => {
+        const picEntries = entries.filter(e =>
+          e.done_restore && e.pic_restore?.toLowerCase().includes(picPopup.toLowerCase())
+        ).sort((a, b) => (b.restore_date ?? "").localeCompare(a.restore_date ?? ""))
+        const PIC_COLOR = picPopup === "Kevin" ? "var(--accent)" : "#F97316"
+        return (
+          <ModalOverlay onClose={() => setPicPopup(null)}>
+            <div style={{ background: "var(--surface)", borderRadius: "var(--radius)", padding: 24, width: "min(540px, 95vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: `${PIC_COLOR}20`, border: `2px solid ${PIC_COLOR}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 800, color: PIC_COLOR }}>{picPopup[0]}</div>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: "var(--text)" }}>{picPopup}</div>
+                    <div style={{ fontSize: 11, color: "var(--text3)" }}>{picEntries.length} ADP sudah di-restore · {selectedYear}</div>
+                  </div>
+                </div>
+                <button onClick={() => setPicPopup(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", padding: 6, borderRadius: 6 }}>✕</button>
+              </div>
+              <div style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+                {picEntries.length === 0 ? (
+                  <div style={{ textAlign: "center", color: "var(--text3)", fontSize: 13, padding: "24px 0" }}>Belum ada restore yang selesai</div>
+                ) : picEntries.map((e, i) => {
+                  const master = MASTER_DATA.find(m => m.adp_code === e.adp_code)
+                  return (
+                    <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "var(--surface2)", borderRadius: "var(--radius-xs)", border: "1px solid var(--border)" }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text3)", minWidth: 24, textAlign: "center" }}>{i + 1}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{master?.adp_name ?? e.adp_code}</div>
+                        <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 2, display: "flex", gap: 10 }}>
+                          <span>{e.adp_code}</span>
+                          {master?.area && <span style={{ background: "var(--accent-muted)", color: "var(--accent)", padding: "0 6px", borderRadius: 99, fontWeight: 600 }}>{master.area}</span>}
+                          {master?.server && <span>SRV {master.server}</span>}
+                        </div>
+                      </div>
+                      <div style={{ textAlign: "right", flexShrink: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)" }}>{e.restore_date ? new Date(e.restore_date).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "—"}</div>
+                        <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 1 }}>{MONTHS[(e.month ?? 1) - 1]} {e.year}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </ModalOverlay>
+        )
+      })()}
+</style>
     </div>
   )
 }

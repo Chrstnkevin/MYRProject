@@ -6,7 +6,7 @@ import {
   Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText,
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
-  BarChart3, TrendingUp, Users
+  BarChart3, TrendingUp, Users, Server
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -14,7 +14,8 @@ const NAV_TOP = [
   { icon: LayoutGrid,    label: "Kanban",          path: "/dashboard/kanban",        desc: "Task board"             },
   { icon: FileText,      label: "Notulensi",       path: "/dashboard/notulensi",     desc: "Catatan rapat"          },
   { icon: Database,      label: "Restore DB PHI",  path: "/dashboard/restore-phi",   desc: "Monitoring DRP Restore" },
-  // { icon: DollarSign,    label: "Finance",         path: "/dashboard/finance",       desc: "Keuangan"               },
+  { icon: Server,        label: "VM DB",           path: "/dashboard/vm-db",         desc: "Disk usage monitoring"  },
+  { icon: DollarSign,    label: "Finance",         path: "/dashboard/finance",       desc: "Keuangan"               },
   { icon: Globe,         label: "Landing Admin",   path: "/dashboard/landing-admin", desc: "Kelola landing page"    },
 ]
 
