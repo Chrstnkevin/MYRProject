@@ -1,36 +1,39 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
-// Satu-satunya cookie yang kita percaya = sb-session-manual
-// Di-set eksplisit di login/page.tsx saat username+password benar
 const SESSION_COOKIE = "sb-session-manual"
 const SESSION_VALUE  = "authenticated"
 
+// Routes yang boleh diakses tanpa login (secret public pages)
+const PUBLIC_EXCEPTIONS = [
+  "/dashboard/backup-phi",
+]
+
 function isAuthenticated(request: NextRequest): boolean {
   const cookie = request.cookies.get(SESSION_COOKIE)
-  // Harus ada DAN valuenya = "authenticated"
   return cookie?.value === SESSION_VALUE
 }
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // Cek apakah ini public exception (secret page tanpa auth)
+  const isPublicException = PUBLIC_EXCEPTIONS.some(p => pathname.startsWith(p))
+  if (isPublicException) return NextResponse.next()
+
   const isProtected =
     pathname.startsWith("/dashboard") ||
     pathname.startsWith("/superadmin") ||
-    pathname.startsWith("/landing")   // protect landing pages too
+    pathname.startsWith("/landing")
 
   const loggedIn = isAuthenticated(request)
 
-  // Belum login → redirect ke /login
   if (isProtected && !loggedIn) {
     const loginUrl = new URL("/login", request.url)
-    // Simpan halaman yang dituju agar bisa redirect balik setelah login
     loginUrl.searchParams.set("from", pathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  // Sudah login tapi akses /login → redirect ke dashboard
   if (pathname === "/login" && loggedIn) {
     return NextResponse.redirect(new URL("/dashboard", request.url))
   }

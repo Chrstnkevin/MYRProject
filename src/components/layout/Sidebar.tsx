@@ -3,20 +3,39 @@
 import { useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import {
-  Home, FileText, DollarSign, LayoutGrid, GitBranch, ScrollText,
+  Home, FileText, LayoutGrid, GitBranch, ScrollText,
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
-  BarChart3, TrendingUp, Users, Server
+  BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw
 } from "lucide-react"
 
 const NAV_TOP = [
   { icon: Home,          label: "Home",           path: "/dashboard",               desc: "Overview harian"        },
   { icon: LayoutGrid,    label: "Kanban",          path: "/dashboard/kanban",        desc: "Task board"             },
   { icon: FileText,      label: "Notulensi",       path: "/dashboard/notulensi",     desc: "Catatan rapat"          },
-  { icon: Database,      label: "Restore DB PHI",  path: "/dashboard/restore-phi",   desc: "Monitoring DRP Restore" },
   { icon: Server,        label: "VM DB",           path: "/dashboard/vm-db",         desc: "Disk usage monitoring"  },
-  { icon: DollarSign,    label: "Finance",         path: "/dashboard/finance",       desc: "Keuangan"               },
-  { icon: Globe,         label: "Landing Admin",   path: "/dashboard/landing-admin", desc: "Kelola landing page"    },
+  { icon: ClipboardList, label: "Backlog PHI",     path: "/dashboard/backlog-phi",   desc: "Concern & request PHI"  },
+  { icon: Globe,         label: "Sharing Knowledge", path: "/dashboard/landing-admin", desc: "Tutorial, Infografis & Zoom" },
+]
+
+// ── Nested: Backup & Restore DB PHI ───────────────────────────
+const NAV_BACKUP_RESTORE = [
+  {
+    icon: Database,
+    label: "Restore DB PHI",
+    path: "/dashboard/restore-phi",
+    desc: "Monitoring DRP Restore",
+    badge: "Restore",
+    badgeColor: "#6d28d9",
+  },
+  {
+    icon: HardDrive,
+    label: "Backup DB PHI",
+    path: "/dashboard/backup-phi",
+    desc: "Checklist backup tim PHI",
+    badge: "Backup",
+    badgeColor: "#1d4ed8",
+  },
 ]
 
 // ── Nested: Data Utilisasi ─────────────────────────────────────
@@ -68,9 +87,11 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
+  const isBackupRestoreActive = NAV_BACKUP_RESTORE.some(n => pathname.startsWith(n.path))
   const isUtilisasiActive = NAV_UTILISASI.some(n => pathname.startsWith(n.path))
   const isDokumenActive   = NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
 
+  const [backupRestoreOpen, setBackupRestoreOpen] = useState(isBackupRestoreActive)
   const [utilisasiOpen, setUtilisasiOpen] = useState(isUtilisasiActive)
   const [dokumenOpen,   setDokumenOpen]   = useState(isDokumenActive)
 
@@ -244,6 +265,24 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               </button>
             )
           })}
+
+          {/* ── Backup & Restore DB PHI group ── */}
+          <div style={{ marginTop: "4px" }}>
+            <GroupHeader
+              icon={RefreshCcw}
+              label="Backup & Restore PHI"
+              desc="DRP Backup & Restore monitoring"
+              isActive={isBackupRestoreActive}
+              isOpen={backupRestoreOpen}
+              onToggle={() => setBackupRestoreOpen(v => !v)}
+              accentColor="#6d28d9"
+            />
+            <NestedContainer open={backupRestoreOpen} lineColor="rgba(109,40,217,0.3)">
+              {NAV_BACKUP_RESTORE.map(item => (
+                <NestedBtn key={item.path} {...item} />
+              ))}
+            </NestedContainer>
+          </div>
 
           {/* ── Data Utilisasi group ── */}
           <div style={{ marginTop: "6px" }}>

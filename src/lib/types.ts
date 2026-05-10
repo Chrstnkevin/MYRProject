@@ -67,6 +67,7 @@ export interface TutorialStep {
 export interface TutorialImprovement {
   id: string
   name: string
+  pic: string
   steps: TutorialStep[]
 }
 
@@ -86,6 +87,17 @@ export interface LandingInfographic {
   description: string
   image_url: string
   order_index: number
+  pic: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SharingZoom {
+  id: string
+  title: string
+  tanggal: string
+  pic: string
+  screenshots: string[]
   created_at: string
   updated_at: string
 }

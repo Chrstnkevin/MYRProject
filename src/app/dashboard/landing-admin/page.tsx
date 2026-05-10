@@ -2,18 +2,17 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import {
   Plus, Trash2, Image, BookOpen, Save, X, Eye,
-  RefreshCw, AlertCircle, CheckCircle2, ChevronRight,
-  Pencil, Upload
+  RefreshCw, AlertCircle, CheckCircle2, Video, User,
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
-import type { LandingTutorial, TutorialStep, TutorialImprovement, LandingInfographic } from "@/lib/types"
+import type { LandingTutorial, TutorialStep, TutorialImprovement, LandingInfographic, SharingZoom } from "@/lib/types"
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-// (LandingInfographic is now from lib/types — has id, title, tag, description, image_url, order_index)
-
+// ── Constants ──────────────────────────────────────────────────────────────────
+const PIC_OPTIONS = ["Kevin", "Risky", "Kevin & Risky"]
 const uid = () => crypto.randomUUID()
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
 function fileToBase64(file: File): Promise<string> {
   return new Promise((res, rej) => {
     const r = new FileReader()
@@ -23,7 +22,35 @@ function fileToBase64(file: File): Promise<string> {
   })
 }
 
-// ── Image Uploader ─────────────────────────────────────────────────────────────
+// ── PIC Selector ───────────────────────────────────────────────────────────────
+function PicSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+        <User size={10} style={{ display: "inline", marginRight: 4 }} />PIC
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {PIC_OPTIONS.map(p => (
+          <button key={p} onClick={() => onChange(p)}
+            style={{
+              padding: "4px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600,
+              cursor: "pointer", transition: "all 0.15s",
+              background: value === p ? "var(--accent)" : "var(--surface2)",
+              color: value === p ? "white" : "var(--text2)",
+              border: value === p ? "1.5px solid var(--accent)" : "1.5px solid var(--border)",
+            }}>
+            {p}
+          </button>
+        ))}
+        {value && !PIC_OPTIONS.includes(value) && (
+          <span style={{ fontSize: 11, color: "var(--text3)", alignSelf: "center" }}>{value}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Image Uploader (single) ────────────────────────────────────────────────────
 function ImageUploader({ value, onChange }: { value: string; onChange: (url: string) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -53,7 +80,7 @@ function ImageUploader({ value, onChange }: { value: string; onChange: (url: str
           </>
         ) : (
           <div style={{ textAlign: "center", padding: "14px" }}>
-            <Upload size={16} color="var(--text3)" style={{ margin: "0 auto 5px", display: "block" }} />
+            <Image size={16} color="var(--text3)" style={{ margin: "0 auto 5px", display: "block" }} />
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text2)" }}>Upload / Ctrl+V paste</div>
           </div>
         )}
@@ -63,10 +90,87 @@ function ImageUploader({ value, onChange }: { value: string; onChange: (url: str
   )
 }
 
+// ── Multi Image Uploader (for Zoom screenshots) ────────────────────────────────
+function MultiImageUploader({ values, onChange }: { values: string[]; onChange: (urls: string[]) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const addFile = async (file: File) => {
+    const b64 = await fileToBase64(file)
+    onChange([...values, b64])
+  }
+
+  const handlePaste = useCallback(async (e: Event) => {
+    const ce = e as ClipboardEvent
+    const item = Array.from(ce.clipboardData?.items ?? []).find(i => i.type.startsWith("image/"))
+    if (item) { const f = item.getAsFile(); if (f) addFile(f) }
+  }, [values])
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    el.addEventListener("paste", handlePaste)
+    return () => el.removeEventListener("paste", handlePaste)
+  }, [handlePaste])
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault(); setDragging(false)
+    for (const file of Array.from(e.dataTransfer.files)) {
+      if (file.type.startsWith("image/")) await addFile(file)
+    }
+  }
+
+  const remove = (idx: number) => onChange(values.filter((_, i) => i !== idx))
+
+  return (
+    <div ref={containerRef} tabIndex={0} style={{ outline: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Screenshot grid */}
+      {values.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+          {values.map((url, idx) => (
+            <div key={idx} style={{ position: "relative", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt={`Screenshot ${idx + 1}`} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+              <div style={{ position: "absolute", top: 4, left: 6, background: "rgba(0,0,0,0.55)", color: "white", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10 }}>
+                #{idx + 1}
+              </div>
+              <button onClick={() => remove(idx)}
+                style={{ position: "absolute", top: 4, right: 4, background: "rgba(192,57,43,0.85)", border: "none", borderRadius: 6, padding: "3px 5px", cursor: "pointer", color: "white", display: "flex", alignItems: "center" }}>
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Drop zone */}
+      <div onDrop={handleDrop} onDragOver={e => { e.preventDefault(); setDragging(true) }} onDragLeave={() => setDragging(false)}
+        onClick={() => inputRef.current?.click()}
+        style={{ border: `2px dashed ${dragging ? "var(--accent)" : "var(--border2)"}`, borderRadius: "var(--radius-sm)", padding: "14px", cursor: "pointer", background: dragging ? "var(--accent-muted)" : "var(--surface2)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.15s" }}>
+        <Image size={14} color="var(--text3)" />
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text2)" }}>
+          {values.length > 0 ? "Tambah screenshot lagi" : "Upload / Ctrl+V / Drop screenshot"}
+        </div>
+      </div>
+
+      <input ref={inputRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+        onChange={async e => {
+          for (const file of Array.from(e.target.files ?? [])) await addFile(file)
+          e.target.value = ""
+        }} />
+
+      <div style={{ fontSize: 10, color: "var(--text3)" }}>
+        💡 Tip: Klik area di atas lalu <strong>Ctrl+V</strong> untuk paste screenshot langsung
+      </div>
+    </div>
+  )
+}
+
 // ── Inline editable text ───────────────────────────────────────────────────────
 function InlineEdit({ value, onChange, placeholder, bold }: { value: string; onChange: (v: string) => void; placeholder?: string; bold?: boolean }) {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft]     = useState(value)
+  const [draft, setDraft] = useState(value)
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { if (editing) ref.current?.focus() }, [editing])
   const commit = () => { onChange(draft); setEditing(false) }
@@ -78,33 +182,23 @@ function InlineEdit({ value, onChange, placeholder, bold }: { value: string; onC
   return (
     <span onClick={e => { e.stopPropagation(); setDraft(value); setEditing(true) }}
       title="Click to edit"
-      style={{ cursor: "text", borderRadius: 4, padding: "2px 3px", display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "100%", transition: "background 0.1s" }}
-      onMouseEnter={e => e.currentTarget.style.background = "var(--surface3)"}
-      onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-      <span style={{ fontSize: 12, fontWeight: bold ? 700 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {value || <span style={{ color: "var(--text3)", fontStyle: "italic", fontWeight: 400 }}>{placeholder}</span>}
-      </span>
-      <Pencil size={9} color="var(--text3)" style={{ flexShrink: 0 }} />
+      style={{ cursor: "text", borderBottom: "1px dashed var(--border2)", paddingBottom: 1, fontWeight: bold ? 700 : 400, minWidth: 40, display: "inline-block" }}>
+      {value || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>{placeholder ?? "click to edit"}</span>}
     </span>
   )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// TUTORIAL ADMIN — 3-Panel Layout (no more accordion scroll hell)
-// [Apps] | [Improvements] | [Step mini-nav + Editor]
-// ══════════════════════════════════════════════════════════════════════════════
+// ── Tutorial Admin ─────────────────────────────────────────────────────────────
 function TutorialAdmin() {
   type SaveStatus = "idle" | "saving" | "saved" | "error"
-
-  const [apps, setApps]           = useState<LandingTutorial[]>([])
-  const [loading, setLoading]     = useState(true)
+  const [apps, setApps] = useState<LandingTutorial[]>([])
+  const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<Record<string, SaveStatus>>({})
-  const [errorMsg, setErrorMsg]   = useState("")
-  const [selAppId, setSelAppId]   = useState("")
-  const [selImpId, setSelImpId]   = useState("")
+  const [errorMsg, setErrorMsg] = useState("")
+  const [selAppId, setSelAppId] = useState("")
+  const [selImpId, setSelImpId] = useState("")
   const [selStepId, setSelStepId] = useState("")
 
-  // Load
   const load = async () => {
     setLoading(true)
     const { data, error } = await supabase.from("landing_tutorials").select("*").order("app_id")
@@ -121,12 +215,11 @@ function TutorialAdmin() {
   }
   useEffect(() => { load() }, [])
 
-  const selApp  = apps.find(a => a.id === selAppId)
-  const selImp  = selApp?.improvements?.find(i => i.id === selImpId)
+  const selApp = apps.find(a => a.id === selAppId)
+  const selImp = selApp?.improvements?.find(i => i.id === selImpId)
   const selStep = selImp?.steps?.find(s => s.id === selStepId)
   const selStepIdx = selImp?.steps?.findIndex(s => s.id === selStepId) ?? -1
 
-  // Save
   const saveApp = async (app: LandingTutorial) => {
     setSaveStatus(p => ({ ...p, [app.id]: "saving" })); setErrorMsg("")
     const { error } = await supabase.from("landing_tutorials")
@@ -136,24 +229,24 @@ function TutorialAdmin() {
     if (error) setErrorMsg(error.message)
     setTimeout(() => setSaveStatus(p => ({ ...p, [app.id]: "idle" })), 3000)
   }
-  const saveAll    = async () => { for (const a of apps) await saveApp(a) }
-  const anyStatus  = (s: SaveStatus) => Object.values(saveStatus).some(v => v === s)
+  const saveAll = async () => { for (const a of apps) await saveApp(a) }
 
-  // Mutations
-  const updateApp  = (id: string, f: "app_name" | "emoji", v: string) =>
+  const updateApp = (id: string, f: "app_name" | "emoji", v: string) =>
     setApps(p => p.map(a => a.id === id ? { ...a, [f]: v } : a))
   const addImp = (appId: string) => {
     const id = uid()
-    setApps(p => p.map(a => a.id === appId ? { ...a, improvements: [...(a.improvements ?? []), { id, name: "New Improvement", steps: [] }] } : a))
+    setApps(p => p.map(a => a.id === appId ? { ...a, improvements: [...(a.improvements ?? []), { id, name: "New Improvement", pic: "", steps: [] }] } : a))
     setSelImpId(id); setSelStepId("")
   }
-  const updateImp  = (appId: string, impId: string, name: string) =>
+  const updateImp = (appId: string, impId: string, name: string) =>
     setApps(p => p.map(a => a.id === appId ? { ...a, improvements: a.improvements.map(i => i.id === impId ? { ...i, name } : i) } : a))
-  const removeImp  = (appId: string, impId: string) => {
+  const updateImpPic = (appId: string, impId: string, pic: string) =>
+    setApps(p => p.map(a => a.id === appId ? { ...a, improvements: a.improvements.map(i => i.id === impId ? { ...i, pic } : i) } : a))
+  const removeImp = (appId: string, impId: string) => {
     setApps(p => p.map(a => a.id === appId ? { ...a, improvements: a.improvements.filter(i => i.id !== impId) } : a))
     if (selImpId === impId) { setSelImpId(""); setSelStepId("") }
   }
-  const addStep    = (appId: string, impId: string) => {
+  const addStep = (appId: string, impId: string) => {
     const id = uid()
     setApps(p => p.map(a => a.id === appId ? { ...a, improvements: a.improvements.map(i => i.id === impId ? { ...i, steps: [...i.steps, { id, title: "", desc: "", imageUrl: "" }] } : i) } : a))
     setSelStepId(id)
@@ -176,7 +269,6 @@ function TutorialAdmin() {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
-
   if (!apps.length) return (
     <div style={{ textAlign: "center", padding: "48px 0" }}>
       <div style={{ fontSize: 28, marginBottom: 10 }}>📭</div>
@@ -187,289 +279,212 @@ function TutorialAdmin() {
     </div>
   )
 
-  // Shared panel styles
   const PANEL_H = "calc(100vh - 290px)"
-  const card: React.CSSProperties    = { display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--card)", borderRadius: "var(--radius)", border: "1px solid var(--border)", minHeight: 380, maxHeight: PANEL_H }
-  const pHead: React.CSSProperties   = { padding: "9px 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: "var(--surface)" }
-  const pBody: React.CSSProperties   = { flex: 1, overflowY: "auto", minHeight: 0 }
-  const pLabel: React.CSSProperties  = { fontSize: 10, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase" as const, letterSpacing: "0.09em" }
+  const card: React.CSSProperties = { display: "flex", flexDirection: "column", overflow: "hidden", background: "var(--card)", borderRadius: "var(--radius)", border: "1px solid var(--border)", minHeight: 380, maxHeight: PANEL_H }
+  const pHead: React.CSSProperties = { padding: "9px 12px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, background: "var(--surface)" }
+  const pBody: React.CSSProperties = { flex: 1, overflowY: "auto", minHeight: 0 }
+  const pLabel: React.CSSProperties = { fontSize: 10, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase" as const, letterSpacing: "0.09em" }
   const row = (active: boolean): React.CSSProperties => ({
     padding: "9px 11px", cursor: "pointer",
     background: active ? "var(--accent-muted)" : "transparent",
     borderLeft: `3px solid ${active ? "var(--accent)" : "transparent"}`,
     borderBottom: "1px solid var(--border)",
-    transition: "all 0.12s",
   })
-  const addBtn = (onClick: () => void, label: string) => (
-    <button onClick={onClick} style={{ background: "var(--accent)", border: "none", borderRadius: 6, padding: "3px 9px", cursor: "pointer", color: "white", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600 }}>
-      <Plus size={10} /> {label}
-    </button>
-  )
-
-  const totalImps  = apps.reduce((n, a) => n + (a.improvements?.length ?? 0), 0)
-  const totalSteps = apps.reduce((n, a) => n + (a.improvements?.reduce((m, i) => m + i.steps.length, 0) ?? 0), 0)
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-
-      {/* Top bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 11, color: "var(--text3)" }}>
-          {apps.length} apps · {totalImps} improvements · {totalSteps} steps
-        </div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 12, color: "var(--text3)" }}>{apps.length} apps</div>
+        <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={load}><RefreshCw size={13} /> Refresh</button>
-          <button className="btn btn-primary" onClick={saveAll} disabled={anyStatus("saving")} style={{ opacity: anyStatus("saving") ? 0.7 : 1 }}>
-            <Save size={14} /> {anyStatus("saving") ? "Saving…" : "Save All"}
+          <button className="btn btn-primary" onClick={saveAll} disabled={Object.values(saveStatus).some(v => v === "saving")}>
+            <Save size={14} /> Save All
           </button>
         </div>
       </div>
-
       {errorMsg && (
-        <div style={{ display: "flex", gap: 8, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#991B1B" }}>
-          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-          <div><strong>Error:</strong> {errorMsg} <br /><span style={{ opacity: 0.75, fontSize: 11 }}>Check RLS policy: allow UPDATE for your role.</span></div>
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#991B1B" }}>
+          <AlertCircle size={13} style={{ display: "inline", marginRight: 6 }} />{errorMsg}
         </div>
       )}
 
-      {/* ══ 3-PANEL GRID ══ */}
-      <div style={{ display: "grid", gridTemplateColumns: "190px 210px 1fr", gap: 10, alignItems: "start" }}>
+      {/* 4-panel layout */}
+      <div style={{ display: "grid", gridTemplateColumns: "180px 200px 220px 1fr", gap: 10 }}>
+        {/* Panel 1: Apps */}
+        <div style={card}>
+          <div style={pHead}><span style={pLabel}>Apps</span></div>
+          <div style={pBody}>
+            {apps.map(a => (
+              <div key={a.id} onClick={() => { setSelAppId(a.id); setSelImpId(a.improvements?.[0]?.id ?? ""); setSelStepId(a.improvements?.[0]?.steps?.[0]?.id ?? "") }}
+                style={row(selAppId === a.id)}>
+                <div style={{ fontSize: 13 }}>{a.emoji} {a.app_name || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>Unnamed</span>}</div>
+                {saveStatus[a.id] === "saved" && <CheckCircle2 size={11} color="var(--success)" style={{ display: "inline", marginLeft: 4 }} />}
+                {saveStatus[a.id] === "error" && <AlertCircle size={11} color="var(--danger)" style={{ display: "inline", marginLeft: 4 }} />}
+              </div>
+            ))}
+          </div>
+        </div>
 
-        {/* ── PANEL 1: Apps ─────────────────────────────────────── */}
+        {/* Panel 2: App detail + Improvements */}
         <div style={card}>
           <div style={pHead}>
-            <span style={pLabel}>Apps ({apps.length})</span>
-          </div>
-          <div style={pBody}>
-            {apps.map(app => {
-              const active = app.id === selAppId
-              const st     = saveStatus[app.id] ?? "idle"
-              return (
-                <div key={app.id} style={row(active)}
-                  onClick={() => {
-                    setSelAppId(app.id)
-                    const fi = app.improvements?.[0]
-                    setSelImpId(fi?.id ?? ""); setSelStepId(fi?.steps?.[0]?.id ?? "")
-                  }}
-                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--surface2)" }}
-                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                    <input value={app.emoji} onClick={e => e.stopPropagation()}
-                      onChange={e => updateApp(app.id, "emoji", e.target.value)}
-                      style={{ width: 26, textAlign: "center", fontSize: 15, background: "none", border: "none", outline: "none", cursor: "text", padding: 0, flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {app.app_name}
-                      </div>
-                      <div style={{ fontSize: 10, color: "var(--text3)" }}>
-                        {app.improvements?.length ?? 0} impr · {app.improvements?.reduce((n, i) => n + i.steps.length, 0) ?? 0} steps
-                      </div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                      {st === "saving" && <RefreshCw size={10} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
-                      {st === "saved"  && <CheckCircle2 size={10} color="#16a34a" />}
-                      {st === "error"  && <AlertCircle  size={10} color="var(--danger)" />}
-                      <ChevronRight size={11} color="var(--text3)" />
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-          {selApp && (
-            <div style={{ padding: "7px 9px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
-              <button className="btn btn-ghost" style={{ width: "100%", fontSize: 11, justifyContent: "center" }}
-                onClick={() => saveApp(selApp)} disabled={saveStatus[selApp.id] === "saving"}>
-                <Save size={11} /> Save "{selApp.app_name}"
+            <span style={pLabel}>Detail</span>
+            {selApp && (
+              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => saveApp(selApp)}>
+                <Save size={11} />
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* ── PANEL 2: Improvements ─────────────────────────────── */}
-        <div style={card}>
-          <div style={pHead}>
-            <span style={pLabel}>{selApp ? `${selApp.emoji} Improvements` : "Improvements"}</span>
-            {selApp && addBtn(() => addImp(selApp.id), "Add")}
+            )}
           </div>
-          <div style={pBody}>
-            {!selApp ? (
-              <div style={{ padding: "32px 14px", textAlign: "center", color: "var(--text3)", fontSize: 12 }}>← Select an app first</div>
-            ) : (selApp.improvements ?? []).length === 0 ? (
-              <div style={{ padding: "32px 14px", textAlign: "center" }}>
-                <div style={{ fontSize: 24, marginBottom: 8 }}>🗂️</div>
-                <div style={{ fontSize: 12, color: "var(--text3)", marginBottom: 10 }}>No improvements yet</div>
-                <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => addImp(selApp.id)}><Plus size={11} /> Add first improvement</button>
-              </div>
-            ) : (selApp.improvements ?? []).map((imp, idx) => {
-              const active = imp.id === selImpId
-              return (
-                <div key={imp.id} style={row(active)}
-                  onClick={() => { setSelImpId(imp.id); setSelStepId(imp.steps?.[0]?.id ?? "") }}
-                  onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--surface2)" }}
-                  onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent" }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
-                    <div style={{ width: 19, height: 19, borderRadius: "50%", flexShrink: 0, background: active ? "var(--accent)" : "var(--border2)", color: active ? "white" : "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 800, marginTop: 1 }}>{idx + 1}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div onClick={e => e.stopPropagation()}>
-                        <InlineEdit value={imp.name} placeholder="Improvement name…" bold={active}
-                          onChange={v => updateImp(selApp.id, imp.id, v)} />
-                      </div>
-                      <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 2, paddingLeft: 3 }}>
-                        {imp.steps.length} step{imp.steps.length !== 1 ? "s" : ""}
-                      </div>
-                    </div>
-                    <button onClick={e => { e.stopPropagation(); removeImp(selApp.id, imp.id) }}
-                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: "2px", flexShrink: 0, opacity: 0.5 }}
-                      onMouseEnter={e => e.currentTarget.style.opacity = "1"}
-                      onMouseLeave={e => e.currentTarget.style.opacity = "0.5"}>
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
+          <div style={{ ...pBody, padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            {selApp ? (
+              <>
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 4 }}>Emoji</div>
+                  <InlineEdit value={selApp.emoji} onChange={v => updateApp(selApp.id, "emoji", v)} placeholder="emoji" />
                 </div>
-              )
-            })}
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 4 }}>App Name</div>
+                  <InlineEdit value={selApp.app_name} onChange={v => updateApp(selApp.id, "app_name", v)} placeholder="app name" bold />
+                </div>
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 6 }}>Improvements</div>
+                  {selApp.improvements?.map(imp => (
+                    <div key={imp.id} onClick={() => { setSelImpId(imp.id); setSelStepId(imp.steps?.[0]?.id ?? "") }}
+                      style={{ ...row(selImpId === imp.id), display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 2, borderRadius: 6 }}>
+                      <div>
+                        <span style={{ fontSize: 12 }}>{imp.name}</span>
+                        {imp.pic && <div style={{ fontSize: 9, color: "var(--text3)", marginTop: 1 }}>👤 {imp.pic}</div>}
+                      </div>
+                      <button onClick={e => { e.stopPropagation(); removeImp(selApp.id, imp.id) }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: 2 }}><X size={11} /></button>
+                    </div>
+                  ))}
+                  <button className="btn btn-ghost" style={{ fontSize: 11, marginTop: 6, width: "100%" }} onClick={() => addImp(selApp.id)}>
+                    <Plus size={12} /> Add Improvement
+                  </button>
+                </div>
+              </>
+            ) : <div style={{ fontSize: 12, color: "var(--text3)", padding: "20px 0" }}>Select an app</div>}
           </div>
         </div>
 
-        {/* ── PANEL 3: Steps + Editor ───────────────────────────── */}
+        {/* Panel 3: Steps + PIC per improvement */}
         <div style={card}>
           <div style={pHead}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, flex: 1, minWidth: 0 }}>
-              <span style={pLabel}>Steps</span>
-              {selImp && <span style={{ fontSize: 11, color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>— {selImp.name}</span>}
-            </div>
-            {selImp && addBtn(() => addStep(selApp!.id, selImp.id), "Add Step")}
-          </div>
-
-          {!selImp ? (
-            <div style={{ padding: "48px", textAlign: "center", color: "var(--text3)", fontSize: 12 }}>← Select an improvement</div>
-          ) : (
-            <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
-
-              {/* Step list mini-sidebar */}
-              <div style={{ width: 150, flexShrink: 0, borderRight: "1px solid var(--border)", overflowY: "auto", display: "flex", flexDirection: "column" }}>
-                {selImp.steps.length === 0 ? (
-                  <div style={{ padding: "24px 10px", textAlign: "center" }}>
-                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 8 }}>No steps yet</div>
-                    <button className="btn btn-ghost" style={{ fontSize: 10, width: "100%" }} onClick={() => addStep(selApp!.id, selImp.id)}><Plus size={10} /> Add first step</button>
-                  </div>
-                ) : selImp.steps.map((step, si) => {
-                  const active = step.id === selStepId
-                  return (
-                    <div key={step.id} onClick={() => setSelStepId(step.id)}
-                      style={{ ...row(active), borderLeft: `3px solid ${active ? "var(--accent)" : "transparent"}` }}
-                      onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--surface2)" }}
-                      onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 17, height: 17, borderRadius: "50%", flexShrink: 0, background: active ? "var(--accent)" : "var(--border2)", color: active ? "white" : "var(--text3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, fontWeight: 800 }}>{si + 1}</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, fontWeight: active ? 700 : 400, color: active ? "var(--accent)" : "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {step.title || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>Untitled</span>}
-                          </div>
-                          {step.imageUrl && <div style={{ fontSize: 9, color: "#16a34a" }}>📷</div>}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Step editor */}
-              {!selStep ? (
-                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: 12 }}>← Select a step</div>
-              ) : (
-                <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-
-                  {/* Step header */}
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ ...pLabel, color: "var(--accent)" }}>
-                      Step {selStepIdx + 1} / {selImp.steps.length}
-                    </span>
-                    <button onClick={() => removeStep(selApp!.id, selImp.id, selStep.id)}
-                      style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6, padding: "3px 9px", cursor: "pointer", color: "#dc2626", display: "flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600 }}>
-                      <Trash2 size={11} /> Delete
+            <div style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minWidth: 0 }}>
+              <span style={pLabel}>{selImp ? selImp.name : "Steps"}</span>
+              {selImp && (
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                  {PIC_OPTIONS.map(p => (
+                    <button key={p} onClick={() => { if (selApp) updateImpPic(selApp.id, selImp.id, p) }}
+                      style={{
+                        padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 600, cursor: "pointer",
+                        background: (selImp.pic ?? "") === p ? "var(--accent)" : "var(--surface2)",
+                        color: (selImp.pic ?? "") === p ? "white" : "var(--text3)",
+                        border: (selImp.pic ?? "") === p ? "1px solid var(--accent)" : "1px solid var(--border)",
+                      }}>
+                      {p}
                     </button>
-                  </div>
-
-                  {/* Title */}
-                  <div>
-                    <div className="label" style={{ marginBottom: 4 }}>Step Title</div>
-                    <input className="input" placeholder="e.g. Open Login Page"
-                      value={selStep.title}
-                      onChange={e => updateStep(selApp!.id, selImp.id, selStep.id, "title", e.target.value)} />
-                  </div>
-
-                  {/* Description */}
-                  <div>
-                    <div className="label" style={{ marginBottom: 4 }}>Description</div>
-                    <textarea className="input" rows={5} placeholder="Explain what to do in this step…"
-                      value={selStep.desc}
-                      onChange={e => updateStep(selApp!.id, selImp.id, selStep.id, "desc", e.target.value)}
-                      style={{ resize: "vertical", lineHeight: 1.6 }} />
-                  </div>
-
-                  {/* Image */}
-                  <div>
-                    <div className="label" style={{ marginBottom: 4 }}>Screenshot</div>
-                    <div style={{ fontSize: 10, color: "var(--text3)", marginBottom: 5 }}>
-                      Upload, drag & drop, atau <kbd style={{ background: "var(--surface3)", border: "1px solid var(--border2)", borderRadius: 3, padding: "0 4px", fontFamily: "monospace", fontSize: 9 }}>Ctrl+V</kbd> paste — disimpan langsung ✅
-                    </div>
-                    <ImageUploader value={selStep.imageUrl}
-                      onChange={url => updateStep(selApp!.id, selImp.id, selStep.id, "imageUrl", url)} />
-                  </div>
-
-                  {/* Prev / Next step navigation */}
-                  <div style={{ display: "flex", gap: 8, paddingTop: 4, borderTop: "1px solid var(--border)" }}>
-                    <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11, justifyContent: "center" }}
-                      disabled={selStepIdx <= 0}
-                      onClick={() => setSelStepId(selImp.steps[selStepIdx - 1].id)}>← Prev</button>
-                    <button className="btn btn-ghost" style={{ flex: 1, fontSize: 11, justifyContent: "center" }}
-                      disabled={selStepIdx >= selImp.steps.length - 1}
-                      onClick={() => setSelStepId(selImp.steps[selStepIdx + 1].id)}>Next →</button>
-                  </div>
+                  ))}
                 </div>
               )}
             </div>
-          )}
+            {selApp && selImp && (
+              <button className="btn btn-ghost" style={{ fontSize: 10, padding: "2px 8px", flexShrink: 0 }} onClick={() => addStep(selApp.id, selImp.id)}>
+                <Plus size={11} />
+              </button>
+            )}
+          </div>
+          <div style={pBody}>
+            {selImp?.steps?.map((s, i) => (
+              <div key={s.id} onClick={() => setSelStepId(s.id)} style={row(selStepId === s.id)}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: "var(--text3)", marginBottom: 2 }}>Step {i + 1}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{s.title || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>Untitled</span>}</div>
+                  </div>
+                  <button onClick={e => { e.stopPropagation(); if (selApp && selImp) removeStep(selApp.id, selImp.id, s.id) }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: 2 }}><X size={11} /></button>
+                </div>
+              </div>
+            ))}
+            {!selImp && <div style={{ fontSize: 12, color: "var(--text3)", padding: 12 }}>Select an improvement</div>}
+          </div>
+        </div>
+
+        {/* Panel 4: Step editor */}
+        <div style={card}>
+          <div style={pHead}><span style={pLabel}>Step Editor</span></div>
+          <div style={{ ...pBody, padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            {selStep && selApp && selImp ? (
+              <>
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 4 }}>Title</div>
+                  <input className="input" value={selStep.title} placeholder="Step title"
+                    onChange={e => updateStep(selApp.id, selImp.id, selStep.id, "title", e.target.value)} />
+                </div>
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 4 }}>Description</div>
+                  <textarea className="input" rows={3} value={selStep.desc} placeholder="Step description"
+                    onChange={e => updateStep(selApp.id, selImp.id, selStep.id, "desc", e.target.value)} />
+                </div>
+                <div>
+                  <div style={{ ...pLabel, marginBottom: 4 }}>Image (Upload / Ctrl+V)</div>
+                  <ImageUploader value={selStep.imageUrl} onChange={url => updateStep(selApp.id, selImp.id, selStep.id, "imageUrl", url)} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-ghost" style={{ flex: 1 }} disabled={selStepIdx <= 0}
+                    onClick={() => {
+                      const steps = [...selImp.steps]
+                      const i = selStepIdx;
+                      [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]
+                      setApps(p => p.map(a => a.id === selApp.id ? { ...a, improvements: a.improvements.map(im => im.id === selImp.id ? { ...im, steps } : im) } : a))
+                    }}>↑ Move Up</button>
+                  <button className="btn btn-ghost" style={{ flex: 1 }} disabled={selStepIdx >= (selImp.steps.length - 1)}
+                    onClick={() => {
+                      const steps = [...selImp.steps]
+                      const i = selStepIdx;
+                      [steps[i], steps[i + 1]] = [steps[i + 1], steps[i]]
+                      setApps(p => p.map(a => a.id === selApp.id ? { ...a, improvements: a.improvements.map(im => im.id === selImp.id ? { ...im, steps } : im) } : a))
+                    }}>↓ Move Down</button>
+                </div>
+                <button className="btn btn-primary" onClick={() => saveApp(selApp)} disabled={saveStatus[selApp.id] === "saving"}>
+                  <Save size={14} /> {saveStatus[selApp.id] === "saving" ? "Saving…" : "Save App"}
+                </button>
+              </>
+            ) : <div style={{ fontSize: 12, color: "var(--text3)", padding: "20px 0" }}>Select a step to edit</div>}
+          </div>
         </div>
       </div>
-
-      {/* Bottom save bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: "1px solid var(--border)" }}>
-        <button className="btn btn-primary" onClick={saveAll} disabled={anyStatus("saving")} style={{ opacity: anyStatus("saving") ? 0.7 : 1 }}>
-          <Save size={14} /> {anyStatus("saving") ? "Saving…" : "Save All to Supabase"}
-        </button>
-        {anyStatus("saved") && !anyStatus("saving") && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#ECFDF5", border: "1px solid #6EE7B7", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#065F46" }}>
-            <CheckCircle2 size={13} /> All saved! Public tutorial page updated.
-          </div>
-        )}
-        {anyStatus("error") && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#991B1B" }}>
-            <AlertCircle size={13} /> Save failed — check error above.
-          </div>
-        )}
-      </div>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   )
 }
 
-// ── TAB: Infographics — Supabase-backed ───────────────────────────────────────
+// ── Infographics Admin ─────────────────────────────────────────────────────────
 function InfographicsAdmin() {
-  const [items, setItems]     = useState<LandingInfographic[]>([])
+  // List state — WITHOUT image_url for fast loading
+  const [items, setItems] = useState<LandingInfographic[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [saved, setSaved]     = useState(false)
   const [errorMsg, setErrorMsg] = useState("")
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [imageCache, setImageCache] = useState<Record<string, string>>({})
 
-  // Load from Supabase
+  // Form state for new item
+  const emptyForm = (): LandingInfographic => ({
+    id: uid(), title: "", tag: "", description: "", image_url: "",
+    order_index: 0, pic: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+  })
+  const [form, setForm] = useState<LandingInfographic>(emptyForm())
+  const [formOpen, setFormOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  // Load WITHOUT images for speed
   const load = async () => {
     setLoading(true)
     const { data, error } = await supabase
       .from("landing_infographics")
-      .select("*")
+      .select("id, title, tag, description, pic, order_index, created_at, updated_at")
       .order("order_index")
     if (!error && data) setItems(data as LandingInfographic[])
     else if (error) setErrorMsg(error.message)
@@ -477,40 +492,218 @@ function InfographicsAdmin() {
   }
   useEffect(() => { load() }, [])
 
-  const update = (id: string, f: keyof LandingInfographic, v: string | number) =>
-    setItems(p => p.map(i => i.id === id ? { ...i, [f]: v } : i))
+  // Lazy load image when row is expanded
+  const loadImage = async (id: string) => {
+    if (imageCache[id]) return
+    const { data } = await supabase.from("landing_infographics").select("image_url").eq("id", id).single()
+    if (data?.image_url) setImageCache(p => ({ ...p, [id]: data.image_url }))
+  }
 
-  const add = () => {
-    const newItem: LandingInfographic = {
-      id: uid(), title: "", tag: "", description: "", image_url: "",
-      order_index: items.length, created_at: new Date().toISOString(), updated_at: new Date().toISOString()
-    }
-    setItems(p => [...p, newItem])
+  const handleExpand = (id: string) => {
+    if (expandedId === id) { setExpandedId(null); return }
+    setExpandedId(id)
+    loadImage(id)
+  }
+
+  const updateForm = (f: keyof LandingInfographic, v: string) =>
+    setForm(p => ({ ...p, [f]: v }))
+
+  const saveNew = async () => {
+    if (!form.title) { setErrorMsg("Title wajib diisi"); return }
+    setSaving(true); setErrorMsg("")
+    const payload = { ...form, order_index: items.length, updated_at: new Date().toISOString() }
+    const { error } = await supabase.from("landing_infographics").upsert([payload], { onConflict: "id" })
+    if (error) { setErrorMsg(error.message); setSaving(false); return }
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+    setForm(emptyForm())
+    setFormOpen(false)
+    setSaving(false)
+    await load()
   }
 
   const remove = async (id: string) => {
-    // Delete from Supabase if it's a real UUID (not local-only)
-    const item = items.find(i => i.id === id)
-    if (item) {
-      await supabase.from("landing_infographics").delete().eq("id", id)
-    }
+    await supabase.from("landing_infographics").delete().eq("id", id)
     setItems(p => p.filter(i => i.id !== id))
   }
 
-  // Upsert all to Supabase — handles both new + existing rows
-  const saveAll = async () => {
-    setSaving(true); setErrorMsg(""); setSaved(false)
-    const payload = items.map((item, idx) => ({
-      ...item,
-      order_index: idx,
-      updated_at: new Date().toISOString(),
-    }))
-    const { error } = await supabase
-      .from("landing_infographics")
-      .upsert(payload, { onConflict: "id" })
-    if (error) setErrorMsg(error.message)
-    else { setSaved(true); setTimeout(() => setSaved(false), 3000) }
-    setSaving(false)
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "32px 0", color: "var(--text3)" }}>
+      <RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} /> Loading…
+    </div>
+  )
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Toolbar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 12, color: "var(--text3)" }}>{items.length} infographics · gambar dimuat saat dibuka (lebih cepat ⚡)</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={load}><RefreshCw size={13} /> Refresh</button>
+          <button className="btn btn-primary" onClick={() => { setForm(emptyForm()); setFormOpen(true) }}><Plus size={14} /> Add</button>
+        </div>
+      </div>
+
+      {errorMsg && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#991B1B", display: "flex", justifyContent: "space-between" }}>
+          <span><AlertCircle size={13} style={{ display: "inline", marginRight: 6 }} />{errorMsg}</span>
+          <button onClick={() => setErrorMsg("")} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={12} /></button>
+        </div>
+      )}
+
+      {/* Add form */}
+      {formOpen && (
+        <div className="card" style={{ padding: 20, border: "1.5px solid var(--accent)", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>🖼️ Tambah Infografis Baru</div>
+            <button onClick={() => setFormOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)" }}><X size={16} /></button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Title *</label>
+              <input className="input" placeholder="Judul infografis" value={form.title} onChange={e => updateForm("title", e.target.value)} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Tag</label>
+              <input className="input" placeholder="e.g. SFA, Ficom" value={form.tag} onChange={e => updateForm("tag", e.target.value)} />
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Description</label>
+            <textarea className="input" rows={2} placeholder="Deskripsi singkat" value={form.description} onChange={e => updateForm("description", e.target.value)} />
+          </div>
+          <PicSelector value={form.pic ?? ""} onChange={v => updateForm("pic", v)} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Image (Upload / Ctrl+V)</label>
+            <ImageUploader value={form.image_url} onChange={url => updateForm("image_url", url)} />
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="btn btn-primary" onClick={saveNew} disabled={saving} style={{ opacity: saving ? 0.7 : 1 }}>
+              <Save size={14} /> {saving ? "Menyimpan…" : "Simpan"}
+            </button>
+            <button className="btn btn-ghost" onClick={() => setFormOpen(false)}>Batal</button>
+            {saved && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#ECFDF5", border: "1px solid #6EE7B7", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#065F46" }}>
+                <CheckCircle2 size={13} /> Tersimpan!
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      {items.length === 0 && !formOpen ? (
+        <div style={{ textAlign: "center", padding: "40px 0" }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>🖼️</div>
+          <div style={{ fontWeight: 600, color: "var(--text2)", marginBottom: 4 }}>Belum ada infografis</div>
+          <div style={{ fontSize: 12, color: "var(--text3)" }}>Klik "Add" untuk menambahkan</div>
+        </div>
+      ) : (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
+                {["#", "Title", "Tag", "PIC", "Tanggal", "Aksi"].map(h => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => (
+                <>
+                  <tr key={item.id}
+                    onClick={() => handleExpand(item.id)}
+                    style={{ cursor: "pointer", borderBottom: "1px solid var(--border)", background: expandedId === item.id ? "var(--accent-muted)" : idx % 2 === 0 ? "var(--card)" : "var(--surface)" }}>
+                    <td style={{ padding: "10px 14px", color: "var(--text3)", fontSize: 11 }}>{idx + 1}</td>
+                    <td style={{ padding: "10px 14px", fontWeight: 600, color: "var(--text)" }}>{item.title || "—"}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {item.tag && <span style={{ background: "var(--accent-muted)", color: "var(--accent)", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>{item.tag}</span>}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--text2)" }}>{item.pic || <span style={{ color: "var(--text3)" }}>—</span>}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 11, color: "var(--text3)" }}>
+                      {item.updated_at ? new Date(item.updated_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <button onClick={e => { e.stopPropagation(); remove(item.id) }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: 4, borderRadius: 6 }}>
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                  {expandedId === item.id && (
+                    <tr key={`${item.id}-exp`} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td colSpan={6} style={{ padding: "12px 14px", background: "var(--surface2)" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+                          <div style={{ fontSize: 12, color: "var(--text2)", lineHeight: 1.6 }}>
+                            <div style={{ fontWeight: 700, marginBottom: 4 }}>Deskripsi</div>
+                            {item.description || <span style={{ color: "var(--text3)", fontStyle: "italic" }}>Tidak ada deskripsi</span>}
+                          </div>
+                          <div>
+                            {imageCache[item.id] ? (
+                              <img src={imageCache[item.id]} alt={item.title}
+                                style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+                            ) : (
+                              <div style={{ height: 60, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: 12, gap: 6 }}>
+                                <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Memuat gambar…
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Zoom Admin ─────────────────────────────────────────────────────────────────
+function ZoomAdmin() {
+  const [items, setItems] = useState<SharingZoom[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [errorMsg, setErrorMsg] = useState("")
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  // Form for new entry
+  const [form, setForm] = useState({ title: "", tanggal: "", pic: "", screenshots: [] as string[] })
+  const [formOpen, setFormOpen] = useState(false)
+  const [formSaving, setFormSaving] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    // Load without screenshots for speed — screenshots loaded on expand
+    const { data, error } = await supabase.from("sharing_zoom")
+      .select("id, title, tanggal, pic, updated_at, created_at, screenshots")
+      .order("tanggal", { ascending: false })
+    if (!error && data) setItems(data as SharingZoom[])
+    else if (error) setErrorMsg(error.message)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  const saveNew = async () => {
+    if (!form.title || !form.tanggal || !form.pic) { setErrorMsg("Title, tanggal, dan PIC wajib diisi"); return }
+    setFormSaving(true); setErrorMsg("")
+    const { error } = await supabase.from("sharing_zoom").insert([{
+      title: form.title, tanggal: form.tanggal, pic: form.pic,
+      screenshots: form.screenshots, updated_at: new Date().toISOString()
+    }])
+    if (error) { setErrorMsg(error.message); setFormSaving(false); return }
+    setForm({ title: "", tanggal: "", pic: "", screenshots: [] })
+    setFormOpen(false)
+    setFormSaving(false)
+    await load()
+  }
+
+  const remove = async (id: string) => {
+    await supabase.from("sharing_zoom").delete().eq("id", id)
+    setItems(p => p.filter(i => i.id !== id))
   }
 
   if (loading) return (
@@ -522,53 +715,126 @@ function InfographicsAdmin() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 12, color: "var(--text3)" }}>{items.length} infographics — data persists on refresh ✅</div>
+        <div style={{ fontSize: 12, color: "var(--text3)" }}>{items.length} sesi zoom terdokumentasi</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={load}><RefreshCw size={13} /> Refresh</button>
-          <button className="btn btn-primary" onClick={add}><Plus size={14} /> Add</button>
+          <button className="btn btn-primary" onClick={() => setFormOpen(true)}><Plus size={14} /> Tambah Sesi</button>
         </div>
       </div>
 
       {errorMsg && (
         <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "9px 13px", fontSize: 12, color: "#991B1B" }}>
           <AlertCircle size={13} style={{ display: "inline", marginRight: 6 }} />{errorMsg}
+          <button onClick={() => setErrorMsg("")} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: 8 }}><X size={11} /></button>
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-        {items.map((item, idx) => (
-          <div key={item.id} className="card" style={{ padding: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em" }}>#{idx + 1}</div>
-              <button onClick={() => remove(item.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)" }}><Trash2 size={14} /></button>
+      {/* Form tambah sesi */}
+      {formOpen && (
+        <div className="card" style={{ padding: 20, border: "1.5px solid var(--accent)", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>📹 Tambah Sesi Zoom Baru</div>
+            <button onClick={() => { setFormOpen(false); setErrorMsg("") }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)" }}><X size={16} /></button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Nama Sosialisasi *</label>
+              <input className="input" placeholder="e.g. Training SFA Q2 2025" value={form.title}
+                onChange={e => setForm(p => ({ ...p, title: e.target.value }))} />
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <input className="input" placeholder="Title" value={item.title}
-                onChange={e => update(item.id, "title", e.target.value)} />
-              <input className="input" placeholder="Tag (e.g. SFA, Ficom)" value={item.tag}
-                onChange={e => update(item.id, "tag", e.target.value)} />
-              <textarea className="input" rows={2} placeholder="Description" value={item.description}
-                onChange={e => update(item.id, "description", e.target.value)} />
-              {/* Image — base64 saved directly to Supabase like restore-phi ✅ */}
-              <div>
-                <div className="label" style={{ marginBottom: 4 }}>Image (Upload / Ctrl+V paste)</div>
-                <ImageUploader value={item.image_url} onChange={url => update(item.id, "image_url", url)} />
-              </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Tanggal *</label>
+              <input className="input" type="date" value={form.tanggal}
+                onChange={e => setForm(p => ({ ...p, tanggal: e.target.value }))} />
             </div>
           </div>
-        ))}
-      </div>
+          <PicSelector value={form.pic} onChange={v => setForm(p => ({ ...p, pic: v }))} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>
+              Screenshots ({form.screenshots.length} foto)
+            </label>
+            <MultiImageUploader
+              values={form.screenshots}
+              onChange={urls => setForm(p => ({ ...p, screenshots: urls }))}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-primary" onClick={saveNew} disabled={formSaving} style={{ opacity: formSaving ? 0.7 : 1 }}>
+              <Save size={14} /> {formSaving ? "Menyimpan…" : "Simpan Sesi"}
+            </button>
+            <button className="btn btn-ghost" onClick={() => { setFormOpen(false); setErrorMsg("") }}>Batal</button>
+          </div>
+        </div>
+      )}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button className="btn btn-primary" onClick={saveAll} disabled={saving} style={{ opacity: saving ? 0.7 : 1 }}>
-          <Save size={14} /> {saving ? "Saving…" : "Save All to Supabase"}
-        </button>
-        {saved && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#ECFDF5", border: "1px solid #6EE7B7", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, color: "#065F46" }}>
-            <CheckCircle2 size={13} /> Saved! Refresh won't lose your data.
-          </div>
-        )}
-      </div>
+      {/* Table + expand */}
+      {items.length === 0 && !formOpen ? (
+        <div style={{ textAlign: "center", padding: "40px 0" }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📹</div>
+          <div style={{ fontWeight: 600, color: "var(--text2)", marginBottom: 4 }}>Belum ada sesi zoom</div>
+          <div style={{ fontSize: 12, color: "var(--text3)" }}>Klik "Tambah Sesi" untuk mendokumentasikan zoom pertama</div>
+        </div>
+      ) : (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "var(--surface2)", borderBottom: "1px solid var(--border)" }}>
+                {["#", "Nama Sosialisasi", "Tanggal", "PIC", "Screenshot", "Aksi"].map(h => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 800, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, idx) => (
+                <>
+                  <tr key={item.id}
+                    onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                    style={{ cursor: "pointer", borderBottom: "1px solid var(--border)", background: expanded === item.id ? "var(--accent-muted)" : idx % 2 === 0 ? "var(--card)" : "var(--surface)" }}>
+                    <td style={{ padding: "10px 14px", color: "var(--text3)", fontSize: 11 }}>{idx + 1}</td>
+                    <td style={{ padding: "10px 14px", fontWeight: 600, color: "var(--text)" }}>📹 {item.title}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--text2)" }}>
+                      {new Date(item.tanggal).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontSize: 12, color: "var(--text2)" }}>{item.pic || "—"}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{ background: "var(--accent-muted)", color: "var(--accent)", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>
+                        🖼️ {item.screenshots?.length ?? 0}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 14px", display: "flex", gap: 6, alignItems: "center" }}>
+                      <button onClick={e => { e.stopPropagation(); remove(item.id) }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: 4, borderRadius: 6 }}>
+                        <Trash2 size={13} />
+                      </button>
+                      <span style={{ color: "var(--text3)", fontSize: 14 }}>{expanded === item.id ? "▲" : "▼"}</span>
+                    </td>
+                  </tr>
+                  {expanded === item.id && (
+                    <tr key={`${item.id}-exp`} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td colSpan={6} style={{ padding: "14px 16px", background: "var(--surface2)" }}>
+                        {item.screenshots?.length > 0 ? (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 10 }}>
+                            {item.screenshots.map((url, i) => (
+                              <div key={i} style={{ position: "relative", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={url} alt={`SS ${i + 1}`} style={{ width: "100%", height: 150, objectFit: "cover", display: "block" }} />
+                                <div style={{ position: "absolute", top: 4, left: 6, background: "rgba(0,0,0,0.55)", color: "white", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10 }}>#{i + 1}</div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 12, color: "var(--text3)", textAlign: "center", padding: "16px 0" }}>Tidak ada screenshot</div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
@@ -577,6 +843,7 @@ function InfographicsAdmin() {
 const TABS = [
   { id: "tutorials",    label: "Tutorials",    icon: BookOpen },
   { id: "infographics", label: "Infographics", icon: Image },
+  { id: "zoom",         label: "Zoom",         icon: Video },
 ]
 
 export default function LandingAdminPage() {
@@ -586,12 +853,10 @@ export default function LandingAdminPage() {
       <MotivationBanner page="docreq" />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.02em" }}>📖 Tutorials Admin</h1>
-          <p style={{ fontSize: 12, color: "var(--text3)", marginTop: 2 }}>Manage Tutorial and Infographic content for the public landing page</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: "var(--text)", letterSpacing: "-0.02em" }}>📚 Sharing Knowledge</h1>
+          <p style={{ fontSize: 12, color: "var(--text3)", marginTop: 2 }}>Kelola Tutorial, Infografis, dan Zoom untuk KPI Sharing Knowledge</p>
         </div>
-        <a href="/landing" target="_blank" rel="noopener noreferrer">
-          <button className="btn btn-ghost"><Eye size={14} /> Preview Landing</button>
-        </a>
+        
       </div>
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)" }}>
         {TABS.map(t => {
@@ -606,6 +871,7 @@ export default function LandingAdminPage() {
       <div>
         {tab === "tutorials"    && <TutorialAdmin />}
         {tab === "infographics" && <InfographicsAdmin />}
+        {tab === "zoom"         && <ZoomAdmin />}
       </div>
     </div>
   )
