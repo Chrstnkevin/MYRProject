@@ -6,7 +6,7 @@ import {
   Home, FileText, LayoutGrid, GitBranch, ScrollText,
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
-  BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw
+  BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw, Cloud
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -15,6 +15,7 @@ const NAV_TOP = [
   { icon: FileText,      label: "Notulensi",       path: "/dashboard/notulensi",     desc: "Catatan rapat"          },
   { icon: Server,        label: "VM DB",           path: "/dashboard/vm-db",         desc: "Disk usage monitoring"  },
   { icon: ClipboardList, label: "Backlog PHI",     path: "/dashboard/backlog-phi",   desc: "Concern & request PHI"  },
+  { icon: Cloud,         label: "OwnCloud Logs",   path: "/dashboard/owncloud-admin",desc: "Log aktivitas OwnCloud"  },
   { icon: Globe,         label: "Sharing Knowledge", path: "/dashboard/landing-admin", desc: "Tutorial, Infografis & Zoom" },
 ]
 
