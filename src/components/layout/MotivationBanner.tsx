@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -68,6 +68,24 @@ const QUOTES: Record<PageType, string[]> = {
     "2x seminggu, 8x sebulan. Sederhana, tapi menyelamatkan.",
     "Yang kamu lakukan hari ini tidak terlihat — sampai hari di mana ia menyelamatkan segalanya.",
   ],
+  "master-data": [
+    "Data yang rapi adalah keputusan yang tepat.",
+    "Satu referensi akurat lebih berharga dari seribu asumsi.",
+    "Master data yang bersih adalah fondasi laporan yang bisa dipercaya.",
+    "Akurasi data hari ini mencegah kebingungan tim besok.",
+    "Data adalah aset. Jaga, rawat, dan jangan biarkan usang.",
+    "Sistem yang kuat dimulai dari data referensi yang solid.",
+    "Depot yang tercatat dengan baik adalah distribusi yang terkendali.",
+  ],
+  "ficom-password": [
+    "Keamanan akun adalah tanggung jawab bersama.",
+    "Password yang kuat adalah benteng pertama sebelum data bocor.",
+    "Jaga akses, jaga kepercayaan.",
+    "Akses yang terkontrol adalah organisasi yang profesional.",
+    "Satu akun yang aman melindungi seluruh sistem.",
+    "Kelola credential dengan cermat — itu adalah kepercayaan yang dititipkan.",
+    "Keamanan bukan pilihan, itu kewajiban.",
+  ],
 }
 
 const CONFIG: Record<PageType, {
@@ -82,6 +100,8 @@ const CONFIG: Record<PageType, {
   docreq:    { label: "Requirement Engineer 📋",    emoji: "✍️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "var(--accent-light)", labelColor: "var(--accent)", textColor: "var(--accent)", primary: "var(--accent)", light: "var(--accent-light)" },
   userflow:  { label: "Arsitek Alur Terbaik",          emoji: "🎨",  bg: "linear-gradient(135deg,#fff7ed,#ffedd5)", border: "#fed7aa", labelColor: "#ea580c", textColor: "#7c2d12", primary: "#fb923c", light: "#fdba74" },
   restore:   { label: "Guardian of Data",               emoji: "🛡️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#86efac", labelColor: "#16a34a", textColor: "#14532d", primary: "#22c55e", light: "#86efac" },
+  "master-data":     { label: "Data Bersih, Keputusan Tepat", emoji: "🗂️",  bg: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "#bfdbfe", labelColor: "#0369A1", textColor: "#1e3a8a", primary: "#3b82f6", light: "#93c5fd" },
+  "ficom-password":  { label: "Jaga Akses, Jaga Kepercayaan",  emoji: "🔐",  bg: "linear-gradient(135deg,#fdf4ff,#fae8ff)", border: "#e9d5ff", labelColor: "#7C3AED", textColor: "#581c87", primary: "#a855f7", light: "#e9d5ff" },
 }
 
 function getDailyQuote(page: PageType): string {

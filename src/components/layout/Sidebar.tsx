@@ -6,7 +6,7 @@ import {
   Home, FileText, LayoutGrid, GitBranch, ScrollText,
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
-  BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw, Cloud
+  BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw, Cloud, KeyRound
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -65,12 +65,32 @@ const NAV_UTILISASI = [
     badge: "Lite",
     badgeColor: "#22C55E",
   },
+]
+
+// ── Nested: Master Data ────────────────────────────────────────
+const NAV_MASTER = [
   {
     icon: Users,
     label: "Master Utilisasi",
     path: "/dashboard/master-utilisasi",
     desc: "Kelola MASTERDATAPHI",
-    badge: "Master",
+    badge: "Utilisasi",
+    badgeColor: "#7C3AED",
+  },
+  {
+    icon: Database,
+    label: "Master Data",
+    path: "/dashboard/master-data",
+    desc: "ADP Depot & Distributor",
+    badge: "ADP",
+    badgeColor: "#0369A1",
+  },
+  {
+    icon: KeyRound,
+    label: "Ficom Password",
+    path: "/dashboard/ficom-password",
+    desc: "User Login & Password",
+    badge: "Pwd",
     badgeColor: "#7C3AED",
   },
 ]
@@ -90,10 +110,12 @@ export default function Sidebar({ isOpen, onClose }: Props) {
 
   const isBackupRestoreActive = NAV_BACKUP_RESTORE.some(n => pathname.startsWith(n.path))
   const isUtilisasiActive = NAV_UTILISASI.some(n => pathname.startsWith(n.path))
+  const isMasterActive    = NAV_MASTER.some(n => pathname.startsWith(n.path))
   const isDokumenActive   = NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
 
   const [backupRestoreOpen, setBackupRestoreOpen] = useState(isBackupRestoreActive)
   const [utilisasiOpen, setUtilisasiOpen] = useState(isUtilisasiActive)
+  const [masterOpen,    setMasterOpen]    = useState(isMasterActive)
   const [dokumenOpen,   setDokumenOpen]   = useState(isDokumenActive)
 
   const today   = new Date()
@@ -298,6 +320,24 @@ export default function Sidebar({ isOpen, onClose }: Props) {
             />
             <NestedContainer open={utilisasiOpen} lineColor="rgba(30,136,229,0.3)">
               {NAV_UTILISASI.map(item => (
+                <NestedBtn key={item.path} {...item} />
+              ))}
+            </NestedContainer>
+          </div>
+
+          {/* ── Master Data group ── */}
+          <div style={{ marginTop: "4px" }}>
+            <GroupHeader
+              icon={Database}
+              label="Master Data"
+              desc="Utilisasi, ADP & Ficom Password"
+              isActive={isMasterActive}
+              isOpen={masterOpen}
+              onToggle={() => setMasterOpen(v => !v)}
+              accentColor="#7C3AED"
+            />
+            <NestedContainer open={masterOpen} lineColor="rgba(124,58,237,0.3)">
+              {NAV_MASTER.map(item => (
                 <NestedBtn key={item.path} {...item} />
               ))}
             </NestedContainer>
