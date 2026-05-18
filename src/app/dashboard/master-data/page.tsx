@@ -16,6 +16,7 @@ interface DepotRow {
   depot: string
   distributor_name: string
   server: number | null
+  server_name: string
   area: number | null
   area_name: string
   region: number | null
@@ -71,6 +72,7 @@ export default function MasterDataPage() {
   const [regionFilter, setRegion]   = useState("ALL")
   const [statusFilter, setStatus]   = useState("ALL")
   const [remarksFilter, setRemarks] = useState("ALL")
+  const [serverFilter, setServerFilter] = useState("ALL")  // values: ALL | 138 | 228 | 252
   const [exporting, setExporting]   = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editId, setEditId]         = useState<string | null>(null)
@@ -99,6 +101,8 @@ export default function MasterDataPage() {
     ["ALL", ...Array.from(new Set(data.map(d => d.region_name).filter(Boolean))).sort()],
     [data]
   )
+  // Server filter options
+  const SERVER_OPTIONS = ["ALL", "138", "228", "252", "NULL"]
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -111,11 +115,12 @@ export default function MasterDataPage() {
         d.ads_name.toLowerCase().includes(q) ||
         d.rdm_name.toLowerCase().includes(q)
       return matchQ &&
-        (regionFilter === "ALL" || d.region_name === regionFilter) &&
-        (statusFilter === "ALL" || d.status === statusFilter) &&
-        (remarksFilter === "ALL" || d.remarks === remarksFilter)
+        (regionFilter  === "ALL" || d.region_name  === regionFilter) &&
+        (statusFilter  === "ALL" || d.status       === statusFilter) &&
+        (remarksFilter === "ALL" || d.remarks      === remarksFilter) &&
+        (serverFilter  === "ALL" || (serverFilter === "NULL" ? (d.server === null || d.server === undefined) : String(d.server ?? "") === serverFilter))
     })
-  }, [data, search, regionFilter, statusFilter, remarksFilter])
+  }, [data, search, regionFilter, statusFilter, remarksFilter, serverFilter])
 
   const stats = useMemo(() => ({
     total:    data.length,
@@ -135,7 +140,7 @@ export default function MasterDataPage() {
     const tempId = `new-${Date.now()}`
     const nu: DepotRow = {
       id: tempId, adp_code: null, depot: "", distributor_name: "",
-      server: null, area: null, area_name: "", region: null, region_name: "",
+      server: null, server_name: "", area: null, area_name: "", region: null, region_name: "",
       ads_name: "", adm_name: "", rdm_name: "", status: "MAIN WH", remarks: "Active",
     }
     setData(p => [nu, ...p])
@@ -155,6 +160,7 @@ export default function MasterDataPage() {
       depot:            draft.depot.trim().toUpperCase(),
       distributor_name: draft.distributor_name?.trim() ?? "",
       server:           draft.server ?? null,
+      server_name:      draft.server_name?.trim() ?? "",
       area:             draft.area ?? null,
       area_name:        draft.area_name?.trim().toUpperCase() ?? "",
       region:           draft.region ?? null,
@@ -228,6 +234,7 @@ export default function MasterDataPage() {
           depot:            String(r["Depot"] ?? "").trim().toUpperCase(),
           distributor_name: String(r["Distributor Name"] ?? "").trim(),
           server:           Number(r["Server"]) || null,
+          server_name:      String(r["Server Name"] ?? "").trim(),
           area:             Number(r["Area"]) || null,
           area_name:        String(r["Area Name"] ?? "").trim(),
           region:           Number(r["Region"]) || null,
@@ -413,6 +420,10 @@ export default function MasterDataPage() {
             style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "13px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer" }}>
             {["ALL","Active","Inactive","New"].map(o => <option key={o} value={o}>{o === "ALL" ? "All Remarks" : o}</option>)}
           </select>
+          <select value={serverFilter} onChange={e => setServerFilter(e.target.value)}
+            style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "13px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer" }}>
+            {SERVER_OPTIONS.map(o => <option key={o} value={o}>{o === "ALL" ? "All Server" : o === "NULL" ? "Tanpa Server" : `Server ${o}`}</option>)}
+          </select>
           <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "auto", whiteSpace: "nowrap" }}>{filtered.length}/{data.length} hasil</span>
         </div>
 
@@ -433,6 +444,7 @@ export default function MasterDataPage() {
                     <th style={th}>Depot</th>
                     <th style={th}>Distributor</th>
                     <th style={th}>Server</th>
+                    <th style={th}>Server Name</th>
                     <th style={th}>Region</th>
                     <th style={th}>Area</th>
                     <th style={th}>Status</th>
@@ -442,7 +454,7 @@ export default function MasterDataPage() {
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={10} style={{ ...td, textAlign: "center", padding: "48px", color: "var(--text3)" }}>Tidak ada data</td></tr>
+                    <tr><td colSpan={11} style={{ ...td, textAlign: "center", padding: "48px", color: "var(--text3)" }}>Tidak ada data</td></tr>
                   ) : filtered.map((d, i) => {
                     const isEditing  = editId === d.id
                     const isExpanded = expandedId === d.id
@@ -501,6 +513,18 @@ export default function MasterDataPage() {
                                 placeholder="138" style={{ ...inputSt, width: "60px", textAlign: "center" }} />
                             ) : (
                               <span style={{ fontFamily: "monospace", fontSize: "11px" }}>{d.server ?? "—"}</span>
+                            )}
+                          </td>
+
+                          {/* Server Name */}
+                          <td style={td}>
+                            {isEditing ? (
+                              <input value={draft.server_name ?? ""} onChange={e => setDraft(p => ({ ...p, server_name: e.target.value }))}
+                                placeholder="MAGIS-TYTY" style={{ ...inputSt, width: "110px" }} />
+                            ) : (
+                              <span style={{ background: "var(--surface3)", color: "var(--text3)", padding: "2px 8px", borderRadius: "6px", fontSize: "11px", fontWeight: 600 }}>
+                                {d.server_name || "—"}
+                              </span>
                             )}
                           </td>
 
@@ -583,7 +607,7 @@ export default function MasterDataPage() {
                         {/* Expanded Personnel Row */}
                         {isExpanded && !isEditing && (
                           <tr key={`${d.id}-expanded`}>
-                            <td colSpan={10} style={{ padding: 0, borderBottom: "2px solid #0369A1" }}>
+                            <td colSpan={11} style={{ padding: 0, borderBottom: "2px solid #0369A1" }}>
                               <div style={{ background: "linear-gradient(135deg,#F0F9FF,#E0F2FE)", padding: "20px 20px 20px 52px" }}>
                                 {/* Header info */}
                                 <div style={{ marginBottom: "14px" }}>

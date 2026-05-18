@@ -6,7 +6,8 @@ import { KanbanTask, Notulensi } from "@/lib/types"
 import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from "recharts"
 import {
   CheckCircle2, Clock, Ban, ListTodo, Database,
-  FileText, ArrowUpRight, AlertTriangle, ShieldCheck
+  FileText, ArrowUpRight, AlertTriangle, ShieldCheck,
+  Users, Shield, KeyRound, Building2
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { useRouter } from "next/navigation"
@@ -35,17 +36,26 @@ export default function HomePage() {
   const [notulensi, setNotulensi] = useState<Notulensi[]>([])
   const [restores,  setRestores]  = useState<any[]>([])
   const [loading,   setLoading]   = useState(true)
+  const [ficomStats, setFicomStats] = useState({ rdm: 0, adm: 0, ads: 0, depot: 0 })
 
   useEffect(() => {
     const load = async () => {
-      const [t, n, r] = await Promise.all([
+      const [t, n, r, fc, dp] = await Promise.all([
         supabase.from("kanban_tasks").select("*").order("created_at", { ascending: false }).limit(50),
         supabase.from("notulensi").select("*").order("date", { ascending: false }).limit(5),
         supabase.from("restore_phi").select("*").eq("year", currentYear),
+        supabase.from("ficom_passwords").select("position"),
+        supabase.from("master_data_adp").select("id"),
       ])
       if (t.data) setTasks(t.data)
       if (n.data) setNotulensi(n.data)
       if (r.data) setRestores(r.data)
+      if (fc.data && dp.data) setFicomStats({
+        rdm:   fc.data.filter((u: any) => u.position === "RDM").length,
+        adm:   fc.data.filter((u: any) => u.position === "ADM").length,
+        ads:   fc.data.filter((u: any) => u.position === "ADS").length,
+        depot: dp.data.length,
+      })
       setLoading(false)
     }
     load()
@@ -114,31 +124,86 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* KPI Cards — Task */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px" }} className="stagger">
-        {[
-          { label: "To Do",       val: taskStats.todo,       icon: ListTodo,     color: "#6b7280", bg: "#f3f4f6" },
-          { label: "In Progress", val: taskStats.inprogress, icon: Clock,        color: "#b45309", bg: "#fef3c7" },
-          { label: "Selesai",     val: taskStats.done,       icon: CheckCircle2, color: "#2d6a4f", bg: "#d8f3dc" },
-          { label: "Blocked",     val: taskStats.blocked,    icon: Ban,          color: "#c0392b", bg: "#fde8e8" },
-        ].map(({ label, val, icon: Icon, color, bg }) => (
-          <div key={label} className="card card-hover" style={{ padding: "18px 16px", cursor: "pointer" }} onClick={() => router.push("/dashboard/kanban")}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <div style={{ fontSize: "28px", fontWeight: 800, color, letterSpacing: "-0.03em", lineHeight: 1 }}>{val}</div>
-                <div style={{ fontSize: "12px", color: "var(--text3)", fontWeight: 500, marginTop: "4px" }}>{label}</div>
-              </div>
-              <div style={{ width: "34px", height: "34px", borderRadius: "9px", background: bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Icon size={17} color={color} />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+
 
       <MotivationBanner page="home" />
 
-      {/* Main 3-column grid */}
+      {/* Unified Stats Panel */}
+      <div className="card" style={{ padding: "20px", overflow: "hidden" }}>
+        {/* Header row */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+          <div style={{ fontSize: "15px", fontWeight: 800, color: "var(--text)" }}>Overview</div>
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button onClick={() => router.push("/dashboard/kanban")}
+              style={{ fontSize: "11px", color: "var(--accent)", fontWeight: 600, background: "var(--accent-muted)", border: "none", padding: "4px 10px", borderRadius: "99px", cursor: "pointer", fontFamily: "inherit" }}>
+              Kanban →
+            </button>
+            <button onClick={() => router.push("/dashboard/ficom-password")}
+              style={{ fontSize: "11px", color: "#7C3AED", fontWeight: 600, background: "#F5F3FF", border: "none", padding: "4px 10px", borderRadius: "99px", cursor: "pointer", fontFamily: "inherit" }}>
+              Ficom →
+            </button>
+            <button onClick={() => router.push("/dashboard/master-data")}
+              style={{ fontSize: "11px", color: "#0369A1", fontWeight: 600, background: "#EFF6FF", border: "none", padding: "4px 10px", borderRadius: "99px", cursor: "pointer", fontFamily: "inherit" }}>
+              Master Data →
+            </button>
+          </div>
+        </div>
+
+        {/* Two-section divider */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1px 1fr", gap: "0", minHeight: "90px" }}>
+
+          {/* Left: Task stats */}
+          <div style={{ paddingRight: "20px" }}>
+            <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+              📋 Tugas
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px" }}>
+              {[
+                { label: "To Do",    val: taskStats.todo,       color: "#6b7280" },
+                { label: "Progress", val: taskStats.inprogress, color: "#b45309" },
+                { label: "Selesai",  val: taskStats.done,       color: "#2d6a4f" },
+                { label: "Blocked",  val: taskStats.blocked,    color: "#c0392b" },
+              ].map(({ label, val, color }) => (
+                <div key={label} onClick={() => router.push("/dashboard/kanban")}
+                  style={{ textAlign: "center", padding: "10px 6px", borderRadius: "10px", background: "var(--surface3)", cursor: "pointer", transition: "all 0.15s" }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface2)"}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "var(--surface3)"}>
+                  <div style={{ fontSize: "22px", fontWeight: 800, color, letterSpacing: "-0.03em", lineHeight: 1 }}>{val}</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "3px", fontWeight: 500 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div style={{ background: "var(--border)", margin: "0 4px" }} />
+
+          {/* Right: Ficom + Depot stats */}
+          <div style={{ paddingLeft: "20px" }}>
+            <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "10px" }}>
+              🗂️ Ficom & Depot
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px" }}>
+              {[
+                { label: "RDM",   val: ficomStats.rdm,   color: "#92400E", bg: "#FEF3C7", path: "/dashboard/ficom-password" },
+                { label: "ADM",   val: ficomStats.adm,   color: "#7C3AED", bg: "#F5F3FF", path: "/dashboard/ficom-password" },
+                { label: "ADS",   val: ficomStats.ads,   color: "#0369A1", bg: "#EFF6FF", path: "/dashboard/ficom-password" },
+                { label: "Depot", val: ficomStats.depot, color: "#166534", bg: "#F0FDF4", path: "/dashboard/master-data"     },
+              ].map(({ label, val, color, bg, path }) => (
+                <div key={label} onClick={() => router.push(path)}
+                  style={{ textAlign: "center", padding: "10px 6px", borderRadius: "10px", background: bg, cursor: "pointer", transition: "all 0.15s" }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = "0.8"}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = "1"}>
+                  <div style={{ fontSize: "22px", fontWeight: 800, color, letterSpacing: "-0.03em", lineHeight: 1 }}>{loading ? "—" : val}</div>
+                  <div style={{ fontSize: "10px", color, marginTop: "3px", fontWeight: 600, opacity: 0.8 }}>{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+            {/* Main 3-column grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
 
         {/* Restore DB PHI Summary */}

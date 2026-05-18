@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password" | "data-transfer"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -86,6 +86,15 @@ const QUOTES: Record<PageType, string[]> = {
     "Kelola credential dengan cermat — itu adalah kepercayaan yang dititipkan.",
     "Keamanan bukan pilihan, itu kewajiban.",
   ],
+  "data-transfer": [
+    "Data yang naik tepat waktu adalah laporan yang bisa dipercaya.",
+    "Transfer hari ini adalah ketenangan report esok hari.",
+    "Monitor lebih awal, antisipasi lebih cepat.",
+    "Satu distributor terlambat bisa membuat satu laporan tidak akurat.",
+    "Konsistensi transfer data adalah fondasi analisis yang solid.",
+    "Data tidak berbohong — tapi hanya jika sudah naik.",
+    "Pantau, cek, pastikan — itu rutinitas yang melindungi tim.",
+  ],
 }
 
 const CONFIG: Record<PageType, {
@@ -101,6 +110,7 @@ const CONFIG: Record<PageType, {
   userflow:  { label: "Arsitek Alur Terbaik",          emoji: "🎨",  bg: "linear-gradient(135deg,#fff7ed,#ffedd5)", border: "#fed7aa", labelColor: "#ea580c", textColor: "#7c2d12", primary: "#fb923c", light: "#fdba74" },
   restore:   { label: "Guardian of Data",               emoji: "🛡️",  bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#86efac", labelColor: "#16a34a", textColor: "#14532d", primary: "#22c55e", light: "#86efac" },
   "master-data":     { label: "Data Bersih, Keputusan Tepat", emoji: "🗂️",  bg: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "#bfdbfe", labelColor: "#0369A1", textColor: "#1e3a8a", primary: "#3b82f6", light: "#93c5fd" },
+  "data-transfer":   { label: "Data Naik, Report Aman",          emoji: "📡",  bg: "linear-gradient(135deg,#ecfeff,#cffafe)", border: "#a5f3fc", labelColor: "#0891B2", textColor: "#164e63", primary: "#06b6d4", light: "#a5f3fc" },
   "ficom-password":  { label: "Jaga Akses, Jaga Kepercayaan",  emoji: "🔐",  bg: "linear-gradient(135deg,#fdf4ff,#fae8ff)", border: "#e9d5ff", labelColor: "#7C3AED", textColor: "#581c87", primary: "#a855f7", light: "#e9d5ff" },
 }
 
