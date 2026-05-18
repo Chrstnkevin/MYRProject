@@ -35,8 +35,18 @@ const AOR_COLORS: Record<string,string> = {
 const AOR_NAMES = ["GMA","MIN","NOL","SOL","VIS"] as const
 
 const posLabel = (p: string) => p === "ADM" ? "ADS/ADM" : p === "RDM" ? "RDM" : p
-const compColor = (p: number) => p >= 91 ? "#22C55E" : p >= 71 ? "#84CC16" : p >= 51 ? "#F97316" : "#EF4444"
-const compBg    = (p: number) => p >= 91 ? "#052e16" : p >= 71 ? "#1a2e05" : p >= 51 ? "#431407" : "#450a0a"
+const compColor = (p: number) => p > 75 ? "#22C55E" : p > 50 ? "#3B82F6" : p > 25 ? "#F97316" : p > 0 ? "#EF4444" : "#991B1B"
+const compBg    = (p: number) => p > 75 ? "#052e16" : p > 50 ? "#0c1a3a" : p > 25 ? "#431407" : "#450a0a"
+
+// Compliance bucket helpers (5-tier)
+const BUCKETS = [
+  { label:"0%",    test:(p:number)=>p===0,         color:"#991B1B", bg:"rgba(153,27,27,0.15)"  },
+  { label:"≤25%",  test:(p:number)=>p>0&&p<=25,    color:"#EF4444", bg:"rgba(239,68,68,0.15)"  },
+  { label:"≤50%",  test:(p:number)=>p>25&&p<=50,   color:"#F97316", bg:"rgba(249,115,22,0.15)" },
+  { label:"≤75%",  test:(p:number)=>p>50&&p<=75,   color:"#3B82F6", bg:"rgba(59,130,246,0.15)" },
+  { label:">75%",  test:(p:number)=>p>75,           color:"#22C55E", bg:"rgba(34,197,94,0.15)"  },
+]
+const getBucket = (p:number) => BUCKETS.find(b=>b.test(p)) || BUCKETS[0]
 
 async function fetchFicomData() {
   const [snap, areas, users, master] = await Promise.all([
@@ -221,9 +231,9 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
     const m = u.username.toLowerCase().includes(search.toLowerCase())||u.user_id.toLowerCase().includes(search.toLowerCase())
     if(!m) return false
     if(posF!=="all"&&u.position!==posF) return false
-    if(compF==="high"&&u.compliance_pct<91)    return false
-    if(compF==="medium"&&(u.compliance_pct<51||u.compliance_pct>=91)) return false
-    if(compF==="low"&&u.compliance_pct>=51)    return false
+    if(compF==="high"&&u.compliance_pct<=75)   return false
+    if(compF==="medium"&&(u.compliance_pct===0||u.compliance_pct>75)) return false
+    if(compF==="low"&&u.compliance_pct>0)       return false
     return true
   }).sort((a,b)=>b.compliance_pct-a.compliance_pct),[users,search,posF,compF])
 
@@ -247,11 +257,12 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
           {/* Stats row */}
           <div style={{display:"flex",gap:"8px",flexWrap:"wrap",marginBottom:"12px"}}>
             {[
-              {l:"≥91%",     v:users.filter(u=>u.compliance_pct>=91).length,   c:"#22C55E", bg:"rgba(34,197,94,0.12)"},
-              {l:"51–90%",   v:users.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length, c:"#F97316", bg:"rgba(249,115,22,0.12)"},
-              {l:"<50%",     v:users.filter(u=>u.compliance_pct<51).length,    c:"#EF4444", bg:"rgba(239,68,68,0.12)"},
-              {l:"ADM",      v:users.filter(u=>u.position==="ADM").length,     c:"#F97316", bg:"rgba(249,115,22,0.12)"},
-              {l:"RDM",      v:users.filter(u=>u.position==="RDM").length,     c:"#A855F7", bg:"rgba(168,85,247,0.12)"},
+              {l:">75%",    v:users.filter(u=>u.compliance_pct>75).length,            c:"#22C55E", bg:"rgba(34,197,94,0.12)"},
+              {l:"≤75%",    v:users.filter(u=>u.compliance_pct>50&&u.compliance_pct<=75).length, c:"#3B82F6", bg:"rgba(59,130,246,0.12)"},
+              {l:"≤50%",    v:users.filter(u=>u.compliance_pct>0&&u.compliance_pct<=50).length,  c:"#F97316", bg:"rgba(249,115,22,0.12)"},
+              {l:"0%",      v:users.filter(u=>u.compliance_pct===0).length,           c:"#EF4444", bg:"rgba(239,68,68,0.12)"},
+              {l:"ADM",     v:users.filter(u=>u.position==="ADM").length,             c:"#A855F7", bg:"rgba(168,85,247,0.12)"},
+              {l:"RDM",     v:users.filter(u=>u.position==="RDM").length,             c:"#60A5FA", bg:"rgba(96,165,250,0.12)"},
             ].map((s,i)=>(
               <div key={i} style={{background:s.bg,borderRadius:"10px",padding:"5px 12px",textAlign:"center",border:`1px solid ${s.c}20`}}>
                 <div style={{fontSize:"16px",fontWeight:900,color:s.c,fontFamily:"'Bricolage Grotesque',sans-serif",lineHeight:1}}>{s.v}</div>
@@ -271,7 +282,7 @@ function UserPopup({ users, aorLabel, onClose }: { users:FicomUser[]; aorLabel:s
               ))}
             </div>
             <div style={{display:"flex",background:"rgba(255,255,255,0.06)",borderRadius:"9px",padding:"2px"}}>
-              {([{k:"all",l:"Semua"},{k:"high",l:"✅ ≥91%"},{k:"medium",l:"🟡 51–90%"},{k:"low",l:"🔴 <50%"}] as const).map(o=>(
+              {([{k:"all",l:"Semua"},{k:"high",l:"✅ >75%"},{k:"medium",l:"🟡 1–75%"},{k:"low",l:"🔴 0%"}] as const).map(o=>(
                 <button key={o.k} onClick={()=>setCompF(o.k)} style={{padding:"3px 9px",borderRadius:"7px",border:"none",cursor:"pointer",fontSize:"10px",fontWeight:700,fontFamily:"inherit",background:compF===o.k?"rgba(255,255,255,0.12)":"transparent",color:compF===o.k?"white":"rgba(255,255,255,0.4)",transition:"all 0.15s",whiteSpace:"nowrap"}}>
                   {o.l}
                 </button>
@@ -428,18 +439,20 @@ function UserDetailPopup({ user, onClose }: { user: FicomUser; onClose: () => vo
             </div>
             {/* Tier markers */}
             <div style={{display:"flex",justifyContent:"space-between",fontSize:"8px",color:"rgba(255,255,255,0.2)"}}>
-              <span>0%</span><span style={{color:cp>=50?"#F97316":"inherit"}}>50%</span>
-              <span style={{color:cp>=71?"#84CC16":"inherit"}}>71%</span>
-              <span style={{color:cp>=91?"#22C55E":"inherit"}}>91%</span><span>100%</span>
+              <span>0%</span>
+              <span style={{color:cp>25?"#F97316":"inherit"}}>25%</span>
+              <span style={{color:cp>50?"#3B82F6":"inherit"}}>50%</span>
+              <span style={{color:cp>75?"#22C55E":"inherit"}}>75%</span>
+              <span>100%</span>
             </div>
             {/* Tier badge */}
             <div style={{marginTop:"10px",textAlign:"center"}}>
               <span style={{
                 display:"inline-block",fontSize:"11px",fontWeight:700,padding:"4px 14px",borderRadius:"99px",
-                background:cp>=91?"rgba(34,197,94,0.15)":cp>=71?"rgba(132,204,22,0.15)":cp>=51?"rgba(249,115,22,0.15)":"rgba(239,68,68,0.15)",
+                background:cp>75?"rgba(34,197,94,0.15)":cp>50?"rgba(59,130,246,0.15)":cp>25?"rgba(249,115,22,0.15)":cp>0?"rgba(239,68,68,0.15)":"rgba(153,27,27,0.2)",
                 color:compColor(cp), border:`1px solid ${compColor(cp)}40`
               }}>
-                {cp>=91?"🏆 High Performer":cp>=71?"✅ On Track":cp>=51?"⚠️ Needs Improvement":"🔴 Low Compliance"}
+                {cp>75?"🏆 On Target (>75%)":cp>50?"🟡 Approaching Target":cp>25?"⚠️ Needs Improvement":cp>0?"🔴 Low Compliance":"❌ No Login"}
               </span>
             </div>
           </div>
@@ -484,11 +497,12 @@ function SubAreaPopup({ subAor, users, aor, onUserClick, onBack }: {
           {/* Mini stats */}
           <div style={{display:"flex",gap:"6px",marginTop:"10px",flexWrap:"wrap"}}>
             {[
-              {l:"≥91%",  v:users.filter(u=>u.compliance_pct>=91).length,  c:"#22C55E",bg:"rgba(34,197,94,0.12)"},
-              {l:"51–90%",v:users.filter(u=>u.compliance_pct>=51&&u.compliance_pct<91).length,c:"#F97316",bg:"rgba(249,115,22,0.12)"},
-              {l:"<50%",  v:users.filter(u=>u.compliance_pct<51).length,   c:"#EF4444",bg:"rgba(239,68,68,0.12)"},
-              {l:"ADM",   v:users.filter(u=>u.position==="ADM").length,    c:"#F97316",bg:"rgba(249,115,22,0.12)"},
-              {l:"RDM",   v:users.filter(u=>u.position==="RDM").length,    c:"#A855F7",bg:"rgba(168,85,247,0.12)"},
+              {l:">75%",  v:users.filter(u=>u.compliance_pct>75).length,           c:"#22C55E",bg:"rgba(34,197,94,0.12)"},
+              {l:"≤75%",  v:users.filter(u=>u.compliance_pct>50&&u.compliance_pct<=75).length,c:"#3B82F6",bg:"rgba(59,130,246,0.12)"},
+              {l:"≤50%",  v:users.filter(u=>u.compliance_pct>0&&u.compliance_pct<=50).length, c:"#F97316",bg:"rgba(249,115,22,0.12)"},
+              {l:"0%",    v:users.filter(u=>u.compliance_pct===0).length,          c:"#EF4444",bg:"rgba(239,68,68,0.12)"},
+              {l:"ADM",   v:users.filter(u=>u.position==="ADM").length,            c:"#A855F7",bg:"rgba(168,85,247,0.12)"},
+              {l:"RDM",   v:users.filter(u=>u.position==="RDM").length,            c:"#60A5FA",bg:"rgba(96,165,250,0.12)"},
             ].map((s,i)=>(
               <div key={i} style={{background:s.bg,borderRadius:"8px",padding:"4px 10px",textAlign:"center",border:`1px solid ${s.c}20`}}>
                 <div style={{fontSize:"14px",fontWeight:900,color:s.c,lineHeight:1}}>{s.v}</div>
@@ -639,6 +653,7 @@ export default function FicomPage() {
   const [snapshots,  setSnapshots]  = useState<FicomSnapshot[]>([])
   const [areas,      setAreas]      = useState<FicomArea[]>([])
   const [users,      setUsers]      = useState<FicomUser[]>([])
+  const [includeAds, setIncludeAds] = useState(false)
   const [areaPopup,  setAreaPopup]  = useState<string|null>(null)
   const [userPopup,  setUserPopup]  = useState<string|null>(null)
   const [detailUser, setDetailUser] = useState<FicomUser|null>(null)
@@ -690,7 +705,10 @@ export default function FicomPage() {
   // Derived
   const latest       = snapshots[snapshots.length-1]
   const latestMonth  = latest?.period_month||""
-  const latestUsers  = useMemo(()=>users.filter(u=>u.period_month===latestMonth),[users,latestMonth])
+  const latestUsersAll = useMemo(()=>users.filter(u=>u.period_month===latestMonth),[users,latestMonth])
+  const latestUsers    = useMemo(()=>
+    includeAds ? latestUsersAll : latestUsersAll.filter(u=>u.position!=="ADS")
+  ,[latestUsersAll,includeAds])
 
   // Rebuild area stats from users (respects AOR from master, excludes UNK/empty)
   const latestAreas = useMemo(()=>{
@@ -802,7 +820,7 @@ export default function FicomPage() {
               <div style={{display:"inline-flex",alignItems:"center",gap:"10px",background:"rgba(249,115,22,0.12)",border:"1px solid rgba(249,115,22,0.3)",borderRadius:"99px",padding:"6px 18px",marginBottom:"clamp(18px,3vw,28px)",backdropFilter:"blur(8px)"}}>
                 <div className="live-dot" style={{width:"8px",height:"8px",borderRadius:"50%",background:"#F97316",boxShadow:"0 0 10px #F97316"}}/>
                 <span style={{fontSize:"clamp(9px,2.5vw,11px)",fontWeight:700,color:"#FB923C",letterSpacing:"0.05em",textTransform:"uppercase"}}>
-                  Live · Ficom PHI · {latest?.period_label||"—"} · as of {latest?.as_of_date||"—"}
+                  Live · Ficom PHI · {latest?.period_label||"—"} · cutoff {latest?.as_of_date||"—"} · {latestUsers[0]?.selling_days||latest?.selling_days||"?"} BD
                 </span>
               </div>
 
@@ -819,24 +837,39 @@ export default function FicomPage() {
                 </div>
               </div>
 
-              <p style={{fontSize:"clamp(11px,3vw,15px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(16px,4vw,40px)",lineHeight:1.6}}>
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.total_active||"—"}</strong> dari{" "}
-                <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.total_users||"—"}</strong> Ficom users (ADM/RDM) sudah login{" "}
-                {latest?.total_users&&latest?.total_active&&latest.total_users===latest.total_active&&(
-                  <span style={{fontSize:"10px",color:"rgba(239,68,68,0.8)",background:"rgba(239,68,68,0.12)",padding:"1px 8px",borderRadius:"99px",fontStyle:"italic"}}>⚠️ perlu re-upload dengan master yang benar</span>
-                )}{" "}· <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.selling_days||"—"}</strong> selling days
-              </p>
+              {(()=>{
+                  const activeCount = latestUsers.filter(u=>u.usage_days>0).length
+                  const totalCount  = latestUsers.length
+                  const sd          = latestUsers[0]?.selling_days || latest?.selling_days || "—"
+                  const above75     = latestUsers.filter(u=>u.compliance_pct>75).length
+                  const above75Pct  = totalCount ? Math.round(above75/totalCount*100) : 0
+                  return (
+                    <p style={{fontSize:"clamp(11px,3vw,15px)",color:"rgba(255,255,255,0.35)",marginBottom:"clamp(16px,4vw,40px)",lineHeight:1.6}}>
+                      <strong style={{color:"rgba(255,255,255,0.6)"}}>{activeCount}</strong> dari{" "}
+                      <strong style={{color:"rgba(255,255,255,0.6)"}}>{totalCount}</strong> users sudah login
+                      {" · "}<strong style={{color:above75Pct>75?"#22C55E":above75Pct>50?"#3B82F6":"#F97316"}}>{above75Pct}%</strong> capai target &gt;75%
+                      {" · "}<strong style={{color:"rgba(255,255,255,0.6)"}}>{sd}</strong> BD · cutoff <strong style={{color:"rgba(255,255,255,0.6)"}}>{latest?.as_of_date||"—"}</strong>
+                    </p>
+                  )
+                })()}
 
               {/* KPI GRID — utilisasi + position breakdown */}
               <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"clamp(7px,1.2vw,12px)",width:"100%",maxWidth:"560px"}}>
-                {[
-                  {n:<AnimCount to={latest?.total_users?Math.round((latest.total_active||0)/latest.total_users*100):0} suffix="%" delay={0}/>, l:"Utilisasi", i:"📊", c:"#4ADE80", bg:"rgba(34,197,94,0.12)", bo:"rgba(34,197,94,0.3)"},
-                  {n:<AnimCount to={latest?.total_active||0} delay={80}/>,  l:"Aktif Login", i:"✅", c:"white",   bg:"rgba(255,255,255,0.06)", bo:"rgba(255,255,255,0.1)"},
-                  {n:<AnimCount to={latest?.total_users||0} delay={160}/>,  l:(latest?.total_users||0)>130?"Total ADM+RDM+ADS ⚠️":"Total ADM+RDM", i:"👥", c:(latest?.total_users||0)>130?"#EF4444":"rgba(255,255,255,0.45)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
-                  {n:<AnimCount to={latest?.avg_compliance||0} suffix="%" dec={1} delay={240}/>,l:"Avg Compliance",i:"📈",c:"#60A5FA",bg:"rgba(59,130,246,0.1)",bo:"rgba(59,130,246,0.2)"},
-                  {n:<AnimCount to={latest?.total_high||0} delay={320}/>,   l:"≥91% Compliance",i:"⭐", c:"#4ADE80", bg:"rgba(34,197,94,0.1)", bo:"rgba(34,197,94,0.2)"},
-                  {n:<AnimCount to={latest?.total_low||0} delay={400}/>,    l:"<50% Compliance",i:"⚠️", c:"rgba(255,255,255,0.4)",bg:"rgba(255,255,255,0.04)",bo:"rgba(255,255,255,0.08)"},
-                ].map((s,i)=>(
+                {(()=>{
+                  const above75   = latestUsers.filter(u=>u.compliance_pct>75).length
+                  const never     = latestUsers.filter(u=>u.compliance_pct===0).length
+                  const utilisasi = latestUsers.length ? Math.round(latestUsers.filter(u=>u.usage_days>0).length/latestUsers.length*100) : 0
+                  const above75Pct= latestUsers.length ? Math.round(above75/latestUsers.length*100) : 0
+                  const avgComp   = latestUsers.length ? Math.round(latestUsers.reduce((s,u)=>s+u.compliance_pct,0)/latestUsers.length*10)/10 : 0
+                  return [
+                    {n:<AnimCount to={above75Pct} suffix="%" delay={0}/>,     l:">75% Compliance",   i:"🏆", c:"#22C55E", bg:"rgba(34,197,94,0.12)",    bo:"rgba(34,197,94,0.3)"},
+                    {n:<AnimCount to={avgComp} suffix="%" dec={1} delay={80}/>,l:"Avg Compliance",   i:"📈", c:"#60A5FA", bg:"rgba(59,130,246,0.1)",     bo:"rgba(59,130,246,0.2)"},
+                    {n:<AnimCount to={utilisasi} suffix="%" delay={160}/>,     l:"Utilisasi (login)", i:"📊", c:"#FB923C", bg:"rgba(249,115,22,0.1)",     bo:"rgba(249,115,22,0.2)"},
+                    {n:<AnimCount to={latestUsers.filter(u=>u.compliance_pct>0&&u.compliance_pct<=75).length} delay={240}/>, l:"Perlu Perhatian",i:"⚠️",c:"#F97316",bg:"rgba(249,115,22,0.08)",bo:"rgba(249,115,22,0.15)"},
+                    {n:<AnimCount to={never} delay={320}/>,                    l:"Belum Login",       i:"🔴", c:"#EF4444", bg:"rgba(239,68,68,0.08)",      bo:"rgba(239,68,68,0.15)"},
+                    {n:<AnimCount to={latest?.total_users||0} delay={400}/>,   l:"Total ADM+RDM",     i:"👥", c:"rgba(255,255,255,0.45)",bg:"rgba(255,255,255,0.03)",bo:"rgba(255,255,255,0.07)"},
+                  ]
+                })().map((s,i)=>(
                   <div key={i} className="kpi-card" style={{background:s.bg,borderRadius:"clamp(10px,1.5vw,14px)",padding:"clamp(8px,2.5vw,15px)",border:`1px solid ${s.bo}`,textAlign:"center",backdropFilter:"blur(12px)",animation:"fadeUp 0.6s ease both",animationDelay:`${i*0.08}s`,position:"relative",overflow:"hidden"}}>
                     <div style={{position:"absolute",top:0,left:0,right:0,height:"1px",background:`linear-gradient(90deg,transparent,${s.bo},transparent)`}}/>
                     <div style={{fontSize:"clamp(14px,2vw,20px)",marginBottom:"5px"}}>{s.i}</div>
@@ -876,35 +909,30 @@ export default function FicomPage() {
               })()}
             </div>
 
-            {/* RIGHT ─ Donut + Bar Chart */}
-            <div className="hero-right" style={{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"center",gap:"20px",minWidth:"220px"}}>
-              {/* Donut */}
-              <div style={{position:"relative"}}>
-                <Donut
-                  high={latest?.total_active||0}
-                  medium={0}
-                  low={(latest?.total_users||0)-(latest?.total_active||0)}
-                  total={latest?.total_users||1}
-                  size={typeof window!=="undefined"&&window.innerWidth<640?140:180}
-                />
-                {/* Glow ring */}
-                <div style={{position:"absolute",inset:"-8px",borderRadius:"50%",background:"radial-gradient(circle,rgba(249,115,22,0.08),transparent 65%)",pointerEvents:"none"}}/>
-              </div>
-              {/* Legend */}
-              <div className="donut-legend" style={{display:"flex",flexDirection:"column",gap:"6px",minWidth:"140px"}}>
-                {[
-                  {l:"Aktif Login ✅",   c:"#22C55E",v:latest?.total_active||0},
-                  {l:"Belum Aktif ❌",   c:"#EF4444",v:(latest?.total_users||0)-(latest?.total_active||0)},
-                ].map((d,i)=>(
-                  <div key={i} style={{display:"flex",alignItems:"center",gap:"8px"}}>
-                    <div style={{width:"8px",height:"8px",borderRadius:"50%",background:d.c,boxShadow:`0 0 6px ${d.c}80`,flexShrink:0}}/>
-                    <span style={{fontSize:"11px",color:"rgba(255,255,255,0.45)",flex:1}}>{d.l}</span>
-                    <span style={{fontSize:"13px",fontWeight:700,color:"white"}}>{d.v}</span>
+            {/* RIGHT ─ Compliance Bucket Summary */}
+            <div className="hero-right" style={{flexShrink:0,display:"flex",flexDirection:"column",gap:"10px",minWidth:"240px",width:"260px"}}>
+              <div style={{fontSize:"10px",fontWeight:700,color:"rgba(255,255,255,0.3)",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:"2px"}}>% Compliance Distribution</div>
+              {BUCKETS.map((b,i)=>{
+                const bUsers = latestUsers.filter(u=>b.test(u.compliance_pct))
+                const pct    = latestUsers.length ? Math.round(bUsers.length/latestUsers.length*100) : 0
+                return (
+                  <div key={i} style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${b.color}30`,borderRadius:"12px",padding:"10px 14px",display:"flex",alignItems:"center",gap:"10px"}}>
+                    <span style={{fontSize:"11px",fontWeight:800,color:b.color,minWidth:"36px"}}>{b.label}</span>
+                    <div style={{flex:1,height:"6px",background:"rgba(255,255,255,0.06)",borderRadius:"99px",overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${pct}%`,background:b.color,borderRadius:"99px",boxShadow:`0 0 6px ${b.color}60`,transition:"width 0.8s ease"}}/>
+                    </div>
+                    <span style={{fontSize:"12px",fontWeight:700,color:"white",minWidth:"24px",textAlign:"right"}}>{bUsers.length}</span>
+                    <span style={{fontSize:"10px",color:"rgba(255,255,255,0.3)",minWidth:"28px",textAlign:"right"}}>{pct}%</span>
                   </div>
-                ))}
+                )
+              })}
+              {/* Target line */}
+              <div style={{marginTop:"4px",padding:"10px 14px",background:"rgba(34,197,94,0.08)",border:"1px solid rgba(34,197,94,0.25)",borderRadius:"12px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <span style={{fontSize:"10px",color:"rgba(34,197,94,0.7)",fontWeight:700}}>Target &gt;75%</span>
+                <span style={{fontSize:"16px",fontWeight:900,color:"#22C55E",fontFamily:"'Bricolage Grotesque',sans-serif"}}>
+                  {latestUsers.length ? Math.round(latestUsers.filter(u=>u.compliance_pct>75).length/latestUsers.length*100) : 0}%
+                </span>
               </div>
-              {/* Bar mini chart */}
-              <div className="hero-chart" style={{opacity:0.9}}><HeroChart latest={latest}/></div>
             </div>
           </div>
         </div>
@@ -912,13 +940,13 @@ export default function FicomPage() {
       {/* ══════════ END HERO ══════════ */}
 
       {/* Stale data warning — if snapshot still uses 199-user denominator */}
-      {latest && (latest.total_users || 0) > 130 && (
+      {latest && latestUsers.length > 0 && Math.abs((latest.total_users||0) - latestUsers.length) > 5 && (
         <div style={{background:"rgba(239,68,68,0.12)",borderTop:"1px solid rgba(239,68,68,0.3)",padding:"10px clamp(16px,5vw,80px)"}}>
           <div style={{maxWidth:"1200px",margin:"0 auto",display:"flex",alignItems:"center",gap:10,fontSize:12,color:"#FCA5A5"}}>
             <span style={{fontSize:16}}>⚠️</span>
             <span>
-              Data ini menggunakan denominator lama ({latest.total_users} users — termasuk ADS).
-              Jalankan <strong>TRUNCATE ficom_users, ficom_areas, ficom_snapshots RESTART IDENTITY CASCADE</strong> di Supabase lalu upload ulang EDI untuk mendapatkan utilisasi yang akurat (denominator ADM+RDM saja).
+              Snapshot tersimpan: <strong>{latest.total_users} users</strong>, master aktif: <strong>{latestUsers.length} users</strong>.
+              Upload ulang EDI di halaman <strong>Ficom Upload</strong> untuk menyinkronkan data dengan master terbaru.
             </span>
           </div>
         </div>
@@ -936,7 +964,7 @@ export default function FicomPage() {
                 {term:"Utilisasi",        def:"% ADM/RDM yang sudah LOGIN ke Ficom minimal 1x dalam periode",         c:"#4ADE80"},
                 {term:"ADS/ADM (GRSM)",  def:"Area Distributor Supervisor/Manager — pengguna Ficom di lapangan",      c:"#A855F7"},
                 {term:"RDM (NSM)",        def:"Regional Distribution Manager — monitoring via Ficom",                  c:"#3B82F6"},
-                {term:"Compliance %",     def:`Unique login days ÷ ${latest?.selling_days||"N"} selling days × 100`, c:"#22C55E"},
+                {term:"Compliance %",     def:`Login days ÷ ${latest?.selling_days||"N"} BD × 100 · Target: >75%`, c:"#22C55E"},
               ].map((g,i)=>(
                 <div key={i} style={{padding:"8px 12px",background:"#F8F9FA",borderRadius:"10px",borderLeft:`3px solid ${g.c}`}}>
                   <div style={{fontSize:"10px",fontWeight:700,color:g.c,marginBottom:"3px"}}>{g.term}</div>
@@ -985,6 +1013,14 @@ export default function FicomPage() {
                 )
               })}
             </div>
+            <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:"8px",background:"#F4F4F2",borderRadius:"10px",padding:"5px 12px"}}>
+              <span style={{fontSize:"11px",color:"#666",fontWeight:600}}>Include ADS:</span>
+              <button onClick={()=>setIncludeAds(v=>!v)}
+                style={{width:"32px",height:"18px",borderRadius:"99px",border:"none",cursor:"pointer",background:includeAds?"#0891B2":"#D1D5DB",position:"relative",transition:"background 0.2s"}}>
+                <div style={{position:"absolute",top:"2px",left:includeAds?"14px":"2px",width:"14px",height:"14px",borderRadius:"50%",background:"white",transition:"left 0.2s"}}/>
+              </button>
+              <span style={{fontSize:"11px",fontWeight:700,color:includeAds?"#0891B2":"#9CA3AF"}}>{includeAds?"Ya":"Tidak"}</span>
+            </div>
           </div>
 
           {/* Area Cards */}
@@ -1019,15 +1055,26 @@ export default function FicomPage() {
                         <div style={{height:"100%",width:`${a.total_users?Math.min(a.active/a.total_users*100,100):0}%`,background:`linear-gradient(90deg,${col},${col}88)`,borderRadius:"99px"}}/>
                       </div>
                       <div style={{fontSize:"9px",color:"#aaa",marginBottom:"8px"}}>avg compliance: {a.avg_compliance.toFixed(0)}%</div>
-                      {/* Mini 3-tier breakdown */}
-                      <div style={{display:"flex",gap:"4px",marginBottom:"10px"}}>
-                        {[{v:a.high_count,c:"#22C55E",l:"≥91%"},{v:a.medium_count,c:"#F97316",l:"51–90%"},{v:a.low_count,c:"#EF4444",l:"<50%"}].map((b,bi)=>(
-                          <div key={bi} style={{flex:1,background:`${b.c}10`,borderRadius:"7px",padding:"4px 0",textAlign:"center",border:`1px solid ${b.c}20`}}>
-                            <div style={{fontSize:"13px",fontWeight:800,color:b.c}}>{b.v}</div>
-                            <div style={{fontSize:"8px",color:"#aaa"}}>{b.l}</div>
+                      {/* 5-bucket compliance breakdown */}
+                      {(()=>{
+                        const au = latestUsers.filter(u=>u.aor===a.aor)
+                        const tiers = [
+                          {v:au.filter(u=>u.compliance_pct>75).length,  c:"#22C55E",l:">75%"},
+                          {v:au.filter(u=>u.compliance_pct>50&&u.compliance_pct<=75).length, c:"#3B82F6",l:"≤75%"},
+                          {v:au.filter(u=>u.compliance_pct>0&&u.compliance_pct<=50).length,  c:"#F97316",l:"≤50%"},
+                          {v:au.filter(u=>u.compliance_pct===0).length, c:"#EF4444",l:"0%"},
+                        ]
+                        return (
+                          <div style={{display:"flex",gap:"3px",marginBottom:"10px"}}>
+                            {tiers.map((b,bi)=>(
+                              <div key={bi} style={{flex:1,background:`${b.c}10`,borderRadius:"7px",padding:"4px 0",textAlign:"center",border:`1px solid ${b.c}20`}}>
+                                <div style={{fontSize:"13px",fontWeight:800,color:b.c}}>{b.v}</div>
+                                <div style={{fontSize:"7px",color:"#aaa"}}>{b.l}</div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
+                        )
+                      })()}
                       <button
                         onClick={e=>{e.stopPropagation();setUserPopup(a.aor)}}
                         style={{width:"100%",padding:"6px",borderRadius:"9px",border:`1.5px solid ${col}30`,background:"transparent",color:col,cursor:"pointer",fontFamily:"inherit",fontSize:"10px",fontWeight:700,transition:"all 0.15s"}}
