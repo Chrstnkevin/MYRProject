@@ -7,7 +7,7 @@ import {
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
-  Cloud, KeyRound, Radio, Pencil, Monitor, HeartHandshake
+  Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -55,6 +55,7 @@ const NAV_MASTER = [
 
 // ── Nested: Dokumen ────────────────────────────────────────────
 const NAV_DOKUMEN = [
+  { icon: BookOpen,      label: "Knowledge Base",   path: "/dashboard/knowledge-base",desc: "Mind map app & fitur",   ai: false },
   { icon: ScrollText,    label: "Doc Req",          path: "/dashboard/docreq",        desc: "AI Doc Generator",       ai: true  },
   { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",      desc: "AI Flowchart Generator", ai: true  },
   { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test", desc: "Form Scenario Testing",  ai: false },

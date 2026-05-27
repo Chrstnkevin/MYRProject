@@ -248,7 +248,6 @@ async function uploadToSupabase(data: ParsedData, includeAds: boolean, onProgres
     pct_trained:  0,
     pct_active:   stats.utilisasi,
     total_ads:    0, total_lp: 0,
-    include_ads:  includeAds,
   }
 
   onProgress("⏳ Saving snapshot...")
