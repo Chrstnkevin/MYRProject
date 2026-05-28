@@ -4,12 +4,13 @@ import { useState, useEffect } from "react"
 const C = { primary: "#E8381A", dark: "#111111", gray: "#6B7280", grayLight: "#F4F4F2", border: "rgba(0,0,0,0.08)" }
 
 const NAV_LINKS = [
-  { label: "Home",         href: "/landing" },
-  { label: "About",        href: "/landing/about" },
-  { label: "Applications", href: "/landing/applications" },
-  { label: "Utilisation",  href: "/landing/utilisation" },
-  { label: "Tutorials",    href: "/landing/tutorials" },
-  { label: "Infographic",  href: "/landing/infographics" },
+  { label: "Home",          href: "/landing" },
+  { label: "About",         href: "/landing/about" },
+  { label: "Applications",  href: "/landing/applications" },
+  { label: "Utilisation",   href: "/landing/utilisation" },
+  { label: "Data Transfer", href: "/landing/data-transfer" },
+  { label: "Tutorials",     href: "/landing/tutorials" },
+  { label: "Infographic",   href: "/landing/infographics" },
 ]
 
 export default function LandingNav() {
