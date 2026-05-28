@@ -104,13 +104,7 @@ export default function DataTransferLanding(){
         @media (max-width: 640px) {
           .hero-grid > div:first-child { flex-direction: column !important; }
         }
-        @media (max-width: 700px) {
-          .desktop-table { display: none !important; }
-          .mobile-cards { display: flex !important; }
-        }
-        @media (min-width: 701px) {
-          .mobile-cards { display: none !important; }
-        }
+
         .stat-card { transition:transform 0.2s,box-shadow 0.2s; }
         .stat-card:hover { transform:translateY(-3px); }
         .aor-pill:hover { filter:brightness(1.2); }
@@ -276,7 +270,7 @@ export default function DataTransferLanding(){
             </div>
           </div>
 
-          <div style={{overflowX:"auto"}} className="desktop-table">
+          <div style={{overflowX:"auto"}} >
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr style={{background:"rgba(255,255,255,0.02)"}}>
@@ -311,16 +305,16 @@ export default function DataTransferLanding(){
                       <td style={{padding:"10px 16px",fontFamily:"'Space Mono',monospace",fontSize:11,color:"#94A3B8"}}>{r.tgl_gudang||"—"}</td>
                       <td style={{padding:"10px 16px"}}>
                         {r.excluded?(
-                          <span style={{fontSize:10,color:"#475569",fontFamily:"'Space Mono',monospace"}}>excluded</span>
+                          <span style={{fontSize:10,color:"#475569",whiteSpace:"nowrap"}}>excluded</span>
                         ):r.lama<=0?(
                           <span style={{background:"rgba(16,185,129,0.12)",border:"1px solid rgba(16,185,129,0.25)",color:"#10B981",
-                            padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:700,
+                            padding:"4px 10px",borderRadius:99,fontSize:11,fontWeight:700,whiteSpace:"nowrap",display:"inline-block",
                             boxShadow:"0 0 8px rgba(16,185,129,0.2)"}}>✓ OK</span>
                         ):(
                           <span style={{background:r.lama>3?"rgba(239,68,68,0.12)":"rgba(245,158,11,0.12)",
                             border:`1px solid ${r.lama>3?"rgba(239,68,68,0.25)":"rgba(245,158,11,0.25)"}`,
                             color:r.lama>3?"#EF4444":"#F59E0B",
-                            padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:700,fontFamily:"'Space Mono',monospace",
+                            padding:"4px 10px",borderRadius:99,fontSize:11,fontWeight:700,whiteSpace:"nowrap",display:"inline-block",
                             boxShadow:`0 0 8px ${r.lama>3?"rgba(239,68,68,0.2)":"rgba(245,158,11,0.2)"}`}}>
                             {r.lama>3?"🚨":"⚡"} {r.lama}h
                           </span>
