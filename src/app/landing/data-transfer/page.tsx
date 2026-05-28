@@ -104,6 +104,13 @@ export default function DataTransferLanding(){
         @media (max-width: 640px) {
           .hero-grid > div:first-child { flex-direction: column !important; }
         }
+        @media (max-width: 700px) {
+          .desktop-table { display: none !important; }
+          .mobile-cards { display: flex !important; }
+        }
+        @media (min-width: 701px) {
+          .mobile-cards { display: none !important; }
+        }
         .stat-card { transition:transform 0.2s,box-shadow 0.2s; }
         .stat-card:hover { transform:translateY(-3px); }
         .aor-pill:hover { filter:brightness(1.2); }
@@ -269,7 +276,7 @@ export default function DataTransferLanding(){
             </div>
           </div>
 
-          <div style={{overflowX:"auto"}}>
+          <div style={{overflowX:"auto"}} className="desktop-table">
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr style={{background:"rgba(255,255,255,0.02)"}}>
