@@ -107,8 +107,9 @@ function getBaseline(fromDateISO: string): string {
 
 function calcLama(tglISO: string, baselineISO: string): number {
   if (!tglISO || !baselineISO) return 99
-  const t = new Date(tglISO).setHours(0,0,0,0)
-  const b = new Date(baselineISO).setHours(0,0,0,0)
+  // Add T12:00:00 to avoid UTC midnight timezone shift issues
+  const t = new Date(tglISO + "T12:00:00").setHours(0,0,0,0)
+  const b = new Date(baselineISO + "T12:00:00").setHours(0,0,0,0)
   return Math.round((b - t) / 86400000)
 }
 
@@ -143,7 +144,10 @@ export default function DataTransferPage() {
   const [master,       setMaster]       = useState<MasterRow[]>([])
   const [loading,      setLoading]      = useState(false)
   const [lastRefresh,  setLastRefresh]  = useState<Date|null>(null)
-  const [baseline,     setBaseline]     = useState("")
+  const [baseline,     setBaseline]     = useState(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    return getBaseline(today)
+  })
   const [editBaseline, setEditBaseline] = useState(false)
   const [tempBaseline, setTempBaseline] = useState("")
   const [excludedIds,  setExcludedIds]  = useState<Set<string>>(new Set())
@@ -194,6 +198,12 @@ export default function DataTransferPage() {
   }, [])
 
   useEffect(() => { loadMaster(); loadStaging() }, [loadMaster, loadStaging])
+
+  // Auto-refresh staging setiap 5 menit (n8n update tiap jam)
+  useEffect(() => {
+    const interval = setInterval(() => { loadStaging() }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadStaging])
 
   // ── Join staging + master ──────────────────────────────────
   const displayRows = useMemo((): DisplayRow[] => {
