@@ -78,20 +78,21 @@ interface SnapshotDetail {
 }
 
 // ── Helpers ───────────────────────────────────────────────────
-function parseTglGudang(raw: string): string {
-  // "27 MAY 2026" → "2026-05-27"
+function parseTglGudang(raw: string | Date | null | undefined): string {
   if (!raw) return ""
+  const s = String(raw)
+  // Already ISO: "2026-05-27" or "2026-05-27T..."
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10)
+  // "27 MAY 2026" format
   const months: Record<string,string> = {
     JAN:"01",FEB:"02",MAR:"03",APR:"04",MAY:"05",JUN:"06",
     JUL:"07",AUG:"08",SEP:"09",OCT:"10",NOV:"11",DEC:"12"
   }
-  const parts = raw.trim().toUpperCase().split(/\s+/)
+  const parts = s.trim().toUpperCase().split(/\s+/)
   if (parts.length === 3) {
     const [d, m, y] = parts
     return `${y}-${months[m] || "01"}-${d.padStart(2,"0")}`
   }
-  // try ISO already
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0,10)
   return ""
 }
 
@@ -111,7 +112,7 @@ function calcLama(tglISO: string, baselineISO: string): number {
   return Math.round((b - t) / 86400000)
 }
 
-function pct(n: number, d: number) { return d === 0 ? 0 : Math.round(n / d * 100) }
+function pct(n: number, d: number) { return d === 0 ? 0 : Math.round(n / d * 1000) / 10 }
 
 const AOR_COLORS: Record<string,string> = {
   GMA:"#D97706", NOL:"#2563EB", SOL:"#9333EA", VIS:"#0891B2", MIN:"#EF4444"
@@ -196,12 +197,37 @@ export default function DataTransferPage() {
 
   // ── Join staging + master ──────────────────────────────────
   const displayRows = useMemo((): DisplayRow[] => {
-    // adp_code is integer in master, distributor_id is text in staging
-    const masterMap = Object.fromEntries(master.map(m => [String(m.adp_code), m]))
-    return staging.map(r => {
+    // Exclude: ONLY remarks = Inactive (Excel does not exclude Vacant)
+    const isVacantOrInactive = (m: MasterRow) =>
+      m.remarks === "Inactive"
+
+    // Build master map — prefer non-vacant entry per adp_code
+    const masterMap: Record<string, MasterRow> = {}
+    master.forEach(m => {
+      const key = String(m.adp_code)
+      const cur = masterMap[key]
+      if (!cur || (!isVacantOrInactive(m) && isVacantOrInactive(cur))) {
+        masterMap[key] = m
+      }
+    })
+
+    // Deduplicate staging by distributor_id — keep LATEST tgl_gudang (Excel behavior)
+    const dedupMap: Record<string, StagingRow> = {}
+    staging.forEach(r => {
+      const key = String(r.distributor_id)
+      const cur = dedupMap[key]
+      if (!cur) {
+        dedupMap[key] = r
+      } else {
+        const isoNew = parseTglGudang(r.tgl_gudang)
+        const isoOld = parseTglGudang(cur.tgl_gudang)
+        if (isoNew > isoOld) dedupMap[key] = r  // keep latest
+      }
+    })
+
+    return Object.values(dedupMap).map(r => {
       const m   = masterMap[String(r.distributor_id)]
       const iso = parseTglGudang(r.tgl_gudang)
-      // region_name directly contains AOR: GMA, NOL, SOL, VIS, MIN
       const aor = m?.region_name || ""
       return {
         ...r,
@@ -209,13 +235,10 @@ export default function DataTransferPage() {
         server_name: m?.server_name || "",
         depot:       m?.depot || "",
         aor,
+        region_name: aor,
         tas:         TAS_MAP[aor] || "",
         lama:        calcLama(iso, baseline),
-        excluded:    excludedIds.has(r.distributor_id) 
-                    || m?.status === "Inactive" 
-                    || m?.remarks === "Inactive"
-                    || (m?.ads_name || "").toUpperCase().includes("VACANT")
-                    || (m?.adm_name || "").toUpperCase().includes("VACANT"),
+        excluded:    excludedIds.has(r.distributor_id) || (m ? isVacantOrInactive(m) : false),
         tgl_iso:     iso,
       }
     })
@@ -257,7 +280,7 @@ export default function DataTransferPage() {
       if (q && !r.distributor_id.toLowerCase().includes(q) &&
                !r.distributor_nm.toLowerCase().includes(q)) return false
       return true
-    })
+    }).sort((a, b) => b.lama - a.lama)  // sort terlama → terpendek
   }, [displayRows, search, filterAor, filterStatus])
 
   // ── Manual upload EDI ──────────────────────────────────────
@@ -359,11 +382,9 @@ export default function DataTransferPage() {
         const lama = snapBaseline && tglISO ? calcLama(tglISO, snapBaseline) : (r.lama ?? 99)
 
         // Excluded: from stored value OR recalculate from master
+        // Exclude: ONLY remarks = Inactive
         const excluded = r.excluded
-          || m?.status === "Inactive"
           || m?.remarks === "Inactive"
-          || (m?.ads_name || "").toUpperCase().includes("VACANT")
-          || (m?.adm_name || "").toUpperCase().includes("VACANT")
 
         return {
           ...r,
