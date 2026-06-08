@@ -7,63 +7,56 @@ import {
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
-  Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake
+  Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity
 } from "lucide-react"
 
 const NAV_TOP = [
   { icon: Home, label: "Home", path: "/dashboard", desc: "Overview harian" },
 ]
 
-// ── Nested: Productivity ───────────────────────────────────────
 const NAV_PRODUCTIVITY = [
-  { icon: LayoutGrid, label: "Kanban",    path: "/dashboard/kanban",    desc: "Task board",    badge: undefined as string | undefined, badgeColor: undefined as string | undefined },
-  { icon: FileText,   label: "Notulensi", path: "/dashboard/notulensi", desc: "Catatan rapat", badge: undefined, badgeColor: undefined },
+  { icon: LayoutGrid, label: "Kanban",      path: "/dashboard/kanban",       desc: "Task board",               badge: undefined as string | undefined, badgeColor: undefined as string | undefined },
+  { icon: FileText,   label: "Notulensi",   path: "/dashboard/notulensi",    desc: "Catatan rapat",            badge: undefined, badgeColor: undefined },
+  { icon: BookOpen,   label: "Our System",  path: "/dashboard/our-system",   desc: "Knowledge base sistem PHI", badge: undefined, badgeColor: "#534AB7" },
 ]
 
-// ── Nested: Support Lokal ──────────────────────────────────────
 const NAV_SUPPORT_LOKAL = [
   { icon: Server, label: "VM DB",         path: "/dashboard/vm-db",          desc: "Disk usage monitoring",  badge: "VM",  badgeColor: "#0369A1" },
   { icon: Cloud,  label: "OwnCloud Logs", path: "/dashboard/owncloud-admin", desc: "Log aktivitas OwnCloud", badge: "Log", badgeColor: "#0891B2" },
 ]
 
-// ── Nested: Support PHI ───────────────────────────────────────
 const NAV_SUPPORT_PHI = [
-  { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",      badge: "PHI", badgeColor: "#DC2626" },
+  { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
   { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
-  { icon: Radio,         label: "Data Transfer Ficom", path: "/dashboard/data-transfer",  desc: "Monitor EDI & transfer",     badge: "EDI", badgeColor: "#0891B2" },
+  { icon: Radio,         label: "Data Transfer Ficom", path: "/dashboard/data-transfer",  desc: "Monitor EDI & transfer",      badge: "EDI",    badgeColor: "#0891B2" },
+  { icon: Activity,      label: "MPP Health",          path: "/dashboard/mpp-health",     desc: "SFA Hierarchy Monitoring",    badge: "MPP",    badgeColor: "#1E3A5F" },
 ]
 
-// ── Nested: Backup & Restore DB PHI ───────────────────────────
 const NAV_BACKUP_RESTORE = [
   { icon: Database,  label: "Restore DB PHI", path: "/dashboard/restore-phi", desc: "Monitoring DRP Restore",   badge: "Restore", badgeColor: "#6d28d9" },
   { icon: HardDrive, label: "Backup DB PHI",  path: "/dashboard/backup-phi",  desc: "Checklist backup tim PHI", badge: "Backup",  badgeColor: "#1d4ed8" },
 ]
 
-// ── Nested: Data Utilisasi ─────────────────────────────────────
 const NAV_UTILISASI = [
-  { icon: BarChart3,  label: "SFA Upload",        path: "/dashboard/sfa-upload",        desc: "Update data SFA",       badge: "SFA",   badgeColor: "#E8381A" },
-  { icon: TrendingUp, label: "Ficom Upload",       path: "/dashboard/ficom-upload",      desc: "Update data Ficom",     badge: "Ficom", badgeColor: "#FB8C00" },
-  { icon: TrendingUp, label: "Ficom Lite Upload",  path: "/dashboard/ficom-lite-upload", desc: "Update data Ficom Lite",badge: "Lite",  badgeColor: "#22C55E" },
+  { icon: BarChart3,  label: "SFA Upload",        path: "/dashboard/sfa-upload",        desc: "Update data SFA",        badge: "SFA",   badgeColor: "#E8381A" },
+  { icon: TrendingUp, label: "Ficom Upload",       path: "/dashboard/ficom-upload",      desc: "Update data Ficom",      badge: "Ficom", badgeColor: "#FB8C00" },
+  { icon: TrendingUp, label: "Ficom Lite Upload",  path: "/dashboard/ficom-lite-upload", desc: "Update data Ficom Lite", badge: "Lite",  badgeColor: "#22C55E" },
 ]
 
-// ── Nested: Master Data ────────────────────────────────────────
 const NAV_MASTER = [
-  { icon: Users,    label: "Master Utilisasi", path: "/dashboard/master-utilisasi", desc: "Kelola MASTERDATAPHI",   badge: "Utilisasi", badgeColor: "#7C3AED" },
-  { icon: Database, label: "Master Data",      path: "/dashboard/master-data",      desc: "ADP Depot & Distributor",badge: "ADP",       badgeColor: "#0369A1" },
-  { icon: KeyRound, label: "Ficom Password",   path: "/dashboard/ficom-password",   desc: "User Login & Password",  badge: "Pwd",       badgeColor: "#7C3AED" },
+  { icon: Users,    label: "Master Utilisasi", path: "/dashboard/master-utilisasi", desc: "Kelola MASTERDATAPHI",    badge: "Utilisasi", badgeColor: "#7C3AED" },
+  { icon: Database, label: "Master Data",      path: "/dashboard/master-data",      desc: "ADP Depot & Distributor", badge: "ADP",       badgeColor: "#0369A1" },
+  { icon: KeyRound, label: "Ficom Password",   path: "/dashboard/ficom-password",   desc: "User Login & Password",   badge: "Pwd",       badgeColor: "#7C3AED" },
 ]
 
-// ── Nested: Dokumen ────────────────────────────────────────────
 const NAV_DOKUMEN = [
-  { icon: BookOpen,      label: "Knowledge Base",   path: "/dashboard/knowledge-base",desc: "Mind map app & fitur",   ai: false },
-  { icon: ScrollText,    label: "Doc Req",          path: "/dashboard/docreq",        desc: "AI Doc Generator",       ai: true  },
-  { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",      desc: "AI Flowchart Generator", ai: true  },
-  { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test", desc: "Form Scenario Testing",  ai: false },
-  { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",    desc: "AI Poster dari Dokumen", ai: true  },
+  { icon: BookOpen,      label: "Knowledge Base",   path: "/dashboard/knowledge-base", desc: "Mind map app & fitur",    ai: false },
+  { icon: ScrollText,    label: "Doc Req",          path: "/dashboard/docreq",         desc: "AI Doc Generator",        ai: true  },
+  { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",       desc: "AI Flowchart Generator",  ai: true  },
+  { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test",  desc: "Form Scenario Testing",   ai: false },
+  { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",     desc: "AI Poster dari Dokumen",  ai: true  },
 ]
 
-
-// ── Flag icons ─────────────────────────────────────────────────
 const FlagIndonesia = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size * 0.667} viewBox="0 0 30 20" style={{ borderRadius: "2px", display: "block" }}>
     <rect width="30" height="10" fill="#CE1126"/>
@@ -81,8 +74,6 @@ const FlagPhilippines = ({ size = 16 }: { size?: number }) => (
   </svg>
 )
 
-
-// ── Flag wrapper components (for GroupHeader icon prop) ────────
 const IconFlagID = () => (
   <div style={{ display:"flex", alignItems:"center", justifyContent:"center" }}>
     <FlagIndonesia size={20} />
@@ -129,7 +120,6 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const isActive = (path: string) =>
     pathname === path || (path !== "/dashboard" && pathname.startsWith(path))
 
-  // ── Nested child button ────────────────────────────────────
   const NestedBtn = ({
     icon: Icon, label, path, desc, ai, badge, badgeColor
   }: {
@@ -176,7 +166,6 @@ export default function Sidebar({ isOpen, onClose }: Props) {
     )
   }
 
-  // ── Group header ───────────────────────────────────────────
   const GroupHeader = ({
     label, desc, icon: Icon, isActive: active, isOpen: open, onToggle, accentColor
   }: {
@@ -207,7 +196,6 @@ export default function Sidebar({ isOpen, onClose }: Props) {
     </button>
   )
 
-  // ── Nested container ───────────────────────────────────────
   const NestedContainer = ({ open, children, lineColor }: { open: boolean; children: React.ReactNode; lineColor?: string }) => (
     <div style={{ overflow: "hidden", maxHeight: open ? "500px" : "0px", transition: "max-height 0.28s cubic-bezier(0.22,1,0.36,1)" }}>
       <div style={{ paddingLeft: "14px", paddingTop: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -259,7 +247,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
         <nav style={{ flex: 1, padding: "14px 12px", display: "flex", flexDirection: "column", gap: "2px", overflowY: "auto" }}>
           <div className="label" style={{ padding: "4px 8px 8px" }}>Menu</div>
 
-          {/* Home standalone */}
+          {/* Home */}
           {NAV_TOP.map(({ icon: Icon, label, path, desc }) => {
             const active = isActive(path)
             return (
