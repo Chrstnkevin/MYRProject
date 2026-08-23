@@ -7,7 +7,7 @@ import {
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
-  Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity
+    Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -26,6 +26,8 @@ const NAV_SUPPORT_LOKAL = [
 ]
 
 const NAV_SUPPORT_PHI = [
+    { icon: BarChart3,  label: "Compare Target",     path: "/dashboard/target-compare",    desc: "Excel vs Ficom sampai Pcode", badge: "Target", badgeColor: "#0369A1" },
+  { icon: Ticket,     label: "Ticket Logix",       path: "/dashboard/logix-tickets",     desc: "Monitoring tiket Log Support Excellent", badge: "Logix", badgeColor: "#DC2626" },
   { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
   { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
   { icon: Radio,         label: "Data Transfer Ficom", path: "/dashboard/data-transfer",  desc: "Monitor EDI & transfer",      badge: "EDI",    badgeColor: "#0891B2" },

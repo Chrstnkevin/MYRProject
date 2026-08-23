@@ -7,7 +7,8 @@ import { PieChart, Pie, Cell, Legend, Tooltip, ResponsiveContainer } from "recha
 import {
   CheckCircle2, Clock, Ban, ListTodo, Database,
   FileText, ArrowUpRight, AlertTriangle, ShieldCheck,
-  Users, Shield, KeyRound, Building2
+  Users, Shield, KeyRound, Building2,
+  Ticket, ClipboardList, Activity, Target,
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { useRouter } from "next/navigation"
@@ -16,6 +17,17 @@ const PIE_COLORS = ["#6b7280", "#b45309", "#2d6a4f", "#c0392b"]
 const MONTHS = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
 const MONTHLY_TARGET = 8
 const WEEKLY_TARGET  = 2
+
+function fmtCompact(n: number): string {
+  if (Math.abs(n) >= 1e9) return (n / 1e9).toLocaleString("id-ID", { maximumFractionDigits: 2 }) + " M"
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + " Jt"
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + " Rb"
+  return n.toLocaleString("id-ID")
+}
+
+function diffPct(val: number, base: number): number {
+  return Math.abs(val - base) / (base || 1) * 100
+}
 
 function getWeekNumber(d: Date) {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
@@ -37,6 +49,62 @@ export default function HomePage() {
   const [restores,  setRestores]  = useState<any[]>([])
   const [loading,   setLoading]   = useState(true)
   const [ficomStats, setFicomStats] = useState({ rdm: 0, adm: 0, ads: 0, depot: 0 })
+
+  // ── Ringkasan fitur lain (Logix, Backlog PHI, MPP Health, Compare Target) ──
+  const [logixSummary, setLogixSummary] = useState<{ total: number; open: number; appsR1: number; openBr: number; solved: number } | null>(null)
+  const [logixLoading, setLogixLoading] = useState(true)
+  const [backlogSummary, setBacklogSummary] = useState<{ total: number; open: number; progress: number; done: number; hold: number } | null>(null)
+  const [mppHealth, setMppHealth] = useState<{ subdist_issue: number; impacted_salesman: number; snapshot_time: string } | null>(null)
+    const [compareSummary, setCompareSummary] = useState<{
+    periodMonth: string; excelAmount: number; ediAmount: number
+    ficomMainAmount: number | null; ficomDashAmount: number | null
+  } | null>(null)
+
+  useEffect(() => {
+    supabase.from("backlog_phi").select("status").then(({ data }: { data: { status: string }[] | null }) => {
+      if (!data) return
+      const open     = data.filter(r => ["OPEN", "OPEN DEV", "OPEN DR"].includes(r.status)).length
+      const progress = data.filter(r => ["ON PROGRESS", "REVIEW BR", "PILOT"].includes(r.status)).length
+      const done     = data.filter(r => r.status === "DONE").length
+      const hold     = data.filter(r => ["HOLD", "CANCELLED"].includes(r.status)).length
+      setBacklogSummary({ total: data.length, open, progress, done, hold })
+    })
+
+    supabase.from("m_dashboard_health").select("subdist_issue,impacted_salesman,snapshot_time")
+      .order("id", { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { if (data) setMppHealth(data) })
+
+        supabase.from("target_excel_detail").select("period_month")
+      .order("period_month", { ascending: false }).limit(1).maybeSingle()
+      .then(async ({ data: latest }) => {
+        if (!latest?.period_month) return
+        const periodMonth = latest.period_month as string
+        const [{ data: sumRows }, { data: ficomSd }, { data: ficomDashSd }] = await Promise.all([
+          supabase.rpc("target_compare_home_summary", { p_period_month: periodMonth }),
+          supabase.from("ficom_target_nodes").select("target").eq("level", "SD").order("period_date", { ascending: false }).limit(1).maybeSingle(),
+          supabase.from("ficom_target_nodes_category").select("target").eq("level", "SD").order("period_date", { ascending: false }).limit(1).maybeSingle(),
+        ])
+        const sums = (sumRows as { excel_amount: number; edi_amount: number }[] | null)?.[0]
+        setCompareSummary({
+          periodMonth,
+          excelAmount: sums?.excel_amount ?? 0,
+          ediAmount: sums?.edi_amount ?? 0,
+          ficomMainAmount: ficomSd?.target ?? null,
+          ficomDashAmount: ficomDashSd?.target ?? null,
+        })
+      })
+
+    fetch("/api/logix-tickets").then(res => res.json().then(json => ({ ok: res.ok, json })))
+      .then(({ ok, json }) => {
+        if (ok && json.data) {
+          const tickets = json.data as { nm_status?: string }[]
+          const count = (s: string) => tickets.filter(t => (t.nm_status || "").toUpperCase() === s).length
+          setLogixSummary({ total: tickets.length, open: count("OPEN"), appsR1: count("APPS R1"), openBr: count("OPEN BR"), solved: count("SOLVED") })
+        }
+        setLogixLoading(false)
+      })
+      .catch(() => setLogixLoading(false))
+  }, [])
 
   useEffect(() => {
     const load = async () => {
@@ -347,6 +415,155 @@ export default function HomePage() {
               Lihat semua notulensi →
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Ringkasan fitur lain */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
+
+        {/* Ticket Logix */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/logix-tickets")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <div className="label">Ticket Logix</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Log Support Excellent</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Ticket size={18} color="#DC2626" />
+            </div>
+          </div>
+          {logixLoading ? (
+            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
+          ) : logixSummary ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                {[
+                  { label: "Open", val: logixSummary.open, color: "#991B1B" },
+                  { label: "APPS R1", val: logixSummary.appsR1, color: "#92400E" },
+                  { label: "Open BR", val: logixSummary.openBr, color: "#C2410C" },
+                  { label: "Solved", val: logixSummary.solved, color: "#166534" },
+                ].map(({ label, val, color }) => (
+                  <div key={label} style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 10px", textAlign: "center" }}>
+                    <div style={{ fontSize: "18px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{val}</div>
+                    <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text3)" }}>Total {logixSummary.total} tiket</div>
+            </>
+          ) : (
+            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Gagal memuat / kredensial belum diisi</div>
+          )}
+        </div>
+
+        {/* Backlog PHI */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/backlog-phi")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <div className="label">Backlog PHI</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Concern & Request</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <ClipboardList size={18} color="#92400E" />
+            </div>
+          </div>
+          {backlogSummary ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "8px" }}>
+                {[
+                  { label: "Open",     val: backlogSummary.open,     color: "#6b7280" },
+                  { label: "Progress", val: backlogSummary.progress, color: "#3b82f6" },
+                  { label: "Done",     val: backlogSummary.done,     color: "#10b981" },
+                  { label: "Hold",     val: backlogSummary.hold,     color: "#ef4444" },
+                ].map(({ label, val, color }) => (
+                  <div key={label} style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 4px", textAlign: "center" }}>
+                    <div style={{ fontSize: "16px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{val}</div>
+                    <div style={{ fontSize: "9px", color: "var(--text3)", marginTop: "2px" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text3)" }}>Total {backlogSummary.total} item</div>
+            </>
+          ) : (
+            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
+          )}
+        </div>
+
+        {/* MPP Health */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/mpp-health")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <div className="label">MPP Health</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Monitoring Subdist</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: mppHealth && mppHealth.subdist_issue === 0 ? "#DCFCE7" : "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Activity size={18} color={mppHealth && mppHealth.subdist_issue === 0 ? "#16A34A" : "#DC2626"} />
+            </div>
+          </div>
+          {mppHealth ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "14px" }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: mppHealth.subdist_issue === 0 ? "#16A34A" : "#DC2626" }} />
+                <span style={{ fontSize: "11px", fontWeight: 700, color: mppHealth.subdist_issue === 0 ? "#16A34A" : "#DC2626" }}>
+                  {mppHealth.subdist_issue === 0 ? "HEALTHY" : "WARNING"}
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "10px", textAlign: "center" }}>
+                  <div style={{ fontSize: "18px", fontWeight: 800, color: mppHealth.subdist_issue === 0 ? "var(--accent)" : "#DC2626", letterSpacing: "-0.03em" }}>{mppHealth.subdist_issue}</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>Subdist Bermasalah</div>
+                </div>
+                <div style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "10px", textAlign: "center" }}>
+                  <div style={{ fontSize: "18px", fontWeight: 800, color: "var(--text)", letterSpacing: "-0.03em" }}>{mppHealth.impacted_salesman}</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>Salesman Terdampak</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
+          )}
+        </div>
+
+        {/* Compare Target */}
+        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/target-compare")}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+            <div>
+              <div className="label">Compare Target</div>
+              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Excel vs Ficom vs EDI</div>
+            </div>
+            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#EFF6FF", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Target size={18} color="#0369A1" />
+            </div>
+          </div>
+                    {compareSummary ? (
+            <>
+              <div style={{ fontSize: "12px", color: "var(--text2)", fontWeight: 600, marginBottom: "10px" }}>
+                Periode: <span style={{ color: "var(--text)" }}>{compareSummary.periodMonth}</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                {([
+                  { label: "Excel (STT)", val: compareSummary.excelAmount as number | null, diff: null as number | null, color: "#0369A1" },
+                  { label: "Ficom Main", val: compareSummary.ficomMainAmount, diff: compareSummary.ficomMainAmount != null ? diffPct(compareSummary.ficomMainAmount, compareSummary.excelAmount) : null, color: "#7C3AED" },
+                  { label: "Ficom Dash. Cat", val: compareSummary.ficomDashAmount, diff: compareSummary.ficomDashAmount != null ? diffPct(compareSummary.ficomDashAmount, compareSummary.excelAmount) : null, color: "#0891B2" },
+                  { label: "Matrix (EDI)", val: compareSummary.ediAmount as number | null, diff: diffPct(compareSummary.ediAmount, compareSummary.excelAmount), color: "#166534" },
+                ]).map(({ label, val, diff, color }) => (
+                  <div key={label} style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 10px" }}>
+                    <div style={{ fontSize: "9px", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.03em" }}>{label}</div>
+                    <div style={{ fontSize: "15px", fontWeight: 800, color, letterSpacing: "-0.02em", marginTop: "2px" }}>
+                      {val == null ? "—" : fmtCompact(val)}
+                    </div>
+                    {diff != null && (
+                      <div style={{ fontSize: "9px", fontWeight: 700, marginTop: "2px", color: diff <= 1 ? "#16A34A" : "#DC2626" }}>
+                        {diff <= 1 ? "✓ Match" : `⚠ beda ${diff.toFixed(1)}%`}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Belum ada data periode</div>
+          )}
         </div>
       </div>
 

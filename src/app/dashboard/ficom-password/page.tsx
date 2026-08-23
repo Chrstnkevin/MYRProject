@@ -32,6 +32,7 @@ interface DepotRow {
 }
 
 const POS_CLR: Record<string, { bg: string; color: string }> = {
+  SD:  { bg: "#DCFCE7", color: "#166534" },
   RDM: { bg: "#FEF3C7", color: "#92400E" },
   ADM: { bg: "#EDE9FE", color: "#7C3AED" },
   ADS: { bg: "#E0F2FE", color: "#0369A1" },
@@ -39,7 +40,7 @@ const POS_CLR: Record<string, { bg: string; color: string }> = {
 const SERVER_CLR: Record<string, string> = {
   "138": "#0369A1", "228": "#7C3AED", "252": "#DC2626",
 }
-const POSITIONS = ["RDM", "ADM", "ADS"]
+const POSITIONS = ["SD", "RDM", "ADM", "ADS"]
 
 function extractLogin(name: string): string {
   const m = name?.match(/^(WF\d+)/i)
@@ -415,7 +416,7 @@ export default function FicomPasswordPage() {
               </div>
               <select value={posFilter} onChange={e => setPosFilter(e.target.value)}
                 style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "13px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer" }}>
-                {["ALL","RDM","ADM","ADS"].map(p => <option key={p} value={p}>{p === "ALL" ? "All Position" : p}</option>)}
+                {["ALL", ...POSITIONS].map(p => <option key={p} value={p}>{p === "ALL" ? "All Position" : p}</option>)}
               </select>
               <button onClick={toggleAll}
                 style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 14px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
