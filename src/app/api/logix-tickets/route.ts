@@ -141,9 +141,16 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json(json)
+        return NextResponse.json(json)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    return NextResponse.json({ error: `Gagal konek ke Logix: ${msg}` }, { status: 500 })
+    // "fetch failed" dari undici itu cuma pesan pembungkus — alasan aslinya
+    // (DNS gagal, koneksi ditolak, timeout, sertifikat SSL, dst) ada di
+    // e.cause. Tanpa ini kita cuma lihat "fetch failed" doang dan nggak
+    // tahu kenapa.
+    const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
+    return NextResponse.json({
+      error: `Gagal konek ke Logix: ${msg}${cause ? ` (cause: ${cause})` : ""}`,
+    }, { status: 500 })
   }
 }
