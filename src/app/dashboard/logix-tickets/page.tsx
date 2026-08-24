@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo, Fragment } from "react"
 import {
   Ticket, RefreshCw, Search, AlertCircle, KeyRound, Settings,
   ChevronUp, ChevronDown, Eye, EyeOff, Save, ExternalLink,
+  Maximize2, Minimize2,
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
@@ -183,6 +184,32 @@ export default function LogixTicketsPage() {
       .slice(0, 5)
   }, [tickets])
 
+  // Semua kategori issue (nm_kategori), diurut dari yang paling banyak.
+  // Tiket yang masih OPEN biasanya belum dikategorikan (nm_kategori null)
+  // karena itu baru diisi PIC saat memproses tiket, jadi otomatis ke-exclude.
+  const ticketsByKategori = useMemo(() => {
+    const m = new Map<string, LogixTicket[]>()
+    for (const t of tickets) {
+      if (!t.nm_kategori) continue
+      if (!m.has(t.nm_kategori)) m.set(t.nm_kategori, [])
+      m.get(t.nm_kategori)!.push(t)
+    }
+    return m
+  }, [tickets])
+
+  const kategoriData = useMemo(() => {
+    const total = Array.from(ticketsByKategori.values()).reduce((s, arr) => s + arr.length, 0)
+    return Array.from(ticketsByKategori.entries())
+      .map(([name, arr]) => ({ name, value: arr.length, pct: total ? (arr.length / total) * 100 : 0 }))
+      .sort((a, b) => b.value - a.value)
+  }, [ticketsByKategori])
+
+    const RANK_COLOR = ["#DC2626", "#F97316", "#0369A1"]
+  const [expandedKategori, setExpandedKategori] = useState<string | null>(null)
+  const [kategoriMaximized, setKategoriMaximized] = useState(false)
+  const KATEGORI_MIN_SHOW = 3
+  const visibleKategoriData = kategoriMaximized ? kategoriData : kategoriData.slice(0, KATEGORI_MIN_SHOW)
+
   const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: { name: string; value: number; color?: string }[]; label?: string }) => {
     if (!active || !payload?.length) return null
     return (
@@ -335,7 +362,7 @@ export default function LogixTicketsPage() {
             </ResponsiveContainer>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
               <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Distribusi</div>
               <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Severity</div>
@@ -369,6 +396,72 @@ export default function LogixTicketsPage() {
                 </ResponsiveContainer>
               )}
             </div>
+
+          </div>
+
+          {/* Semua Kategori Issue — klik buat lihat detail tiketnya */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+                            <div>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>
+                  {kategoriMaximized ? "Semua Kategori" : `Top ${KATEGORI_MIN_SHOW}`}
+                </div>
+                <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>Issue Terbanyak</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ fontSize: "11px", color: "var(--text3)" }}>{kategoriData.length} kategori</span>
+                {kategoriData.length > KATEGORI_MIN_SHOW && (
+                  <button onClick={() => setKategoriMaximized(v => !v)}
+                    style={{ display: "flex", alignItems: "center", gap: "5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text2)", fontSize: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                    {kategoriMaximized ? <><Minimize2 size={12} /> Tampilkan {KATEGORI_MIN_SHOW}</> : <><Maximize2 size={12} /> Lihat Semua</>}
+                  </button>
+                )}
+              </div>
+            </div>
+            {kategoriData.length === 0 ? (
+              <div style={{ height: "120px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Belum ada tiket yang dikategorikan</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: kategoriMaximized ? "480px" : "none", overflowY: kategoriMaximized ? "auto" : "visible", paddingRight: "4px" }}>
+                {visibleKategoriData.map((item, i) => {
+                  const isOpenK = expandedKategori === item.name
+                  const color = RANK_COLOR[i] || "#64748B"
+                  const kTickets = ticketsByKategori.get(item.name) || []
+                  return (
+                    <div key={item.name}>
+                      <div onClick={() => setExpandedKategori(isOpenK ? null : item.name)}
+                        style={{ cursor: "pointer", background: isOpenK ? "var(--surface2)" : "transparent", borderRadius: "8px", padding: "6px 8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "5px" }}>
+                          <span style={{ width: "20px", height: "20px", borderRadius: "50%", background: color, color: "white", fontSize: "10px", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)", flex: 1 }}>{item.name}</span>
+                          <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", whiteSpace: "nowrap" }}>{item.value} tiket · {item.pct.toFixed(0)}%</span>
+                          {isOpenK ? <ChevronUp size={13} color="var(--text3)" /> : <ChevronDown size={13} color="var(--text3)" />}
+                        </div>
+                        <div style={{ height: "6px", background: "var(--surface2)", borderRadius: "99px", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${item.pct}%`, background: color, borderRadius: "99px" }} />
+                        </div>
+                      </div>
+                      {isOpenK && (
+                        <div style={{ marginTop: "6px", marginLeft: "28px", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
+                          {kTickets.map((t, ti) => {
+                            const bucket = statusBucket(t.nm_status)
+                            const bc = BUCKET_COLOR[bucket]
+                            return (
+                              <div key={t.no_ticket} onClick={() => { setSearch(t.no_ticket); setExpandedRow(t.no_ticket) }}
+                                style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", cursor: "pointer", borderBottom: ti < kTickets.length - 1 ? "1px solid var(--border)" : "none" }}>
+                                <span style={{ fontFamily: "monospace", fontSize: "10px", color: "#0369A1", fontWeight: 700, whiteSpace: "nowrap" }}>{t.no_ticket}</span>
+                                <span style={{ fontSize: "11px", color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.judul_ticket}>{t.judul_ticket}</span>
+                                <span style={{ fontSize: "9px", fontWeight: 700, padding: "2px 7px", borderRadius: "99px", whiteSpace: "nowrap", ...bc }}>{t.nm_status}</span>
+                                <span style={{ fontSize: "10px", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date_created)}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </>
       )}

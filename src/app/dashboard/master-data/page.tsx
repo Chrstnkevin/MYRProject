@@ -5,7 +5,8 @@ import { useState, useEffect, useMemo, useRef } from "react"
 import {
   Search, X, FileSpreadsheet, Building2, MapPin, Server, Users,
   RefreshCw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  Save, Upload, ChevronDown, ChevronUp, KeyRound, Copy, Check
+  Save, Upload, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
+  List, FolderTree, Link2,
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -27,6 +28,7 @@ interface DepotRow {
   status: string
   remarks: string
   updated_at?: string
+  ads_id?: string | null
 }
 
 interface FicomUser {
@@ -36,6 +38,15 @@ interface FicomUser {
   password: string
   position: string
 }
+
+type HierLevel = "RDM" | "ADM" | "ADS"
+interface HierarchyNode {
+  id: string
+  level: HierLevel
+  name: string
+  parent_id: string | null
+}
+const CHILD_LEVEL: Record<HierLevel, HierLevel | null> = { RDM: "ADM", ADM: "ADS", ADS: null }
 
 const REGION_CLR: Record<string, string> = {
   GMA: "#7C3AED", NOL: "#1D4ED8", SOL: "#DB2777", VIS: "#0891B2", MIN: "#DC2626",
@@ -80,11 +91,22 @@ export default function MasterDataPage() {
   const [copied, setCopied]         = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // ── Hierarki RDM → ADM → ADS ───────────────────────────────
+  const [view, setView] = useState<"table" | "hierarchy">("table")
+  const [hierarchy, setHierarchy] = useState<HierarchyNode[]>([])
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
+  const [nodeNameDraft, setNodeNameDraft] = useState("")
+  const [addingUnder, setAddingUnder] = useState<{ parentId: string | null; level: HierLevel } | null>(null)
+  const [newNodeName, setNewNodeName] = useState("")
+  const [hierSaving, setHierSaving] = useState(false)
+
   const load = async () => {
     setLoading(true); setError("")
-    const [depotRes, ficomRes] = await Promise.all([
+    const [depotRes, ficomRes, hierRes] = await Promise.all([
       supabase.from("master_data_adp").select("*").order("region_name").order("adp_code").order("depot"),
       supabase.from("ficom_passwords").select("*"),
+      supabase.from("master_hierarchy").select("*").order("level").order("name"),
     ])
     if (depotRes.data) setData(depotRes.data)
     if (depotRes.error) setError(depotRes.error.message)
@@ -93,9 +115,129 @@ export default function MasterDataPage() {
       ficomRes.data.forEach((u: FicomUser) => { map[u.user_login.toUpperCase()] = u })
       setFicomMap(map)
     }
+    if (hierRes.data) setHierarchy(hierRes.data)
+    if (hierRes.error) setError(hierRes.error.message)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  const nodeById = useMemo(() => new Map(hierarchy.map(n => [n.id, n])), [hierarchy])
+  const childrenOf = useMemo(() => {
+    const m = new Map<string, HierarchyNode[]>()
+    for (const n of hierarchy) {
+      const key = n.parent_id ?? "__root__"
+      if (!m.has(key)) m.set(key, [])
+      m.get(key)!.push(n)
+    }
+    return m
+  }, [hierarchy])
+  const depotsByAds = useMemo(() => {
+    const m = new Map<string, DepotRow[]>()
+    for (const d of data) {
+      if (!d.ads_id) continue
+      if (!m.has(d.ads_id)) m.set(d.ads_id, [])
+      m.get(d.ads_id)!.push(d)
+    }
+    return m
+  }, [data])
+  const unassignedDepots = useMemo(() => data.filter(d => !d.ads_id), [data])
+  const adsOptions = useMemo(() => {
+    return hierarchy.filter(n => n.level === "ADS").map(ads => {
+      const adm = ads.parent_id ? nodeById.get(ads.parent_id) : undefined
+      const rdm = adm?.parent_id ? nodeById.get(adm.parent_id) : undefined
+      return { id: ads.id, label: `${rdm?.name || "?"} / ${adm?.name || "?"} / ${ads.name}` }
+    }).sort((a, b) => a.label.localeCompare(b.label))
+  }, [hierarchy, nodeById])
+
+  const toggleNode = (id: string) => setExpandedNodes(p => {
+    const n = new Set(p)
+    if (n.has(id)) n.delete(id); else n.add(id)
+    return n
+  })
+
+  // Rantai nama (rdm/adm/ads) buat sebuah node ADS — dipakai buat sinkron
+  // kolom teks denormalized di master_data_adp (dipakai halaman lain).
+  const chainFor = (adsId: string): { rdm_name: string; adm_name: string; ads_name: string } | null => {
+    const ads = nodeById.get(adsId)
+    if (!ads || ads.level !== "ADS") return null
+    const adm = ads.parent_id ? nodeById.get(ads.parent_id) : undefined
+    const rdm = adm?.parent_id ? nodeById.get(adm.parent_id) : undefined
+    return { rdm_name: rdm?.name || "", adm_name: adm?.name || "", ads_name: ads.name }
+  }
+
+  const addNode = async (level: HierLevel, parentId: string | null) => {
+    const name = newNodeName.trim()
+    if (!name) return
+    setHierSaving(true); setError("")
+    const { data: row, error: err } = await supabase.from("master_hierarchy")
+      .insert({ level, name, parent_id: parentId }).select().single()
+    setHierSaving(false)
+    if (err) { setError(err.message); return }
+    setHierarchy(p => [...p, row])
+    setAddingUnder(null); setNewNodeName("")
+    if (parentId) setExpandedNodes(p => new Set(p).add(parentId))
+  }
+
+  const startRenameNode = (n: HierarchyNode) => { setEditingNodeId(n.id); setNodeNameDraft(n.name) }
+
+  const saveRenameNode = async (n: HierarchyNode) => {
+    const name = nodeNameDraft.trim()
+    if (!name) { setError("Nama tidak boleh kosong"); return }
+    setHierSaving(true); setError("")
+    const { error: err } = await supabase.from("master_hierarchy").update({ name, updated_at: new Date().toISOString() }).eq("id", n.id)
+    if (err) { setError(err.message); setHierSaving(false); return }
+    const updatedHierarchy = hierarchy.map(h => h.id === n.id ? { ...h, name } : h)
+    setHierarchy(updatedHierarchy)
+    setEditingNodeId(null)
+
+    // Sinkron kolom teks denormalized di semua depot yang kena dampak rename ini
+    const nodeByIdNew = new Map(updatedHierarchy.map(h => [h.id, h]))
+    const affectedAdsIds: string[] = n.level === "ADS" ? [n.id] : updatedHierarchy
+      .filter(h => h.level === "ADS" && (n.level === "ADM" ? h.parent_id === n.id : nodeByIdNew.get(h.parent_id || "")?.parent_id === n.id))
+      .map(h => h.id)
+    for (const adsId of affectedAdsIds) {
+      const ads = nodeByIdNew.get(adsId)
+      const adm = ads?.parent_id ? nodeByIdNew.get(ads.parent_id) : undefined
+      const rdm = adm?.parent_id ? nodeByIdNew.get(adm.parent_id) : undefined
+      await supabase.from("master_data_adp")
+        .update({ ads_name: ads?.name || "", adm_name: adm?.name || "", rdm_name: rdm?.name || "" })
+        .eq("ads_id", adsId)
+    }
+    setHierSaving(false)
+    setData(p => p.map(d => {
+      if (!d.ads_id || !affectedAdsIds.includes(d.ads_id)) return d
+      const ads = nodeByIdNew.get(d.ads_id)
+      const adm = ads?.parent_id ? nodeByIdNew.get(ads.parent_id) : undefined
+      const rdm = adm?.parent_id ? nodeByIdNew.get(adm.parent_id) : undefined
+      return { ...d, ads_name: ads?.name || "", adm_name: adm?.name || "", rdm_name: rdm?.name || "" }
+    }))
+    setSuccess("Tersimpan!"); setTimeout(() => setSuccess(""), 2500)
+  }
+
+  const deleteNode = async (n: HierarchyNode) => {
+    const childCount = (childrenOf.get(n.id) || []).length
+    const depotCount = n.level === "ADS" ? (depotsByAds.get(n.id) || []).length : 0
+    const warn = childCount > 0
+      ? `${n.name} punya ${childCount} sub-node di bawahnya — semua ikut terhapus. Lanjut?`
+      : depotCount > 0
+        ? `${n.name} masih dipakai ${depotCount} depot — depot itu akan jadi "Belum Terhubung", bukan ikut terhapus. Lanjut?`
+        : `Hapus ${n.name}?`
+    if (!confirm(warn)) return
+    const { error: err } = await supabase.from("master_hierarchy").delete().eq("id", n.id)
+    if (err) { setError(err.message); return }
+    load()
+  }
+
+  const assignDepotToAds = async (depotId: string, adsId: string) => {
+    const chain = chainFor(adsId)
+    if (!chain) return
+    setError("")
+    const { error: err } = await supabase.from("master_data_adp")
+      .update({ ads_id: adsId, ...chain, updated_at: new Date().toISOString() }).eq("id", depotId)
+    if (err) { setError(err.message); return }
+    setData(p => p.map(d => d.id === depotId ? { ...d, ads_id: adsId, ...chain } : d))
+    setSuccess("Depot terhubung!"); setTimeout(() => setSuccess(""), 2500)
+  }
 
   const regions = useMemo(() =>
     ["ALL", ...Array.from(new Set(data.map(d => d.region_name).filter(Boolean))).sort()],
@@ -369,6 +511,19 @@ export default function MasterDataPage() {
           </div>
         </div>
 
+        {/* View tabs */}
+        <div style={{ display: "flex", gap: "6px", marginBottom: "16px" }}>
+          {([
+            ["table", "Tabel Depot", List],
+            ["hierarchy", "Hierarki RDM/ADM/ADS", FolderTree],
+          ] as const).map(([key, label, Icon]) => (
+            <button key={key} onClick={() => setView(key)}
+              style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: view === key ? "#0369A1" : "var(--surface)", color: view === key ? "white" : "var(--text3)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
+
         {/* Alerts */}
         {error && (
           <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: "10px", padding: "12px 16px", marginBottom: "14px", color: "#991B1B", fontSize: "13px" }}>
@@ -382,6 +537,7 @@ export default function MasterDataPage() {
           </div>
         )}
 
+        {view === "table" && <>
         {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "14px", marginBottom: "20px" }}>
           {([
@@ -660,7 +816,224 @@ export default function MasterDataPage() {
             </div>
           )}
         </div>
+        </>}
+
+        {view === "hierarchy" && (
+          <HierarchyView
+            childrenOf={childrenOf}
+            depotsByAds={depotsByAds}
+            unassignedDepots={unassignedDepots}
+            adsOptions={adsOptions}
+            expandedNodes={expandedNodes}
+            toggleNode={toggleNode}
+            editingNodeId={editingNodeId}
+            nodeNameDraft={nodeNameDraft}
+            setNodeNameDraft={setNodeNameDraft}
+            startRenameNode={startRenameNode}
+            saveRenameNode={saveRenameNode}
+            setEditingNodeId={setEditingNodeId}
+            deleteNode={deleteNode}
+            addingUnder={addingUnder}
+            setAddingUnder={setAddingUnder}
+            newNodeName={newNodeName}
+            setNewNodeName={setNewNodeName}
+            addNode={addNode}
+            hierSaving={hierSaving}
+            assignDepotToAds={assignDepotToAds}
+            jumpToDepot={(depotId: string) => { setView("table"); setExpandedId(depotId) }}
+            loading={loading}
+          />
+        )}
       </div>
+    </div>
+  )
+}
+
+// ── Hierarchy tree view ─────────────────────────────────────────
+const LEVEL_NEXT_LABEL: Record<HierLevel, string> = { RDM: "ADM", ADM: "ADS", ADS: "" }
+const POS_CLR2: Record<HierLevel, { bg: string; color: string }> = {
+  RDM: { bg: "#FEF3C7", color: "#92400E" },
+  ADM: { bg: "#EDE9FE", color: "#7C3AED" },
+  ADS: { bg: "#E0F2FE", color: "#0369A1" },
+}
+
+function HierarchyView({
+  childrenOf, depotsByAds, unassignedDepots, adsOptions,
+  expandedNodes, toggleNode, editingNodeId, nodeNameDraft, setNodeNameDraft,
+  startRenameNode, saveRenameNode, setEditingNodeId, deleteNode,
+  addingUnder, setAddingUnder, newNodeName, setNewNodeName, addNode, hierSaving,
+  assignDepotToAds, jumpToDepot, loading,
+}: {
+  childrenOf: Map<string, HierarchyNode[]>
+  depotsByAds: Map<string, DepotRow[]>
+  unassignedDepots: DepotRow[]
+  adsOptions: { id: string; label: string }[]
+  expandedNodes: Set<string>
+  toggleNode: (id: string) => void
+  editingNodeId: string | null
+  nodeNameDraft: string
+  setNodeNameDraft: (v: string) => void
+  startRenameNode: (n: HierarchyNode) => void
+  saveRenameNode: (n: HierarchyNode) => void
+  setEditingNodeId: (v: string | null) => void
+  deleteNode: (n: HierarchyNode) => void
+  addingUnder: { parentId: string | null; level: HierLevel } | null
+  setAddingUnder: (v: { parentId: string | null; level: HierLevel } | null) => void
+  newNodeName: string
+  setNewNodeName: (v: string) => void
+  addNode: (level: HierLevel, parentId: string | null) => void
+  hierSaving: boolean
+  assignDepotToAds: (depotId: string, adsId: string) => void
+  jumpToDepot: (depotId: string) => void
+  loading: boolean
+}) {
+  const rootNodes = childrenOf.get("__root__") || []
+
+  const AddInline = ({ parentId, level }: { parentId: string | null; level: HierLevel }) => {
+    const isAdding = addingUnder?.parentId === parentId && addingUnder?.level === level
+    if (!isAdding) {
+      return (
+        <button onClick={() => { setAddingUnder({ parentId, level }); setNewNodeName("") }}
+          style={{ display: "flex", alignItems: "center", gap: "4px", padding: "4px 9px", borderRadius: "6px", border: "1px dashed var(--border)", background: "transparent", color: "var(--text3)", fontSize: "11px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+          <Plus size={11} /> Tambah {level}
+        </button>
+      )
+    }
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <input autoFocus value={newNodeName} onChange={e => setNewNodeName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") addNode(level, parentId); if (e.key === "Escape") setAddingUnder(null) }}
+          placeholder={`Nama ${level} baru`}
+          style={{ padding: "5px 8px", borderRadius: "6px", border: "1px solid var(--accent-light)", background: "var(--surface)", color: "var(--text)", fontSize: "12px", width: "180px", fontFamily: "'Plus Jakarta Sans', sans-serif" }} />
+        <button onClick={() => addNode(level, parentId)} disabled={hierSaving}
+          style={{ padding: "5px 9px", borderRadius: "6px", border: "none", background: "#0369A1", color: "white", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}>
+          <Save size={11} />
+        </button>
+        <button onClick={() => setAddingUnder(null)}
+          style={{ padding: "5px 9px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", fontSize: "11px", cursor: "pointer" }}>
+          Batal
+        </button>
+      </div>
+    )
+  }
+
+  const NodeRow = ({ n, depth }: { n: HierarchyNode; depth: number }) => {
+    const kids = childrenOf.get(n.id) || []
+    const isOpen = expandedNodes.has(n.id)
+    const isEditing = editingNodeId === n.id
+    const depots = n.level === "ADS" ? (depotsByAds.get(n.id) || []) : []
+    const clr = POS_CLR2[n.level]
+    const hasChildrenOrDepots = kids.length > 0 || depots.length > 0
+
+    return (
+      <div style={{ marginLeft: depth * 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "7px 8px", borderRadius: "8px" }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface2)"}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>
+          <button onClick={() => toggleNode(n.id)} disabled={!hasChildrenOrDepots}
+            style={{ background: "none", border: "none", cursor: hasChildrenOrDepots ? "pointer" : "default", color: "var(--text3)", padding: 0, display: "flex", opacity: hasChildrenOrDepots ? 1 : 0.25 }}>
+            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </button>
+          <span style={{ ...clr, padding: "2px 8px", borderRadius: "99px", fontSize: "10px", fontWeight: 800, flexShrink: 0 }}>{n.level}</span>
+          {isEditing ? (
+            <>
+              <input autoFocus value={nodeNameDraft} onChange={e => setNodeNameDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") saveRenameNode(n); if (e.key === "Escape") setEditingNodeId(null) }}
+                style={{ padding: "4px 8px", borderRadius: "6px", border: "1px solid var(--accent-light)", background: "var(--surface)", color: "var(--text)", fontSize: "12px", width: "220px", fontFamily: "'Plus Jakarta Sans', sans-serif" }} />
+              <button onClick={() => saveRenameNode(n)} disabled={hierSaving}
+                style={{ padding: "5px 9px", borderRadius: "6px", border: "none", background: "#0369A1", color: "white", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}>
+                <Save size={11} />
+              </button>
+              <button onClick={() => setEditingNodeId(null)}
+                style={{ padding: "5px 9px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", fontSize: "11px", cursor: "pointer" }}>
+                Batal
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{n.name}</span>
+              {n.level === "ADS" && <span style={{ fontSize: "10px", color: "var(--text3)", background: "var(--surface3)", padding: "1px 7px", borderRadius: "99px" }}>{depots.length} depot</span>}
+              {kids.length > 0 && n.level !== "ADS" && <span style={{ fontSize: "10px", color: "var(--text3)" }}>{kids.length} {LEVEL_NEXT_LABEL[n.level]}</span>}
+              <button onClick={() => startRenameNode(n)} title="Rename"
+                style={{ padding: "4px 6px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", cursor: "pointer", color: "var(--text3)", display: "flex" }}>
+                <Pencil size={11} />
+              </button>
+              <button onClick={() => deleteNode(n)} title="Hapus"
+                style={{ padding: "4px 6px", borderRadius: "6px", border: "1px solid #FECACA", background: "#FEF2F2", cursor: "pointer", color: "#DC2626", display: "flex" }}>
+                <Trash2 size={11} />
+              </button>
+              {n.level !== "ADS" && <AddInline parentId={n.id} level={CHILD_LEVEL[n.level]!} />}
+            </>
+          )}
+        </div>
+
+        {isOpen && (
+          <div>
+            {kids.map(k => <NodeRow key={k.id} n={k} depth={depth + 1} />)}
+            {n.level === "ADS" && depots.map(d => (
+              <div key={d.id} onClick={() => jumpToDepot(d.id)}
+                style={{ marginLeft: (depth + 1) * 24, display: "flex", alignItems: "center", gap: "8px", padding: "5px 8px", cursor: "pointer", borderRadius: "6px" }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface2)"}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>
+                <Building2 size={12} color="var(--text3)" />
+                <span style={{ fontSize: "12px", color: "var(--text)" }}>{d.depot}</span>
+                <span style={{ fontSize: "10px", color: "var(--text3)", fontFamily: "monospace" }}>ADP {d.adp_code ?? "—"}</span>
+                <Link2 size={11} color="var(--text3)" style={{ marginLeft: "auto" }} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "18px 20px" }}>
+      {loading ? (
+        <div style={{ padding: "60px", textAlign: "center", color: "var(--text3)", fontSize: "14px" }}>
+          <RefreshCw size={24} style={{ margin: "0 auto 12px", display: "block", opacity: 0.4 }} />
+          Memuat hierarki...
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
+            <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>Hierarki RDM → ADM → ADS</div>
+            <AddInline parentId={null} level="RDM" />
+          </div>
+
+          {rootNodes.length === 0 ? (
+            <div style={{ padding: "30px", textAlign: "center", color: "var(--text3)", fontSize: "13px" }}>Belum ada node RDM. Klik &quot;Tambah RDM&quot; buat mulai.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+              {rootNodes.map(n => <NodeRow key={n.id} n={n} depth={0} />)}
+            </div>
+          )}
+
+          {unassignedDepots.length > 0 && (
+            <div style={{ marginTop: "24px", paddingTop: "18px", borderTop: "1px solid var(--border)" }}>
+              <div style={{ fontSize: "13px", fontWeight: 800, color: "#92400E", marginBottom: "4px" }}>
+                ⚠️ Depot Belum Terhubung Hierarki ({unassignedDepots.length})
+              </div>
+              <p style={{ fontSize: "11px", color: "var(--text3)", margin: "0 0 12px" }}>
+                Depot ini belum di-link ke node ADS manapun. Pilih ADS tujuannya di dropdown masing-masing.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "320px", overflowY: "auto" }}>
+                {unassignedDepots.map(d => (
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", background: "var(--surface2)", borderRadius: "8px" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", flex: 1 }}>{d.depot}</span>
+                    <span style={{ fontSize: "10px", color: "var(--text3)", fontFamily: "monospace" }}>ADP {d.adp_code ?? "—"}</span>
+                    <select defaultValue="" onChange={e => { if (e.target.value) assignDepotToAds(d.id, e.target.value) }}
+                      style={{ padding: "5px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "11px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer", maxWidth: "260px" }}>
+                      <option value="" disabled>Hubungkan ke ADS...</option>
+                      {adsOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
