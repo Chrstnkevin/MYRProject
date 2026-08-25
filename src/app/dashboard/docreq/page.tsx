@@ -36,6 +36,7 @@ interface RefDoc {
   id: string
   name: string
   content: string
+  description?: string
   created_at: string
 }
 
@@ -47,6 +48,12 @@ const EMPTY_DOC = {
   date_request: new Date().toISOString().split("T")[0],
   background: "", current_conditions: "", product_perspective: "",
   product_scope: "", global_flow: "", epics: [] as Epic[], status: "draft"
+}
+
+// ── Format dokumen jadi teks polos — dipakai buat "Copy Semua" DAN
+// buat auto-learn (disimpan sebagai referensi AI baru tiap dokumen disimpan) ──
+function formatDocAsText(doc: DocReq | (typeof EMPTY_DOC & { doc_number?: string })): string {
+  return `DOCUMENT REQUIREMENT\n${doc.doc_number || ""} – ${doc.modul}\n\nProject: ${doc.project}\nModul: ${doc.modul}\nType: ${doc.type}\nRequest By: ${doc.request_by}\nPIC: ${doc.pic}\nDate: ${doc.date_request}\n\nBACKGROUND\n${doc.background}\n\nCURRENT CONDITIONS\n${doc.current_conditions}\n\nPRODUCT PERSPECTIVE\n${doc.product_perspective}\n\nPRODUCT SCOPE\n${doc.product_scope}\n\nGLOBAL FLOW PROCESS\n${doc.global_flow}\n\nUSER REQUIREMENT\n${doc.epics?.map((e, i) => `\n${i + 1}. ${e.code}\nUser Story: ${e.userStory}\nAcceptance Criteria:\n${e.acceptanceCriteria}`).join("\n")}`
 }
 
 // ── AI Call — via internal API route (key aman di server) ────
@@ -105,10 +112,19 @@ PENTING:
 
     if (refDocs.length === 0) return basePrompt
 
+    // Prioritaskan referensi yang project/modul-nya mirip sama yang lagi
+    // dibuat sekarang — biar makin relevan makin banyak dokumen ke-simpan,
+    // bukan cuma sekadar "yang paling baru diupload/dibuat".
+    const q = `${form.project} ${form.modul}`.toLowerCase()
+    const scored = refDocs.map(r => ({
+      r, score: q.split(/\s+/).filter(Boolean).some(w => w.length > 2 && r.name.toLowerCase().includes(w)) ? 1 : 0,
+    })).sort((a, b) => b.score - a.score)
+    const picked = scored.slice(0, 5).map(s => s.r)
+
     const refSection = `
 
-DOKUMEN REFERENSI (pelajari gaya penulisan, format, dan terminologi dari dokumen-dokumen ini):
-${refDocs.slice(0, 3).map(r => `
+DOKUMEN REFERENSI (pelajari gaya penulisan, format, dan terminologi dari dokumen-dokumen ini — termasuk dokumen yang sudah pernah kamu/tim buat sebelumnya di aplikasi ini):
+${picked.map(r => `
 --- ${r.name} ---
 ${r.content.slice(0, 1500)}
 ---`).join("\n")}`
@@ -221,10 +237,20 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
   }
 
   // ── Save ──────────────────────────────────────────────────────
+  // Setiap dokumen yang disimpan otomatis JUGA ditambahkan sebagai referensi
+  // AI baru (ai_context, category reference_doc) — jadi makin banyak dokumen
+  // yang dibuat di aplikasi ini, makin banyak juga "contoh gaya" yang AI
+  // pelajari buat generate dokumen berikutnya. Nggak perlu upload manual lagi.
   const saveDoc = async () => {
     if (!form.project || !form.modul) return
     setSaving(true)
     await supabase.from("doc_requirements").insert([{ ...form, updated_at: new Date().toISOString() }])
+    await supabase.from("ai_context").insert([{
+      name: `${form.modul}${form.doc_number ? ` (${form.doc_number})` : ""}`,
+      description: "Auto-learned dari dokumen yang kamu simpan",
+      content: formatDocAsText(form).slice(0, 8000),
+      category: "reference_doc",
+    }])
     setSaving(false)
     setView("list")
     setContext("")
@@ -299,7 +325,16 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
                 <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 14px", background: "var(--bg)", borderRadius: "var(--radius-sm)" }}>
                   <FileText size={16} color="var(--accent)" />
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: "13px", fontWeight: 600 }}>{doc.name}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600 }}>{doc.name}</span>
+                      <span style={{
+                        fontSize: "10px", fontWeight: 700, padding: "1px 8px", borderRadius: "99px",
+                        background: doc.description?.startsWith("Auto-learned") ? "var(--accent-muted)" : "var(--surface3)",
+                        color: doc.description?.startsWith("Auto-learned") ? "var(--accent)" : "var(--text3)",
+                      }}>
+                        {doc.description?.startsWith("Auto-learned") ? "✨ Auto" : "Upload"}
+                      </span>
+                    </div>
                     <div style={{ fontSize: "11px", color: "var(--text3)" }}>{doc.content.length.toLocaleString()} karakter · {new Date(doc.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</div>
                   </div>
                   <button onClick={() => supabase.from("ai_context").delete().eq("id", doc.id).then(() => load())}
@@ -584,10 +619,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
           <h2 style={{ fontSize: "18px", fontWeight: 800 }}>{selected.modul}</h2>
           <p style={{ fontSize: "12px", color: "var(--text3)" }}>{selected.project} {selected.doc_number && `· ${selected.doc_number}`}</p>
         </div>
-        <button className="btn btn-primary" onClick={() => {
-          const txt = `DOCUMENT REQUIREMENT\n${selected.doc_number} – ${selected.modul}\n\nProject: ${selected.project}\nModul: ${selected.modul}\nType: ${selected.type}\nRequest By: ${selected.request_by}\nPIC: ${selected.pic}\nDate: ${selected.date_request}\n\nBACKGROUND\n${selected.background}\n\nCURRENT CONDITIONS\n${selected.current_conditions}\n\nPRODUCT PERSPECTIVE\n${selected.product_perspective}\n\nPRODUCT SCOPE\n${selected.product_scope}\n\nGLOBAL FLOW PROCESS\n${selected.global_flow}\n\nUSER REQUIREMENT\n${selected.epics?.map((e, i) => `\n${i+1}. ${e.code}\nUser Story: ${e.userStory}\nAcceptance Criteria:\n${e.acceptanceCriteria}`).join("\n")}`
-          copyText(txt, "all")
-        }}>
+        <button className="btn btn-primary" onClick={() => copyText(formatDocAsText(selected), "all")}>
           {copied === "all" ? <><Check size={15} /> Tersalin!</> : <><Copy size={15} /> Copy Semua</>}
         </button>
       </div>

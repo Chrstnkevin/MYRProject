@@ -141,18 +141,25 @@ export default function LogixTicketsPage() {
   const statusOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_status))).sort(), [tickets])
   const tipeOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.tipe_ticket))).sort(), [tickets])
 
-  // Tren tiket dibuat per hari, 14 hari terakhir
+  // Tren tiket dibuat per hari, 14 hari terakhir.
+  // PENTING: pakai tanggal kalender LOKAL buat key-nya (bukan toISOString,
+  // yang konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
+  // (WIB/WITA/WIT/Manila dst.), tiket yang dibuat sore/malam bakal ke-hitung
+  // masuk ke bucket HARI BERIKUTNYA, bukan hari tiket itu sendiri dibuat.
+  const localDateKey = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+
   const trendData = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
     const days = Array.from({ length: 14 }, (_, i) => {
       const d = new Date(today); d.setDate(d.getDate() - (13 - i))
-      return { key: d.toISOString().slice(0, 10), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
+      return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
     })
     const byKey = new Map(days.map(d => [d.key, d]))
     for (const t of tickets) {
       const n = Number(t.date_created)
       if (!n) continue
-      const row = byKey.get(new Date(n * 1000).toISOString().slice(0, 10))
+      const row = byKey.get(localDateKey(new Date(n * 1000)))
       if (row) row.count++
     }
     return days
