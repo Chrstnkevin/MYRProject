@@ -2,8 +2,10 @@
 import React from "react"
 // PATH: src/app/dashboard/data-transfer/page.tsx
 // Data Transfer Web Ficom
-// Dashboard = live staging dari n8n (tiap jam)
-// History   = snapshot fix jam 00/06/16 dari n8n
+// Dashboard = live staging, di-refresh otomatis tiap jam lewat Vercel Cron
+//             (api/ficom-edi-sync, gantiin job n8n) — bisa juga ditarik
+//             manual lewat tombol "Tarik dari Ficom", atau upload CSV manual.
+// History   = snapshot manual (tombol Save Snapshot) dari data staging saat itu.
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import {
@@ -12,6 +14,7 @@ import {
   Filter, TriangleAlert, Info
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
+import { parseEdiText } from "@/lib/parseEdiText"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 // ── Types ─────────────────────────────────────────────────────
@@ -115,6 +118,22 @@ function calcLama(tglISO: string, baselineISO: string): number {
 
 function pct(n: number, d: number) { return d === 0 ? 0 : Math.round(n / d * 1000) / 10 }
 
+// Exclude: ONLY remarks = Inactive (Excel does not exclude Vacant)
+function isVacantOrInactive(m: MasterRow) { return m.remarks === "Inactive" }
+
+// Map adp_code -> MasterRow, prefer entri yang bukan Inactive per adp_code
+function buildMasterMap(master: MasterRow[]): Record<string, MasterRow> {
+  const masterMap: Record<string, MasterRow> = {}
+  master.forEach(m => {
+    const key = String(m.adp_code)
+    const cur = masterMap[key]
+    if (!cur || (!isVacantOrInactive(m) && isVacantOrInactive(cur))) {
+      masterMap[key] = m
+    }
+  })
+  return masterMap
+}
+
 const AOR_COLORS: Record<string,string> = {
   GMA:"#D97706", NOL:"#2563EB", SOL:"#9333EA", VIS:"#0891B2", MIN:"#EF4444"
 }
@@ -159,6 +178,9 @@ export default function DataTransferPage() {
   const [saving,       setSaving]       = useState(false)
   const [saveMsg,      setSaveMsg]      = useState("")
   const [showSaveModal,setShowSaveModal]= useState(false)
+  const [syncingFicom, setSyncingFicom] = useState(false)
+  const [ficomSyncMsg, setFicomSyncMsg] = useState("")
+  const [viewMode,     setViewMode]     = useState<"adp"|"wf">("adp")
 
   // manual upload
   const ediRef = useRef<HTMLInputElement>(null)
@@ -205,21 +227,9 @@ export default function DataTransferPage() {
     return () => clearInterval(interval)
   }, [loadStaging])
 
-  // ── Join staging + master ──────────────────────────────────
+  // ── Join staging + master (dedup per distributor_id — buat view "By ADP") ──
   const displayRows = useMemo((): DisplayRow[] => {
-    // Exclude: ONLY remarks = Inactive (Excel does not exclude Vacant)
-    const isVacantOrInactive = (m: MasterRow) =>
-      m.remarks === "Inactive"
-
-    // Build master map — prefer non-vacant entry per adp_code
-    const masterMap: Record<string, MasterRow> = {}
-    master.forEach(m => {
-      const key = String(m.adp_code)
-      const cur = masterMap[key]
-      if (!cur || (!isVacantOrInactive(m) && isVacantOrInactive(cur))) {
-        masterMap[key] = m
-      }
-    })
+    const masterMap = buildMasterMap(master)
 
     // Deduplicate staging by distributor_id — keep LATEST tgl_gudang (Excel behavior)
     const dedupMap: Record<string, StagingRow> = {}
@@ -236,6 +246,28 @@ export default function DataTransferPage() {
     })
 
     return Object.values(dedupMap).map(r => {
+      const m   = masterMap[String(r.distributor_id)]
+      const iso = parseTglGudang(r.tgl_gudang)
+      const aor = m?.region_name || ""
+      return {
+        ...r,
+        server:      m?.server ? String(m.server) : "",
+        server_name: m?.server_name || "",
+        depot:       m?.depot || "",
+        aor,
+        region_name: aor,
+        tas:         TAS_MAP[aor] || "",
+        lama:        calcLama(iso, baseline),
+        excluded:    excludedIds.has(r.distributor_id) || (m ? isVacantOrInactive(m) : false),
+        tgl_iso:     iso,
+      }
+    })
+  }, [staging, master, baseline, excludedIds])
+
+  // ── Join staging + master TANPA dedup — satu baris per SPV (buat view "By WF") ──
+  const wfRows = useMemo((): DisplayRow[] => {
+    const masterMap = buildMasterMap(master)
+    return staging.map(r => {
       const m   = masterMap[String(r.distributor_id)]
       const iso = parseTglGudang(r.tgl_gudang)
       const aor = m?.region_name || ""
@@ -283,31 +315,24 @@ export default function DataTransferPage() {
   // ── Filtered rows for table ────────────────────────────────
   const filteredRows = useMemo(() => {
     const q = search.toLowerCase()
-    return displayRows.filter(r => {
+    const source = viewMode === "wf" ? wfRows : displayRows
+    return source.filter(r => {
       if (filterAor !== "ALL" && r.aor !== filterAor) return false
       if (filterStatus === "OK"   && r.lama > 0)  return false
       if (filterStatus === "LATE" && r.lama <= 0) return false
       if (q && !r.distributor_id.toLowerCase().includes(q) &&
-               !r.distributor_nm.toLowerCase().includes(q)) return false
+               !r.distributor_nm.toLowerCase().includes(q) &&
+               !(r.spv || "").toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => b.lama - a.lama)  // sort terlama → terpendek
-  }, [displayRows, search, filterAor, filterStatus])
+  }, [displayRows, wfRows, viewMode, search, filterAor, filterStatus])
 
   // ── Manual upload EDI ──────────────────────────────────────
   const handleEdiFile = async (file: File) => {
     setParsing(true)
     try {
-      const text  = await file.text()
-      const lines = text.trim().split("\n")
-      const delim = lines[0].includes("|") ? "|" : ","
-      const headers = lines[0].split(delim).map(h => h.replace(/"/g,"").trim().toLowerCase())
-
-      const rows = lines.slice(1).map(line => {
-        const cols = line.split(delim).map(c => c.replace(/"/g,"").trim())
-        const row: any = {}
-        headers.forEach((h, i) => { row[h] = cols[i] || "" })
-        return row
-      }).filter(r => r.distributor_id)
+      const text = await file.text()
+      const rows = parseEdiText(text)
 
       // Truncate & insert staging
       await supabase.rpc("truncate_edi_transfer_staging")
@@ -320,6 +345,21 @@ export default function DataTransferPage() {
       await loadStaging()
     } catch(e) { alert("Error parsing EDI: " + e) }
     setParsing(false)
+  }
+
+  // ── Tarik langsung dari Ficom (gantiin n8n) ────────────────
+  const handleSyncFicom = async () => {
+    setSyncingFicom(true); setFicomSyncMsg("")
+    try {
+      const res  = await fetch("/api/ficom-edi-sync", { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Sync gagal")
+      setFicomSyncMsg(`✅ ${data.rows} baris tersinkron dari Ficom`)
+      await loadStaging()
+    } catch (e) {
+      setFicomSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
+    }
+    setSyncingFicom(false)
   }
 
   // ── Save snapshot ──────────────────────────────────────────
@@ -445,12 +485,17 @@ export default function DataTransferPage() {
   const ovBg    = overall.p >= 90 ? "#DCFCE7" : overall.p >= 70 ? "#EFF6FF" : "#FEE2E2"
 
   // ── TABLE component (shared) ───────────────────────────────
-  const DataTable = ({ rows, isHistory = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean }) => (
+  const DataTable = ({ rows, isHistory = false, showSpv = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean, showSpv?: boolean }) => {
+    const headers = showSpv
+      ? ["","No","WF/SPV","ADP","Distributor","Server","Area","TAS","Tgl Transfer","Status"]
+      : ["","No","ADP","Distributor","Server","Area","TAS","Tgl Transfer","Status"]
+    const colCount = headers.length + (isHistory ? 0 : 1)
+    return (
     <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"auto" }}>
       <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"12px" }}>
         <thead>
           <tr style={{ background:"var(--surface2)" }}>
-            {["","ADP","Distributor","Server","Area","TAS","Tgl Transfer","Status"].map(h => (
+            {headers.map(h => (
               <th key={h} style={{ padding:"9px 12px", fontSize:"10px", fontWeight:700, color:"var(--text3)", textAlign:"left", borderBottom:"1px solid var(--border)", textTransform:"uppercase", letterSpacing:"0.05em", whiteSpace:"nowrap" }}>{h}</th>
             ))}
             {!isHistory && <th style={{ padding:"9px 12px", fontSize:"10px", fontWeight:700, color:"var(--text3)", textAlign:"left", borderBottom:"1px solid var(--border)", textTransform:"uppercase" }}>Aksi</th>}
@@ -458,7 +503,7 @@ export default function DataTransferPage() {
         </thead>
         <tbody>
           {rows.length === 0 ? (
-            <tr><td colSpan={9} style={{ padding:"40px", textAlign:"center", color:"var(--text3)", fontSize:"13px" }}>Tidak ada data</td></tr>
+            <tr><td colSpan={colCount} style={{ padding:"40px", textAlign:"center", color:"var(--text3)", fontSize:"13px" }}>Tidak ada data</td></tr>
           ) : rows.map((r: any, i) => {
             const isExpanded = expandedIds.has(r.distributor_id + i)
             const aorKey   = r.aor || r.region_name || ""
@@ -476,6 +521,8 @@ export default function DataTransferPage() {
                       {isExpanded ? <ChevronDown size={12}/> : <ChevronRight size={12}/>}
                     </button>
                   </td>
+                  <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{i + 1}</td>
+                  {showSpv && <td style={{ padding:"8px 12px", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontSize:"11px", color:"var(--text)" }}>{r.spv || "—"}</td>}
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontWeight:700, color:"#0369A1", fontSize:"11px" }}>{r.distributor_id}</td>
                   <td style={{ padding:"8px 12px", maxWidth:"220px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600 }}>{r.distributor_nm}</td>
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{r.server||"—"}</td>
@@ -499,7 +546,7 @@ export default function DataTransferPage() {
                 </tr>
                 {isExpanded && (
                   <tr key={i+"exp"} style={{ background:"var(--surface2)", borderBottom:"1px solid var(--border)" }}>
-                    <td colSpan={9} style={{ padding:"10px 16px 10px 40px" }}>
+                    <td colSpan={colCount} style={{ padding:"10px 16px 10px 40px" }}>
                       <div style={{ display:"flex", gap:"24px", fontSize:"12px", flexWrap:"wrap" }}>
                         {[
                           ["SPV", r.spv], ["GRSM", r.grsm], ["Server Name", r.server_name],
@@ -519,7 +566,8 @@ export default function DataTransferPage() {
         </tbody>
       </table>
     </div>
-  )
+    )
+  }
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:"16px" }}>
@@ -567,6 +615,14 @@ export default function DataTransferPage() {
             </div>
           )}
 
+          {/* Tarik dari Ficom */}
+          <button onClick={handleSyncFicom} disabled={syncingFicom}
+            title="Login Ficom & tarik data EDI OMSET DASHBOARD terbaru"
+            style={{ display:"flex", alignItems:"center", gap:"6px", padding:"7px 14px", borderRadius:"8px", border:"none", background:syncingFicom?"#94A3B8":"#166534", color:"white", fontSize:"12px", fontWeight:700, cursor:syncingFicom?"not-allowed":"pointer", fontFamily:"inherit" }}>
+            <RefreshCw size={13} style={{ animation: syncingFicom?"spin 1s linear infinite":"none" }}/>
+            {syncingFicom ? "Sync..." : "Tarik dari Ficom"}
+          </button>
+
           {/* Upload EDI */}
           <button onClick={() => setUploadOpen(true)}
             style={{ display:"flex", alignItems:"center", gap:"6px", padding:"7px 14px", borderRadius:"8px", border:"none", background:"#0891B2", color:"white", fontSize:"12px", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
@@ -594,12 +650,20 @@ export default function DataTransferPage() {
 
       {/* ── DASHBOARD TAB ── */}
       {tab === "dashboard" && (<>
+        {ficomSyncMsg && (
+          <div style={{ background: ficomSyncMsg.startsWith("✅")?"#DCFCE7":"#FEE2E2", border:`1px solid ${ficomSyncMsg.startsWith("✅")?"#BBF7D0":"#FECACA"}`, borderRadius:"8px", padding:"10px 14px", fontSize:"12px", color: ficomSyncMsg.startsWith("✅")?"#166534":"#991B1B" }}>
+            {ficomSyncMsg}
+          </div>
+        )}
         {staging.length === 0 && !loading ? (
           <div style={{ padding:"60px", textAlign:"center", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px" }}>
             <Upload size={36} color="var(--text3)" style={{ margin:"0 auto 12px", display:"block", opacity:0.3 }}/>
             <div style={{ fontSize:"16px", fontWeight:700, marginBottom:"4px" }}>Belum ada data EDI</div>
-            <div style={{ fontSize:"13px", color:"var(--text3)", marginBottom:"16px" }}>Data akan muncul otomatis dari n8n setiap jam, atau upload manual</div>
-            <button onClick={() => setUploadOpen(true)} style={{ padding:"9px 20px", borderRadius:"9px", border:"none", background:"#0891B2", color:"white", fontSize:"13px", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Upload EDI</button>
+            <div style={{ fontSize:"13px", color:"var(--text3)", marginBottom:"16px" }}>Data di-refresh otomatis tiap jam dari Ficom, atau tarik/upload manual</div>
+            <div style={{ display:"flex", gap:"8px", justifyContent:"center" }}>
+              <button onClick={handleSyncFicom} disabled={syncingFicom} style={{ padding:"9px 20px", borderRadius:"9px", border:"none", background:syncingFicom?"#94A3B8":"#166534", color:"white", fontSize:"13px", fontWeight:700, cursor:syncingFicom?"not-allowed":"pointer", fontFamily:"inherit" }}>{syncingFicom?"Sync...":"Tarik dari Ficom"}</button>
+              <button onClick={() => setUploadOpen(true)} style={{ padding:"9px 20px", borderRadius:"9px", border:"none", background:"#0891B2", color:"white", fontSize:"13px", fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Upload EDI</button>
+            </div>
           </div>
         ) : (<>
           {/* Summary cards */}
@@ -642,11 +706,21 @@ export default function DataTransferPage() {
             ))}
           </div>
 
+          {/* View toggle: By ADP (dedup per distributor) / By WF (mentah per SPV) */}
+          <div style={{ display:"flex", background:"var(--surface2)", borderRadius:"8px", padding:"3px", border:"1px solid var(--border)", width:"fit-content" }}>
+            {([["adp","By ADP"],["wf","By WF"]] as const).map(([v,label]) => (
+              <button key={v} onClick={() => setViewMode(v)}
+                style={{ padding:"5px 14px", borderRadius:"6px", border:"none", cursor:"pointer", fontSize:"12px", fontWeight:700, fontFamily:"inherit", background:viewMode===v?"white":"transparent", color:viewMode===v?"var(--text)":"var(--text3)", boxShadow:viewMode===v?"0 1px 3px rgba(0,0,0,0.1)":"none", transition:"all 0.15s" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Filters + table */}
           <div style={{ display:"flex", gap:"8px", alignItems:"center", flexWrap:"wrap" }}>
             <div style={{ display:"flex", alignItems:"center", gap:"7px", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", padding:"7px 11px", flex:"1", minWidth:"160px" }}>
               <Search size={13} color="var(--text3)"/>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari ADP atau nama distributor..."
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={viewMode==="wf" ? "Cari ADP, distributor, atau nama WF/SPV..." : "Cari ADP atau nama distributor..."}
                 style={{ background:"none", border:"none", outline:"none", fontSize:"12px", color:"var(--text)", width:"100%", fontFamily:"inherit" }}/>
             </div>
             <select value={filterAor} onChange={e=>setFilterAor(e.target.value)}
@@ -659,7 +733,7 @@ export default function DataTransferPage() {
               <option value="OK">✅ OK</option>
               <option value="LATE">⚠️ Terlambat</option>
             </select>
-            <span style={{ fontSize:"12px", color:"var(--text3)" }}>{filteredRows.length}/{displayRows.length}</span>
+            <span style={{ fontSize:"12px", color:"var(--text3)" }}>{filteredRows.length}/{(viewMode==="wf"?wfRows:displayRows).length}</span>
             <button onClick={() => setShowSaveModal(true)}
               style={{ display:"flex", alignItems:"center", gap:"6px", padding:"7px 14px", borderRadius:"8px", border:"none", background:"#166534", color:"white", fontSize:"12px", fontWeight:700, cursor:"pointer", fontFamily:"inherit", marginLeft:"auto" }}>
               <Save size={13}/>Save Snapshot
@@ -672,7 +746,7 @@ export default function DataTransferPage() {
             </div>
           )}
 
-          <DataTable rows={filteredRows}/>
+          <DataTable rows={filteredRows} showSpv={viewMode==="wf"}/>
         </>)}
       </>)}
 

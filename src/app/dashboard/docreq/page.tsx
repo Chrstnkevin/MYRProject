@@ -13,11 +13,14 @@ interface Epic {
   acceptanceCriteria: string
 }
 
+const APLIKASI_OPTIONS = ["Matrix", "SFA", "FiCom", "Ficom Lite", "EDI", "Lainnya"]
+
 interface DocReq {
   id: string
   doc_number: string
   project: string
   modul: string
+  aplikasi: string
   type: string
   request_by: string
   pic: string
@@ -37,13 +40,14 @@ interface RefDoc {
   name: string
   content: string
   description?: string
+  aplikasi?: string
   created_at: string
 }
 
 type View = "list" | "generate" | "result" | "detail"
 
 const EMPTY_DOC = {
-  doc_number: "", project: "", modul: "", type: "New Modul",
+  doc_number: "", project: "", modul: "", aplikasi: "", type: "New Modul",
   request_by: "", pic: "Christian Kevin",
   date_request: new Date().toISOString().split("T")[0],
   background: "", current_conditions: "", product_perspective: "",
@@ -53,7 +57,7 @@ const EMPTY_DOC = {
 // ── Format dokumen jadi teks polos — dipakai buat "Copy Semua" DAN
 // buat auto-learn (disimpan sebagai referensi AI baru tiap dokumen disimpan) ──
 function formatDocAsText(doc: DocReq | (typeof EMPTY_DOC & { doc_number?: string })): string {
-  return `DOCUMENT REQUIREMENT\n${doc.doc_number || ""} – ${doc.modul}\n\nProject: ${doc.project}\nModul: ${doc.modul}\nType: ${doc.type}\nRequest By: ${doc.request_by}\nPIC: ${doc.pic}\nDate: ${doc.date_request}\n\nBACKGROUND\n${doc.background}\n\nCURRENT CONDITIONS\n${doc.current_conditions}\n\nPRODUCT PERSPECTIVE\n${doc.product_perspective}\n\nPRODUCT SCOPE\n${doc.product_scope}\n\nGLOBAL FLOW PROCESS\n${doc.global_flow}\n\nUSER REQUIREMENT\n${doc.epics?.map((e, i) => `\n${i + 1}. ${e.code}\nUser Story: ${e.userStory}\nAcceptance Criteria:\n${e.acceptanceCriteria}`).join("\n")}`
+  return `DOCUMENT REQUIREMENT\n${doc.doc_number || ""} – ${doc.modul}\n\nProject: ${doc.project}\nModul: ${doc.modul}\nAplikasi: ${doc.aplikasi || "-"}\nType: ${doc.type}\nRequest By: ${doc.request_by}\nPIC: ${doc.pic}\nDate: ${doc.date_request}\n\nBACKGROUND\n${doc.background}\n\nCURRENT CONDITIONS\n${doc.current_conditions}\n\nPRODUCT PERSPECTIVE\n${doc.product_perspective}\n\nPRODUCT SCOPE\n${doc.product_scope}\n\nGLOBAL FLOW PROCESS\n${doc.global_flow}\n\nUSER REQUIREMENT\n${doc.epics?.map((e, i) => `\n${i + 1}. ${e.code}\nUser Story: ${e.userStory}\nAcceptance Criteria:\n${e.acceptanceCriteria}`).join("\n")}`
 }
 
 // ── AI Call — via internal API route (key aman di server) ────
@@ -86,6 +90,7 @@ export default function DocRequirementPage() {
   const [copied, setCopied]       = useState<string | null>(null)
   const [showRefDocs, setShowRefDocs] = useState(false)
   const [uploadingDoc, setUploadingDoc] = useState(false)
+  const [uploadAplikasi, setUploadAplikasi] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const load = async () => {
@@ -102,21 +107,39 @@ export default function DocRequirementPage() {
   const buildSystemPrompt = () => {
     const basePrompt = `Kamu adalah AI assistant yang membantu System Support Engineer membuat dokumen requirement teknis untuk sistem SFA (Sales Force Automation).
 
-PENTING:
-- Tulis dalam bahasa Indonesia yang formal dan teknis
+GAYA BAHASA:
+- Tulis dalam bahasa Indonesia yang NATURAL, kayak orang nulis beneran — bukan kaku/textbook/formal berlebihan
+- Boleh pakai kata sambung sehari-hari (jadi, karena, akibatnya, dsb), asal tetap jelas dan enak dibaca buat dokumen kerja
+- Hindari bahasa robotik atau template AI yang keliatan banget ("dalam rangka", "adapun", dsb)
 - Gunakan terminologi yang konsisten: Matrix (web admin), SFA Mobile/HHT (aplikasi mobile salesman), EDI (extract data)
+
+STRUKTUR TIAP SECTION (WAJIB DIIKUTI, JANGAN DICAMPUR):
+- "background": CUMA pengenalan singkat aplikasi/modul ini apa dan buat apa, terus disinggung sedikit aja ada masalah di situ (1 kalimat penutup cukup) — JANGAN jelasin masalahnya detail di sini, itu bagian "current_conditions".
+- "current_conditions": WAJIB mulai persis dengan kalimat "Saat ini, ..." — setelah itu isinya MURNI penjelasan masalah/kondisi yang terjadi sekarang, sedetail mungkin. JANGAN nyebut solusi atau improvement sama sekali di section ini.
+- "product_perspective": WAJIB mulai persis dengan kalimat "Untuk mengatasi masalah tersebut, ..." — setelah itu baru jelasin solusi/improvement apa yang akan dibuat. JANGAN ulang lagi masalahnya, langsung ke solusinya.
+
+FORMAT LAIN:
 - Format User Story: "Sebagai seorang [Admin/Sales] Saya ingin [fitur] Sehingga [manfaat]"
 - Format Epic code: S26-XXX-[SYSTEM]_[FiturName] (contoh: S26-XXX-SFA_TasklistItem, S26-XXX-MTX_Setting)
 - Output harus langsung isi konten tanpa kalimat pembuka
-- Acceptance Criteria harus spesifik, testable, dalam bullet points`
+- Acceptance Criteria harus spesifik, testable, dalam bullet points${form.aplikasi ? `
+- Dokumen ini KHUSUS untuk aplikasi ${form.aplikasi} — fokuskan istilah, modul, dan flow ke aplikasi ini` : ""}`
 
     if (refDocs.length === 0) return basePrompt
 
-    // Prioritaskan referensi yang project/modul-nya mirip sama yang lagi
-    // dibuat sekarang — biar makin relevan makin banyak dokumen ke-simpan,
-    // bukan cuma sekadar "yang paling baru diupload/dibuat".
+    // Filter utama: Aplikasi yang dipilih user (Matrix/SFA/FiCom/dst) — jauh
+    // lebih akurat daripada nebak dari kemiripan nama project/modul, karena
+    // eksplisit ditandai user sendiri. Kalau belum ada referensi ber-tag
+    // aplikasi yang sama (misal masih dokumen lama sebelum fitur ini ada),
+    // fallback ke seluruh pool biar tetap ada referensi yang dipakai.
+    const pool = form.aplikasi
+      ? refDocs.filter(r => r.aplikasi === form.aplikasi)
+      : refDocs
+    const candidates = pool.length > 0 ? pool : refDocs
+
+    // Di dalam pool itu, urutkan lagi berdasarkan kemiripan nama project/modul.
     const q = `${form.project} ${form.modul}`.toLowerCase()
-    const scored = refDocs.map(r => ({
+    const scored = candidates.map(r => ({
       r, score: q.split(/\s+/).filter(Boolean).some(w => w.length > 2 && r.name.toLowerCase().includes(w)) ? 1 : 0,
     })).sort((a, b) => b.score - a.score)
     const picked = scored.slice(0, 5).map(s => s.r)
@@ -134,7 +157,7 @@ ${r.content.slice(0, 1500)}
 
   // ── GENERATE SEMUA DALAM 1 REQUEST (hemat token) ────────────
   const generateAll = async () => {
-    if (!form.project || !form.modul || !context.trim()) return
+    if (!form.project || !form.modul || !form.aplikasi || !context.trim()) return
 
     setIsGenerating(true)
     setView("result")
@@ -154,9 +177,9 @@ ${context}
 Buatkan dokumen requirement lengkap dalam format JSON. Balas HANYA dengan JSON valid:
 
 {
-  "background": "paragraf latar belakang min 3 kalimat",
-  "current_conditions": "paragraf kondisi saat ini min 3 kalimat",
-  "product_perspective": "paragraf solusi produk min 3 kalimat",
+  "background": "2-3 kalimat pengenalan aplikasi/modul ini + singgung sedikit ada masalah (JANGAN jelasin masalahnya detail di sini)",
+  "current_conditions": "WAJIB diawali persis 'Saat ini, ' lalu penjelasan masalah/kondisi sekarang aja, sedetail mungkin, TANPA nyebut solusi",
+  "product_perspective": "WAJIB diawali persis 'Untuk mengatasi masalah tersebut, ' lalu solusi/improvement-nya apa",
   "product_scope": "- poin 1\\n- poin 2\\n- poin 3",
   "global_flow": "paragraf alur proses end-to-end min 4 kalimat",
   "epics": [
@@ -168,7 +191,7 @@ Buatkan dokumen requirement lengkap dalam format JSON. Balas HANYA dengan JSON v
   ]
 }
 
-Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web admin Matrix, SFA untuk mobile salesman.`
+Buat ${numE} epic. Bahasa Indonesia yang natural kayak orang nulis beneran, jangan kaku/formal berlebihan. MTX untuk web admin Matrix, SFA untuk mobile salesman.`
 
     try {
       const raw = await callAI(systemPrompt, prompt)
@@ -214,6 +237,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
               description: "Uploaded reference document",
               content: text.slice(0, 8000),
               category: "reference_doc",
+              aplikasi: uploadAplikasi || null,
             }])
             successCount++
           } catch {
@@ -250,6 +274,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
       description: "Auto-learned dari dokumen yang kamu simpan",
       content: formatDocAsText(form).slice(0, 8000),
       category: "reference_doc",
+      aplikasi: form.aplikasi || null,
     }])
     setSaving(false)
     setView("list")
@@ -307,12 +332,19 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
           </p>
 
           {/* Upload button */}
-          <div style={{ marginBottom: "16px" }}>
+          <div style={{ marginBottom: "16px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+            <select className="input" value={uploadAplikasi} onChange={e => setUploadAplikasi(e.target.value)} style={{ width: "auto", minWidth: "160px" }}>
+              <option value="">Aplikasi (opsional)</option>
+              {APLIKASI_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
             <input ref={fileInputRef} type="file" accept=".txt" multiple style={{ display: "none" }} onChange={handleFileUpload} />
             <button className="btn btn-secondary" onClick={() => fileInputRef.current?.click()} disabled={uploadingDoc}>
               {uploadingDoc ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={14} /> Upload Dokumen Referensi (.txt) — bisa pilih banyak</>}
             </button>
           </div>
+          <p style={{ fontSize: "11px", color: "var(--text3)", marginTop: "-10px", marginBottom: "16px" }}>
+            Tandai Aplikasi-nya (Matrix/SFA/FiCom/dst) biar AI cuma pakai referensi yang relevan waktu generate dokumen aplikasi yang sama.
+          </p>
 
           {/* List ref docs */}
           {refDocs.length === 0 ? (
@@ -334,6 +366,11 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
                       }}>
                         {doc.description?.startsWith("Auto-learned") ? "✨ Auto" : "Upload"}
                       </span>
+                      {doc.aplikasi && (
+                        <span style={{ fontSize: "10px", fontWeight: 700, padding: "1px 8px", borderRadius: "99px", background: "var(--surface3)", color: "var(--text2)" }}>
+                          {doc.aplikasi}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: "11px", color: "var(--text3)" }}>{doc.content.length.toLocaleString()} karakter · {new Date(doc.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</div>
                   </div>
@@ -367,6 +404,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
                   <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "4px" }}>
                     <span style={{ fontWeight: 700, fontSize: "15px" }}>{doc.modul}</span>
                     {doc.doc_number && <span className="mono" style={{ fontSize: "11px", color: "var(--accent)", background: "var(--accent-muted)", padding: "2px 8px", borderRadius: "99px" }}>{doc.doc_number}</span>}
+                    {doc.aplikasi && <span style={{ fontSize: "11px", color: "var(--text3)", background: "var(--surface3)", padding: "2px 8px", borderRadius: "99px" }}>{doc.aplikasi}</span>}
                   </div>
                   <div style={{ fontSize: "12px", color: "var(--text3)" }}>{doc.project} · {doc.request_by} · {new Date(doc.date_request).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}</div>
                   {doc.background && <p style={{ fontSize: "12px", color: "var(--text2)", marginTop: "6px", lineHeight: 1.5, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" } as React.CSSProperties}>{doc.background}</p>}
@@ -409,6 +447,13 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
           <div>
             <div className="label" style={{ marginBottom: "6px" }}>Modul *</div>
             <input className="input" placeholder="Tasklist Item" value={form.modul} onChange={e => setForm(f => ({ ...f, modul: e.target.value }))} />
+          </div>
+          <div>
+            <div className="label" style={{ marginBottom: "6px" }}>Aplikasi *</div>
+            <select className="input" value={form.aplikasi} onChange={e => setForm(f => ({ ...f, aplikasi: e.target.value }))}>
+              <option value="">Pilih Aplikasi...</option>
+              {APLIKASI_OPTIONS.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
           </div>
           <div>
             <div className="label" style={{ marginBottom: "6px" }}>Type</div>
@@ -493,7 +538,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
         className="btn btn-primary"
         style={{ padding: "14px 24px", fontSize: "15px", justifyContent: "center", borderRadius: "var(--radius)" }}
         onClick={generateAll}
-        disabled={!form.project || !form.modul || !context.trim()}>
+        disabled={!form.project || !form.modul || !form.aplikasi || !context.trim()}>
         <Sparkles size={18} /> Generate Dokumen Lengkap dengan AI
       </button>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -627,7 +672,7 @@ Buat ${numE} epic. Gunakan bahasa Indonesia formal dan teknis. MTX untuk web adm
       {/* Header table */}
       <div className="card" style={{ padding: "20px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "14px" }}>
-          {[{ l: "Project", v: selected.project }, { l: "Modul", v: selected.modul }, { l: "Type", v: selected.type }, { l: "Request By", v: selected.request_by }, { l: "PIC", v: selected.pic }, { l: "Date", v: new Date(selected.date_request).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }) }].map(({ l, v }) => (
+          {[{ l: "Project", v: selected.project }, { l: "Modul", v: selected.modul }, { l: "Aplikasi", v: selected.aplikasi }, { l: "Type", v: selected.type }, { l: "Request By", v: selected.request_by }, { l: "PIC", v: selected.pic }, { l: "Date", v: new Date(selected.date_request).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }) }].map(({ l, v }) => (
             <div key={l}><div className="label" style={{ marginBottom: "3px" }}>{l}</div><div style={{ fontSize: "13px", fontWeight: 600 }}>{v || "-"}</div></div>
           ))}
         </div>

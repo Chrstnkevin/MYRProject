@@ -13,10 +13,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 })
   }
 
-  // Pilih model: vision jika ada gambar, text-only jika tidak
+  // Pilih model: vision jika ada gambar, text-only jika tidak.
+  // llama-3.3-70b-versatile sekarang Enterprise-only di Groq (butuh Contact
+  // Sales) — nggak bisa diakses API key tier Developer biasa, makanya diganti
+  // ke openai/gpt-oss-120b (masih di harga per-token normal, context window
+  // sama besar 131k).
   const model = imageBase64
     ? "meta-llama/llama-4-scout-17b-16e-instruct"
-    : "llama-3.3-70b-versatile"
+    : "openai/gpt-oss-120b"
 
   // Build user message content
   const userContent = imageBase64

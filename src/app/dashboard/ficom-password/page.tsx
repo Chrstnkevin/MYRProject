@@ -36,11 +36,15 @@ const POS_CLR: Record<string, { bg: string; color: string }> = {
   RDM: { bg: "#FEF3C7", color: "#92400E" },
   ADM: { bg: "#EDE9FE", color: "#7C3AED" },
   ADS: { bg: "#E0F2FE", color: "#0369A1" },
+  EDI: { bg: "#FFE4E6", color: "#BE123C" },
 }
 const SERVER_CLR: Record<string, string> = {
   "138": "#0369A1", "228": "#7C3AED", "252": "#DC2626",
 }
-const POSITIONS = ["SD", "RDM", "ADM", "ADS"]
+// "EDI" = akun sistem/fungsional buat ekstraksi EDI (bukan akun SD
+// personal) — dipakai api/ficom-edi-sync buat login, bukan buat mapping
+// hierarki RDM/ADM/ADS.
+const POSITIONS = ["SD", "RDM", "ADM", "ADS", "EDI"]
 
 function extractLogin(name: string): string {
   const m = name?.match(/^(WF\d+)/i)
@@ -199,8 +203,11 @@ export default function FicomPasswordPage() {
   const saveEdit = async () => {
     if (!draft.user_login?.trim()) { setError("User Login tidak boleh kosong"); return }
     setSaving(true); setError("")
+    // Posisi "EDI" itu akun sistem/fungsional (mis. "brt") — login-nya
+    // case-sensitive di Ficom, JANGAN di-uppercase kayak WF-code
+    // (SD/RDM/ADM/ADS) yang memang konvensinya selalu huruf besar.
     const payload = {
-      user_login: draft.user_login.trim().toUpperCase(),
+      user_login: draft.position === "EDI" ? draft.user_login.trim() : draft.user_login.trim().toUpperCase(),
       sales_name: draft.sales_name?.trim() ?? "",
       password:   draft.password?.trim() ?? "",
       position:   draft.position ?? "ADM",
@@ -266,13 +273,19 @@ export default function FicomPasswordPage() {
       const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" })
       const toUpsert = rows
         .filter(r => String(r["User Login"] ?? "").trim() !== "")
-        .map(r => ({
-          user_login: String(r["User Login"] ?? "").trim().toUpperCase(),
-          sales_name: String(r["Sales Name"] ?? "").trim(),
-          password:   String(r["Password"] ?? "").trim(),
-          position:   String(r["Position"] ?? r["POSITION"] ?? "ADM").trim().toUpperCase(),
-          updated_at: new Date().toISOString(),
-        }))
+        .map(r => {
+          const position = String(r["Position"] ?? r["POSITION"] ?? "ADM").trim().toUpperCase()
+          const rawLogin = String(r["User Login"] ?? "").trim()
+          return {
+            // Posisi "EDI" (akun sistem/fungsional) case-sensitive di
+            // Ficom — jangan di-uppercase, beda dari WF-code SD/RDM/ADM/ADS.
+            user_login: position === "EDI" ? rawLogin : rawLogin.toUpperCase(),
+            sales_name: String(r["Sales Name"] ?? "").trim(),
+            password:   String(r["Password"] ?? "").trim(),
+            position,
+            updated_at: new Date().toISOString(),
+          }
+        })
       const { error: err } = await supabase.from("ficom_passwords").upsert(toUpsert, { onConflict: "user_login" })
       if (err) throw err
       setSuccess(`✅ ${toUpsert.length} users berhasil di-import`); setTimeout(() => setSuccess(""), 3000)
