@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password" | "data-transfer"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password" | "data-transfer" | "productivity-compare"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -95,6 +95,15 @@ const QUOTES: Record<PageType, string[]> = {
     "Data tidak berbohong — tapi hanya jika sudah naik.",
     "Pantau, cek, pastikan — itu rutinitas yang melindungi tim.",
   ],
+  "productivity-compare": [
+    "Target tanpa realisasi cuma angka. Realisasi tanpa target tidak tahu arah.",
+    "Setiap komponen yang tercapai adalah satu langkah lebih dekat ke target bulan ini.",
+    "Data yang akurat adalah keputusan yang tidak salah arah.",
+    "Bandingkan, verifikasi, percaya — begitu cara membangun laporan yang solid.",
+    "Achievement 100% dimulai dari transparansi angka, bukan asumsi.",
+    "Satu salesman yang aktif hari ini adalah satu target yang lebih dekat tercapai.",
+    "Produktivitas terlihat dari angka — tapi lahir dari konsistensi harian.",
+  ],
 }
 
 const CONFIG: Record<PageType, {
@@ -112,6 +121,7 @@ const CONFIG: Record<PageType, {
   "master-data":     { label: "Data Bersih, Keputusan Tepat", emoji: "🗂️",  bg: "linear-gradient(135deg,#eff6ff,#dbeafe)", border: "#bfdbfe", labelColor: "#0369A1", textColor: "#1e3a8a", primary: "#3b82f6", light: "#93c5fd" },
   "data-transfer":   { label: "Data Naik, Report Aman",          emoji: "📡",  bg: "linear-gradient(135deg,#ecfeff,#cffafe)", border: "#a5f3fc", labelColor: "#0891B2", textColor: "#164e63", primary: "#06b6d4", light: "#a5f3fc" },
   "ficom-password":  { label: "Jaga Akses, Jaga Kepercayaan",  emoji: "🔐",  bg: "linear-gradient(135deg,#fdf4ff,#fae8ff)", border: "#e9d5ff", labelColor: "#7C3AED", textColor: "#581c87", primary: "#a855f7", light: "#e9d5ff" },
+  "productivity-compare": { label: "Target vs Realisasi, Jelas Tanpa Ragu", emoji: "📈", bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#bbf7d0", labelColor: "#16A34A", textColor: "#14532d", primary: "#22c55e", light: "#86efac" },
 }
 
 function getDailyQuote(page: PageType): string {

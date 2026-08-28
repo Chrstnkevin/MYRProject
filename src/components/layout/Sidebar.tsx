@@ -26,7 +26,8 @@ const NAV_SUPPORT_LOKAL = [
 ]
 
 const NAV_SUPPORT_PHI = [
-    { icon: BarChart3,  label: "Compare Target",     path: "/dashboard/target-compare",    desc: "Excel vs Ficom sampai Pcode", badge: "Target", badgeColor: "#0369A1" },
+  { icon: BarChart3,  label: "Compare Target",     path: "/dashboard/target-compare",    desc: "Excel vs Ficom sampai Pcode", badge: "Target", badgeColor: "#0369A1" },
+  { icon: TrendingUp, label: "Productivity Compare", path: "/dashboard/productivity-compare", desc: "Target vs Realisasi per komponen", badge: "Prod", badgeColor: "#16A34A" },
   { icon: Ticket,     label: "Ticket Logix",       path: "/dashboard/logix-tickets",     desc: "Monitoring tiket Log Support Excellent", badge: "Logix", badgeColor: "#DC2626" },
   { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
   { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
