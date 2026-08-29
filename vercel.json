@@ -1,7 +1,0 @@
-{
-  "crons": [
-    { "path": "/api/ficom-edi-sync", "schedule": "0 * * * *" },
-    { "path": "/api/ficom-productivity-sync", "schedule": "0 * * * *" },
-    { "path": "/api/mpp-health-sync", "schedule": "0 * * * *" }
-  ]
-}
