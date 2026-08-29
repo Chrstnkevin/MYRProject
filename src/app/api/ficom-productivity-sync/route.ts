@@ -73,6 +73,32 @@ async function fetchEdiText(token: string, dateFrom: string, dateTo: string): Pr
   return extractRes.text()
 }
 
+// Endpoint dashboard RESMI Ficom Lite (BUKAN EDI export) — beda jalur dari
+// EDI2600006 di atas, kasih rollup Target/Realisasi per RDM langsung dari
+// Ficom sendiri (bukan hasil agregasi kita), scope-nya SELALU "hari ini/
+// bulan berjalan" (tidak ada param tanggal, tidak per-periode kayak
+// EDI2600006). Dipakai user buat validasi silang: userId di sini match
+// PERSIS ke grsm_id (RDM) kita, jadi dicocokkan by ID langsung — tidak
+// perlu name-matching kayak target-compare. "user-id" query param-nya =
+// emp_id akun SD (posisi "SD" di Master Data → Ficom Password, sama
+// dengan yang dipakai target-compare buat crawl hierarki/produk), BUKAN
+// akun posisi "EDI" yang dipakai buat extract EDI2600006 di atas — jadi
+// login-nya terpisah pakai kredensial SD.
+interface FicomLiteCard {
+  label: string; value: number; target: number; percent: number
+  componentId: string; targetExcluded?: number; percentExcluded?: number
+}
+interface FicomLiteTeamRow { userId: string; name: string; cards: FicomLiteCard[] }
+interface FicomLiteTeam { daily: FicomLiteTeamRow[]; monthly: FicomLiteTeamRow[] }
+
+async function fetchFicomLiteTeam(token: string, sdEmpId: string): Promise<FicomLiteTeam> {
+  const res = await fetch(`${FICOM_BASE}/api/ficom-lite-dashboard/team?user-id=${sdEmpId}`, {
+    headers: { Authorization: `F1C0m ${token}` },
+  })
+  if (!res.ok) throw new Error(`Gagal ambil Ficom Lite Team (HTTP ${res.status})`)
+  return res.json()
+}
+
 async function runSync() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -172,7 +198,29 @@ async function runSync() {
       if (insErr) throw new Error(`Gagal insert staging: ${insErr.message}`)
     }
 
-    return NextResponse.json({ success: true, rows: rows.length, rawRows: parsed.length, periodMonth, dateFrom, dateTo, syncedAt: new Date().toISOString() })
+    // Validasi silang: tarik juga rollup resmi Ficom Lite (per RDM, live
+    // hari ini) — TIDAK disimpan ke tabel (bukan data historis per-periode),
+    // cuma dikembalikan apa adanya di response biar halaman bisa tampilkan
+    // sbg kolom pembanding. Non-fatal kalau gagal — sync utama (EDI2600006)
+    // di atas sudah berhasil, jangan sampai gagal cuma gara-gara validasi
+    // tambahan ini (mis. akun SD belum diisi).
+    let ficomLiteTeam: FicomLiteTeam | null = null
+    try {
+      const { data: sdCred } = await supabase
+        .from("ficom_passwords")
+        .select("user_login,password")
+        .eq("position", "SD")
+        .limit(1)
+        .maybeSingle()
+      if (sdCred?.user_login && sdCred?.password) {
+        const sdToken = await ficomLogin(sdCred.user_login, sdCred.password)
+        ficomLiteTeam = await fetchFicomLiteTeam(sdToken, sdCred.user_login)
+      }
+    } catch (e) {
+      console.error("Gagal ambil Ficom Lite Team (non-fatal):", e)
+    }
+
+    return NextResponse.json({ success: true, rows: rows.length, rawRows: parsed.length, periodMonth, dateFrom, dateTo, syncedAt: new Date().toISOString(), ficomLiteTeam })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined

@@ -3,7 +3,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import {
-  Upload, CheckCircle, AlertCircle, RefreshCw, FileSpreadsheet,
+  Upload, CheckCircle, RefreshCw, FileSpreadsheet,
   Search, TriangleAlert, TrendingUp, Trash2, Settings, ChevronUp, ChevronDown
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
@@ -959,8 +959,31 @@ function RawDataTable({ rows, emptyHint }: { rows: ExcelRow[]; emptyHint: string
 // nulis ukuran kemasan tanpa spasi ("24X175G"), Excel PHI pakai spasi
 // ("24 X 175G") — beda persis di situ doang, sisanya sama. Sama seperti
 // normalizeSalesmanName yang juga hapus semua spasi karena masalah serupa.
+// Ficom JUGA sering nambah akhiran kata " PH" di ujung category_name
+// (mis. "CALCHEESE CHEESE WAFER 20X10X20G PH", "MALKIST BARBECUE
+// 12X10X28G PH") yang TIDAK ada di sku_description Excel (dikonfirmasi
+// user: SKU 330053 "CAL CHEESE CHEESE WAFER 20X10X20G" di Excel, tanpa
+// "PH") — dibuang di sini SEBELUM whitespace dirapatkan, jadi cuma kena
+// kalau "PH" berdiri sendiri sebagai kata terakhir (dipisah spasi), bukan
+// akhiran nama produk lain yang kebetulan diakhiri huruf P dan H.
+// Selain itu Ficom KADANG (tidak selalu) lupa nulis satuan "G" (gram) di
+// ujung ukuran kemasan — dikonfirmasi user: SKU 330071 "CAL CHEESE
+// CHEESE WAFER 20X20X8.5G PH" di Excel, tapi di Ficom cuma "CALCHEESE
+// CHEESE WAFER 20X20X8.5 PH" (tanpa G) — padahal SKU lain di produk yang
+// sama (330052, 330053) konsisten sama-sama pakai "G" di kedua sisi, jadi
+// ini murni typo penulisan Ficom, bukan beda produk. "G" dibuang kalau
+// nempel langsung setelah angka di ujung string (satuan berat), setelah
+// whitespace & "PH" dibuang — supaya "...8.5G" dan "...8.5" dianggap sama.
+// Titik di singkatan JUGA kadang beda: Ficom nulis "KOPIKO LA COFFEE
+// POUCH 24X10X25G" (tanpa titik), Excel nulis "KOPIKO L.A. COFFEE POUCH
+// 24X10X25G" (pakai titik) — dikonfirmasi dari SKU 325667/325666 (yang
+// HANGER sudah cocok karena Ficom-nya tetap nulis "L.A." lengkap, cuma
+// yang POUCH yang beda). Titik dibuang HANYA kalau tidak nempel angka di
+// kedua sisinya (regex lookbehind/lookahead \d), supaya titik desimal di
+// angka berat kayak "20.5G" TIDAK ikut kebuang (kalau kebuang jadi
+// "205G" — beda produk beneran).
 function normalizeProductName(s: string): string {
-  return s.replace(/\s+/g, "").toUpperCase()
+  return s.trim().replace(/\s+PH$/i, "").replace(/(?<!\d)\.(?!\d)/g, "").replace(/\s+/g, "").toUpperCase().replace(/(\d)G$/, "$1")
 }
 
 // Excel PHI kadang pecah kategori produk lebih granular dari Divisi resmi
@@ -970,11 +993,28 @@ function normalizeProductName(s: string): string {
 // INSTANT FOOD di sisi Ficom. Tanpa peta ini baris-baris itu nyasar ke
 // grup "Lainnya (tidak match Divisi Ficom)" — bukan karena beda ejaan/
 // spasi (itu bisa dinormalisasi), tapi karena taksonominya memang beda.
-const DIVISION_ALIAS: Record<string, string> = {
-  CHOCOLATE: "WAFER",
-  NOODLE: "INSTANT FOOD",
-}
-
+// ── PCODE CATEGORY TREE ──────────────────────────────────────
+// Tree-nya SEKARANG murni struktur FICOM (Divisi → Subbrand → Produk),
+// BUKAN lagi dikelompokkan dari nama Divisi/SKU Group Excel. Sebelumnya
+// (grouping by Excel + cari padanan Ficom per level) terus-menerus kena
+// masalah taksonomi: Excel kadang lebih detail dari Ficom (CHOCOLATE/
+// NOODLE itu sub-kategori Excel, bukan Divisi Ficom — masuk WAFER/INSTANT
+// FOOD di Ficom), kadang malah SEBALIKNYA (BENG BENG SHARE IT itu
+// Subbrand TERPISAH di Ficom, tapi di Excel digabung ke SKU Group "BENG
+// BENG") — dan baris Excel yang skugroup-nya beda dari nama Subbrand
+// Ficom TIDAK PERNAH sampai ke pencocokan produk sama sekali (nyasar
+// duluan sebelum sempat dicocokkan by nama), walau nama SKU-nya sendiri
+// jelas ada di Ficom (dikonfirmasi user: kasus MALKIST BARBECUE/SWEET
+// GLAZED — SKU-nya ada di Excel, tapi skugroup-nya beda dari Subbrand
+// Ficom, jadi tidak pernah ketemu).
+//
+// Sekarang: Divisi/Subbrand/Produk SELALU dari Ficom (konsisten dengan
+// dirinya sendiri, tidak butuh dicocokkan namanya ke Excel buat NENTUKAN
+// struktur). Excel dicari SEBAGAI PEMBANDING cuma di level Produk (SKU),
+// lewat nama (sku_description), TERLEPAS dari skugroup/division row itu
+// ditulis apa di Excel — lalu dijumlah bottom-up buat total Subbrand &
+// Divisi. Baris Excel yang nama produknya tidak ketemu padanan Ficom
+// manapun dikumpulkan di grup terpisah di bagian akhir.
 function PcodeCategoryTree({
   rows, divisionNodes, subbrandsByDivision, productsBySubbrand, ediLookup, ediNote, baseline,
 }: {
@@ -989,49 +1029,63 @@ function PcodeCategoryTree({
   const [openDiv, setOpenDiv] = useState<Set<string>>(new Set())
   const [openSub, setOpenSub] = useState<Set<string>>(new Set())
 
-  const norm = (s: string) => s.trim().toUpperCase()
+  const toggleDiv = (id: string) => setOpenDiv(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  const toggleSub = (id: string) => setOpenSub(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
-  // Kelompokkan baris Excel per nama Divisi (case-insensitive, lewat
-  // DIVISION_ALIAS dulu buat kategori Excel yang taksonominya beda dari
-  // Ficom). Baris yang tetap tidak match Divisi Ficom manapun masuk grup "Lainnya".
-  const byDivision = useMemo(() => {
-    const known = new Set(divisionNodes.map(d => norm(d.category_name)))
-    const m = new Map<string, ExcelRow[]>()
-    const unmatched: ExcelRow[] = []
+  // Lookup Excel GLOBAL by nama produk (sku_description) — dibangun dari
+  // SELURUH baris Excel, TIDAK di-filter by skugroup/division dulu.
+  const excelBySkuName = useMemo(() => {
+    const m = new Map<string, RollupRow>()
     for (const r of rows) {
-      const rawKey = norm(r.division)
-      const key = DIVISION_ALIAS[rawKey] || rawKey
-      if (known.has(key)) {
-        if (!m.has(key)) m.set(key, [])
-        m.get(key)!.push(r)
+      if (!r.sku_description) continue
+      const key = normalizeProductName(r.sku_description)
+      const existing = m.get(key)
+      if (existing) {
+        existing.targetAmount += r.target_amount
+        existing.targetCases += r.target_cases
+        existing.count++
+        existing.adpCodes.add(r.adp_code)
       } else {
-        unmatched.push(r)
-      }
-    }
-    return { m, unmatched }
-  }, [rows, divisionNodes])
-
-  // Lookup produk GLOBAL (lintas seluruh Subbrand/Divisi Ficom nasional),
-  // BUKAN dibatasi per-Subbrand yang sedang di-drill. Excel & Ficom kadang
-  // punya taksonomi Divisi/Subbrand yang beda (dikonfirmasi user, kasus
-  // "BENG BENG SHARE IT" — di Excel masuk SKU Group "BENG BENG", tapi di
-  // Ficom itu Subbrand TERPISAH) — kalau pencocokan produk dibatasi harus
-  // 1 Subbrand yang sama, produk begini selalu nyasar "tidak match" padahal
-  // namanya jelas ketemu di Ficom, cuma beda kelompok. Nama produk individual
-  // seharusnya tetap bisa ditemukan di mana pun dia terdaftar di Ficom,
-  // terlepas dari Subbrand/Divisi induknya cocok atau tidak.
-  const globalProductMap = useMemo(() => {
-    const m = new Map<string, FicomAgg>()
-    for (const products of productsBySubbrand.values()) {
-      for (const p of products) {
-        m.set(normalizeProductName(p.category_name), { target: p.target, actual: p.omset })
+        m.set(key, { key: r.sku_code, label: `${r.sku_code} · ${r.sku_description}`, targetAmount: r.target_amount, targetCases: r.target_cases, count: 1, adpCodes: new Set([r.adp_code]) })
       }
     }
     return m
-  }, [productsBySubbrand])
+  }, [rows])
 
-  const toggleDiv = (id: string) => setOpenDiv(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  const toggleSub = (id: string) => setOpenSub(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  // Total Excel per Subbrand & Divisi, dihitung bottom-up dari pencocokan
+  // produk individual (satu-satunya pencocokan yang reliable) — bukan lagi
+  // dari pencocokan nama Divisi/Subbrand yang taksonominya sering beda.
+  const { subbrandExcelTotal, divisionExcelTotal, matchedSkuKeys } = useMemo(() => {
+    const subTotal = new Map<string, number>()
+    const divTotal = new Map<string, number>()
+    const matched = new Set<string>()
+    for (const div of divisionNodes) {
+      const subbrands = subbrandsByDivision.get(div.category_id) || []
+      let dSum = 0
+      for (const sb of subbrands) {
+        const products = productsBySubbrand.get(sb.category_id) || []
+        let sSum = 0
+        for (const p of products) {
+          const key = normalizeProductName(p.category_name)
+          const match = excelBySkuName.get(key)
+          if (match) { sSum += match.targetAmount; matched.add(key) }
+        }
+        subTotal.set(sb.category_id, sSum)
+        dSum += sSum
+      }
+      divTotal.set(div.category_id, dSum)
+    }
+    return { subbrandExcelTotal: subTotal, divisionExcelTotal: divTotal, matchedSkuKeys: matched }
+  }, [divisionNodes, subbrandsByDivision, productsBySubbrand, excelBySkuName])
+
+  // Baris Excel yang nama produknya tidak pernah ketemu padanan Produk
+  // Ficom manapun — ditampilkan terpisah, bukan hilang diam-diam.
+  const unmatchedExcelSkus = useMemo(() => {
+    return Array.from(excelBySkuName.entries())
+      .filter(([key]) => !matchedSkuKeys.has(key))
+      .map(([, row]) => row)
+      .sort((a, b) => b.targetAmount - a.targetAmount)
+  }, [excelBySkuName, matchedSkuKeys])
 
   const gridCols = "1fr 160px 160px 160px"
   const colLabel = (key: BaselineKey, label: string) => key === baseline ? `★ ${label}` : label
@@ -1039,18 +1093,17 @@ function PcodeCategoryTree({
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
       <div style={{ display: "grid", gridTemplateColumns: gridCols, padding: "9px 12px", background: "var(--surface2)", fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
-        <div>Divisi / Subbrand / SKU</div>
+        <div>Divisi / Subbrand / SKU (struktur Ficom)</div>
         <div style={{ textAlign: "right" }}>{colLabel("ficom_dash", "Ficom Dash. Category")}</div>
         <div style={{ textAlign: "right" }}>{colLabel("excel", "Excel Target PHI")}</div>
         <div style={{ textAlign: "right" }}>Matrix Target PHI</div>
       </div>
 
       {divisionNodes.map(div => {
-        const divRows = byDivision.m.get(norm(div.category_name)) || []
-        const excelTotal = divRows.reduce((s, r) => s + r.target_amount, 0)
-        const isOpen = openDiv.has(div.category_id)
         const subbrands = subbrandsByDivision.get(div.category_id) || []
-        const divValues: BaselineValues = { ficom_dash: div.target, excel: excelTotal }
+        const divExcelTotal = divisionExcelTotal.get(div.category_id) || 0
+        const isOpen = openDiv.has(div.category_id)
+        const divValues: BaselineValues = { ficom_dash: div.target, excel: divExcelTotal }
         return (
           <div key={div.category_id} style={{ borderBottom: "1px solid var(--border)" }}>
             <div onClick={() => toggleDiv(div.category_id)}
@@ -1060,15 +1113,14 @@ function PcodeCategoryTree({
                 <span style={{ fontWeight: 400, fontSize: "11px", color: "var(--text3)" }}>({subbrands.length} subbrand)</span>
               </div>
               <div style={{ textAlign: "right" }}><ValueCell value={div.target} colKey="ficom_dash" baseline={baseline} values={divValues} /></div>
-              <div style={{ textAlign: "right" }}><ValueCell value={excelTotal} colKey="excel" baseline={baseline} values={divValues} /></div>
+              <div style={{ textAlign: "right" }}><ValueCell value={divExcelTotal} colKey="excel" baseline={baseline} values={divValues} /></div>
               <div style={{ textAlign: "right", fontSize: "11px", color: "var(--text3)" }}>—</div>
             </div>
 
             {isOpen && subbrands.map(sb => {
-              const sbRows = divRows.filter(r => norm(r.skugroup) === norm(sb.category_name))
-              const sbExcelTotal = sbRows.reduce((s, r) => s + r.target_amount, 0)
+              const products = productsBySubbrand.get(sb.category_id) || []
+              const sbExcelTotal = subbrandExcelTotal.get(sb.category_id) || 0
               const subOpen = openSub.has(sb.category_id)
-              const skuRows = aggregate(sbRows, r => r.sku_code, r => `${r.sku_code} · ${r.sku_description}`)
               const sbValues: BaselineValues = { ficom_dash: sb.target, excel: sbExcelTotal }
               return (
                 <div key={sb.category_id}>
@@ -1076,20 +1128,41 @@ function PcodeCategoryTree({
                     style={{ display: "grid", gridTemplateColumns: gridCols, alignItems: "center", padding: "9px 12px", cursor: "pointer", borderTop: "1px solid var(--border)" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", paddingLeft: "20px" }}>
                       {subOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />} {sb.category_name}
-                      <span style={{ fontSize: "11px", color: "var(--text3)" }}>({skuRows.length} SKU)</span>
+                      <span style={{ fontSize: "11px", color: "var(--text3)" }}>({products.length} produk)</span>
                     </div>
                     <div style={{ textAlign: "right" }}><ValueCell value={sb.target} colKey="ficom_dash" baseline={baseline} values={sbValues} /></div>
                     <div style={{ textAlign: "right" }}><ValueCell value={sbExcelTotal} colKey="excel" baseline={baseline} values={sbValues} /></div>
                     <div style={{ textAlign: "right", fontSize: "11px", color: "var(--text3)" }}>—</div>
                   </div>
-                  {subOpen && (
-                    <div style={{ padding: "8px 12px 12px 40px" }}>
-                      <RollupTable data={skuRows} subLabel="SKU" baseline={baseline}
-                        categoryLookup={row => globalProductMap.get(normalizeProductName(nameFromLabel(row.label)))}
-                        categoryNote="Nama SKU tidak ketemu padanan di Ficom manapun — dicocokkan lewat nama produk (bukan PCODE, field pcode Ficom selalu kosong), belum tentu sama persis penulisannya"
-                        ediLookup={ediLookup} ediNote={ediNote} />
-                    </div>
-                  )}
+                  {subOpen && (() => {
+                    // Baris tabel = PRODUK FICOM (bukan lagi baris Excel) —
+                    // Excel dicocokkan per produk lewat nama, row.key dipakai
+                    // SKU_CODE Excel kalau match (biar ediLookup, yang key-nya
+                    // SKU_CODE, tetap jalan), fallback id Ficom kalau tidak
+                    // ada padanan Excel sama sekali.
+                    const productRows: RollupRow[] = []
+                    const productAggByKey = new Map<string, FicomAgg>()
+                    for (const p of products) {
+                      const match = excelBySkuName.get(normalizeProductName(p.category_name))
+                      const rowKey = match ? match.key : `ficom-${p.category_id}`
+                      productRows.push({
+                        key: rowKey,
+                        label: match ? match.label : p.category_name,
+                        targetAmount: match?.targetAmount || 0,
+                        targetCases: match?.targetCases || 0,
+                        count: 1,
+                        adpCodes: match ? match.adpCodes : new Set(),
+                      })
+                      productAggByKey.set(rowKey, { target: p.target, actual: p.omset })
+                    }
+                    return (
+                      <div style={{ padding: "8px 12px 12px 40px" }}>
+                        <RollupTable data={productRows} subLabel="SKU" baseline={baseline}
+                          categoryLookup={row => productAggByKey.get(row.key)}
+                          ediLookup={ediLookup} ediNote={ediNote} />
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}
@@ -1097,27 +1170,24 @@ function PcodeCategoryTree({
         )
       })}
 
-      {byDivision.unmatched.length > 0 && (() => {
-        const excelTotal = byDivision.unmatched.reduce((s, r) => s + r.target_amount, 0)
+      {unmatchedExcelSkus.length > 0 && (() => {
+        const excelTotal = unmatchedExcelSkus.reduce((s, r) => s + r.targetAmount, 0)
         const isOpen = openDiv.has("__unmatched__")
-        const skuRows = aggregate(byDivision.unmatched, r => r.sku_code, r => `${r.sku_code} · ${r.sku_description}`, r => r.division || r.skugroup)
         return (
           <div>
             <div onClick={() => toggleDiv("__unmatched__")}
               style={{ display: "grid", gridTemplateColumns: gridCols, alignItems: "center", padding: "10px 12px", cursor: "pointer", background: "var(--surface2)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: 800, fontSize: "12px" }}>
-                {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} Lainnya (tidak match Divisi Ficom)
+                {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />} SKU Excel tidak ketemu padanan Produk Ficom
+                <span style={{ fontWeight: 400, fontSize: "11px", color: "var(--text3)" }}>({unmatchedExcelSkus.length} SKU)</span>
               </div>
-              <div style={{ textAlign: "right", fontSize: "11px", color: "var(--text3)" }} title="Divisi di Excel tidak ketemu padanan nama di Ficom">—</div>
+              <div style={{ textAlign: "right", fontSize: "11px", color: "var(--text3)" }} title="Nama produk di Excel tidak ketemu padanan di Produk Ficom manapun (bisa beda ejaan, atau memang belum terdaftar di Ficom)">—</div>
               <div style={{ textAlign: "right", fontFamily: "monospace", fontWeight: 700 }}>{fmt(excelTotal)}</div>
               <div style={{ textAlign: "right", fontSize: "11px", color: "var(--text3)" }}>—</div>
             </div>
             {isOpen && (
               <div style={{ padding: "8px 12px 12px 20px" }}>
-                <RollupTable data={skuRows} subLabel="Divisi/SKU Group" baseline={baseline}
-                  categoryLookup={row => globalProductMap.get(normalizeProductName(nameFromLabel(row.label)))}
-                  categoryNote="Nama SKU tidak ketemu padanan di Ficom manapun — dicocokkan lewat nama produk, belum tentu sama persis penulisannya"
-                  ediLookup={ediLookup} ediNote={ediNote} />
+                <RollupTable data={unmatchedExcelSkus} subLabel="SKU" baseline={baseline} ediLookup={ediLookup} ediNote={ediNote} />
               </div>
             )}
           </div>
@@ -1373,7 +1443,7 @@ export default function TargetComparePage() {
   const [loadPeriodInput, setLoadPeriodInput] = useState("")
   const [loadingPeriod, setLoadingPeriod] = useState(false)
 
-  const [activeLevel, setActiveLevel] = useState<"hierarchy" | "rdm" | "admads" | "adp" | "salesman" | "pcode" | "excel-raw" | "edi-raw">("hierarchy")
+  const [activeLevel, setActiveLevel] = useState<"hierarchy" | "rdm" | "admads" | "adp" | "salesman" | "pcode">("hierarchy")
   // Patokan compare bisa dipilih user — default "excel" (perilaku lama).
   // Kalau sumber yang dipilih tidak tersedia di suatu baris/tab (mis. pilih
   // Ficom Main tapi lagi di tab Pcode yang cuma ada Dashboard Category),
@@ -1394,8 +1464,6 @@ export default function TargetComparePage() {
   const [ediDone, setEdiDone] = useState(false)
   const [ediUploadOpen, setEdiUploadOpen] = useState(false)
   const [ediRows, setEdiRows] = useState<ExcelRow[]>([])
-
-  const [ediPreviewSearch, setEdiPreviewSearch] = useState("")
 
   const addEdiLog = (m: string) => setEdiProgress(p => [...p, m])
 
@@ -1891,8 +1959,6 @@ export default function TargetComparePage() {
                 ["adp", "ADP"],
                 ["salesman", "Salesman"],
                 ["pcode", "Pcode (SKU)"],
-                ["excel-raw", "Data Excel"],
-                ["edi-raw", "Data EDI"],
               ] as const).map(([key, label]) => (
                 <button key={key} onClick={() => setActiveLevel(key)}
                   style={{ padding: "6px 16px", borderRadius: "6px", border: "none", cursor: "pointer", fontSize: "12px", fontWeight: 700, fontFamily: "inherit", background: activeLevel === key ? "white" : "transparent", color: activeLevel === key ? "var(--text)" : "var(--text3)", boxShadow: activeLevel === key ? "0 1px 3px rgba(0,0,0,0.1)" : "none" }}>
@@ -1922,11 +1988,6 @@ export default function TargetComparePage() {
               ? <PcodeCategoryTree rows={rows} divisionNodes={divisionNodes} subbrandsByDivision={subbrandsByDivision} productsBySubbrand={productsBySubbrand} baseline={baseline} ediLookup={ediLookupFor(ediLevels?.pcode)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />
               : <RollupTable data={levels.pcode} subLabel="SKU Group" baseline={baseline} ficomNote="Belum sync data produk dari Ficom — klik &quot;Sync dari Ficom&quot; di atas" ediLookup={ediLookupFor(ediLevels?.pcode)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />
           )}
-          {/* Data mentah Excel/EDI — TIDAK perlu "Sync dari Ficom", sudah
-              otomatis tersimpan sejak upload pertama, jadi ditampilkan
-              langsung dari state rows/ediRows yang sudah ada di memory. */}
-          {activeLevel === "excel-raw" && <RawDataTable rows={rows} emptyHint="Belum ada data Excel Target PHI — upload dulu di &quot;Kelola Sumber Data&quot;" />}
-          {activeLevel === "edi-raw"   && <RawDataTable rows={ediRows} emptyHint="Belum ada data Matrix Target PHI (EDI) — upload dulu di &quot;Kelola Sumber Data&quot;" />}
         </div>
       )}
 
@@ -1985,33 +2046,113 @@ export default function TargetComparePage() {
           )}
         </div>
 
-        {/* Upload button */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <button onClick={() => setUploadOpen(true)}
-            style={{ display: "flex", alignItems: "center", gap: "8px", padding: "10px 20px", borderRadius: "9px", border: "none", background: "#0369A1", color: "white", fontSize: "13px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-            <Upload size={14} /> Upload Excel Target
-          </button>
+        {/* ═══ EXCEL TARGET PHI — upload + preview tabel data tersimpan ═══ */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 18px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
+            <div>
+              <div style={{ fontSize: "13px", fontWeight: 800, marginBottom: "2px" }}>📊 Excel Target PHI{activePeriod ? ` — periode ${activePeriod}` : ""}</div>
+              <div style={{ fontSize: "11px", color: "var(--text3)" }}>
+                Target asli tim PHI, sumber utama compare.
+                {rows.length > 0 && <span style={{ color: "#166534", fontWeight: 700 }}> · {rows.length.toLocaleString("id-ID")} baris tersimpan</span>}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <button onClick={() => setUploadOpen(true)}
+                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "none", background: "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                <Upload size={13} /> Upload Excel Target
+              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "5px 10px" }}>
+                <span style={{ fontSize: "11px", color: "var(--text3)" }}>Lihat periode:</span>
+                <input type="month" value={loadPeriodInput} onChange={e => setLoadPeriodInput(e.target.value)}
+                  style={{ border: "none", outline: "none", background: "transparent", fontSize: "12px", color: "var(--text)", fontFamily: "inherit" }} />
+                <button onClick={handleLoadPeriod} disabled={loadingPeriod || !loadPeriodInput}
+                  style={{ padding: "5px 12px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", fontSize: "11px", fontWeight: 700, cursor: loadingPeriod ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: loadingPeriod || !loadPeriodInput ? 0.6 : 1 }}>
+                  {loadingPeriod ? "..." : "Muat"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {file && (
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "10px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 12px", width: "fit-content" }}>
               <FileSpreadsheet size={14} color="#0369A1" />
               <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", maxWidth: "260px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>
               <button onClick={reset} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", padding: "0 0 0 4px", fontSize: "16px", lineHeight: 1 }}>×</button>
             </div>
           )}
 
-          {/* Load existing period */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "5px 10px", marginLeft: "auto" }}>
-            <span style={{ fontSize: "11px", color: "var(--text3)" }}>Lihat periode:</span>
-            <input type="month" value={loadPeriodInput} onChange={e => setLoadPeriodInput(e.target.value)}
-              style={{ border: "none", outline: "none", background: "transparent", fontSize: "12px", color: "var(--text)", fontFamily: "inherit" }} />
-            <button onClick={handleLoadPeriod} disabled={loadingPeriod || !loadPeriodInput}
-              style={{ padding: "5px 12px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", fontSize: "11px", fontWeight: 700, cursor: loadingPeriod ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: loadingPeriod || !loadPeriodInput ? 0.6 : 1 }}>
-              {loadingPeriod ? "..." : "Muat"}
-            </button>
-          </div>
+          {parsing && (
+            <div style={{ marginTop: "10px", display: "flex", alignItems: "center", gap: "10px", fontSize: "12px" }}>
+              <RefreshCw size={14} color="var(--accent)" style={{ animation: "spin 1s linear infinite" }} /> Memproses Excel...
+            </div>
+          )}
+
+          {error && (
+            <div style={{ marginTop: "10px", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: "8px", padding: "8px 12px", fontSize: "11px", color: "#991B1B" }}>{error}</div>
+          )}
+
+          {/* Preview + confirm upload */}
+          {parsedRows && !done && (
+            <div style={{ marginTop: "12px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "12px", padding: "18px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "14px", flexWrap: "wrap" }}>
+                <div style={{ fontSize: "14px", fontWeight: 800 }}>📊 Preview: {parsedRows.length.toLocaleString("id-ID")} baris</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "5px 10px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>Periode:</span>
+                  <input type="month" value={periodMonth} onChange={e => setPeriodMonth(e.target.value)}
+                    style={{ border: "none", outline: "none", background: "transparent", fontSize: "12px", fontWeight: 700, color: "#0369A1", fontFamily: "inherit" }} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px" }}>
+                {[
+                  { l: "Total Target Amount", v: fmt(parsedRows.reduce((s, r) => s + r.target_amount, 0)) },
+                  { l: "Distinct ADP", v: new Set(parsedRows.map(r => r.adp_code)).size },
+                  { l: "Distinct Salesman", v: new Set(parsedRows.map(r => r.salesman_code)).size },
+                  { l: "Distinct SKU", v: new Set(parsedRows.map(r => r.sku_code)).size },
+                ].map(s => (
+                  <div key={s.l} style={{ background: "var(--surface)", borderRadius: "10px", padding: "10px 14px", flex: 1, minWidth: "140px" }}>
+                    <div style={{ fontSize: "10px", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase" }}>{s.l}</div>
+                    <div style={{ fontSize: "18px", fontWeight: 900, color: "var(--text)" }}>{s.v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button onClick={handleUpload} disabled={uploading}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 22px", borderRadius: "9px", border: "none", background: uploading ? "#94A3B8" : "#166534", color: "white", fontSize: "13px", fontWeight: 700, cursor: uploading ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+                  {uploading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={14} /> Upload ke Supabase</>}
+                </button>
+                <button onClick={reset} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 16px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "13px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  <Trash2 size={14} /> Reset
+                </button>
+              </div>
+            </div>
+          )}
+
+          {progress.length > 0 && (
+            <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "5px" }}>
+              {progress.slice(-5).map((p, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: p.startsWith("✅") || p.startsWith("🎉") ? "#166534" : "var(--text2)" }}>
+                  {p.startsWith("✅") || p.startsWith("🎉") ? <CheckCircle size={12} color="#166534" /> : <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} />}{p}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {done && (
+            <div style={{ marginTop: "10px", background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: "12px", padding: "16px 20px", display: "flex", alignItems: "center", gap: "12px" }}>
+              <CheckCircle size={22} color="#166534" />
+              <div style={{ fontWeight: 800, fontSize: "14px", color: "#166534" }}>Upload berhasil! Data periode {periodMonth} siap dibandingkan di atas.</div>
+            </div>
+          )}
+
+          {/* Preview tabel data Excel yang sudah tersimpan */}
+          {rows.length > 0 && (
+            <div style={{ marginTop: "14px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
+              <RawDataTable rows={rows} emptyHint="Belum ada data Excel Target PHI" />
+            </div>
+          )}
         </div>
 
-        {/* Upload Modal */}
+        {/* Upload Modal Excel */}
         {uploadOpen && (
           <div onClick={e => { if (e.target === e.currentTarget) setUploadOpen(false) }}
             style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(3px)" }}>
@@ -2035,80 +2176,12 @@ export default function TargetComparePage() {
           </div>
         )}
 
-        {parsing && (
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "14px 16px", display: "flex", alignItems: "center", gap: "12px" }}>
-            <RefreshCw size={16} color="var(--accent)" style={{ animation: "spin 1s linear infinite" }} />
-            <div style={{ fontSize: "13px", fontWeight: 600 }}>Memproses Excel...</div>
-          </div>
-        )}
-
-        {error && (
-          <div style={{ background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: "9px", padding: "10px 14px", fontSize: "12px", color: "#991B1B", display: "flex", gap: "8px" }}>
-            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: "1px" }} />{error}
-          </div>
-        )}
-
-        {/* Preview + confirm upload */}
-        {parsedRows && !done && (
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "18px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "14px", flexWrap: "wrap" }}>
-              <div style={{ fontSize: "14px", fontWeight: 800 }}>📊 Preview: {parsedRows.length.toLocaleString("id-ID")} baris</div>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "5px 10px" }}>
-                <span style={{ fontSize: "11px", color: "var(--text3)" }}>Periode:</span>
-                <input type="month" value={periodMonth} onChange={e => setPeriodMonth(e.target.value)}
-                  style={{ border: "none", outline: "none", background: "transparent", fontSize: "12px", fontWeight: 700, color: "#0369A1", fontFamily: "inherit" }} />
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginBottom: "16px" }}>
-              {[
-                { l: "Total Target Amount", v: fmt(parsedRows.reduce((s, r) => s + r.target_amount, 0)) },
-                { l: "Distinct ADP", v: new Set(parsedRows.map(r => r.adp_code)).size },
-                { l: "Distinct Salesman", v: new Set(parsedRows.map(r => r.salesman_code)).size },
-                { l: "Distinct SKU", v: new Set(parsedRows.map(r => r.sku_code)).size },
-              ].map(s => (
-                <div key={s.l} style={{ background: "var(--surface2)", borderRadius: "10px", padding: "10px 14px", flex: 1, minWidth: "140px" }}>
-                  <div style={{ fontSize: "10px", color: "var(--text3)", fontWeight: 700, textTransform: "uppercase" }}>{s.l}</div>
-                  <div style={{ fontSize: "18px", fontWeight: 900, color: "var(--text)" }}>{s.v}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button onClick={handleUpload} disabled={uploading}
-                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 22px", borderRadius: "9px", border: "none", background: uploading ? "#94A3B8" : "#166534", color: "white", fontSize: "13px", fontWeight: 700, cursor: uploading ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-                {uploading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Uploading...</> : <><Upload size={14} /> Upload ke Supabase</>}
-              </button>
-              <button onClick={reset} style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 16px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", fontSize: "13px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                <Trash2 size={14} /> Reset
-              </button>
-            </div>
-          </div>
-        )}
-
-        {progress.length > 0 && (
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "14px 16px" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-              {progress.slice(-5).map((p, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: p.startsWith("✅") || p.startsWith("🎉") ? "#166534" : "var(--text2)" }}>
-                  {p.startsWith("✅") || p.startsWith("🎉") ? <CheckCircle size={12} color="#166534" /> : <RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} />}{p}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {done && (
-          <div style={{ background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: "12px", padding: "16px 20px", display: "flex", alignItems: "center", gap: "12px" }}>
-            <CheckCircle size={22} color="#166534" />
-            <div style={{ fontWeight: 800, fontSize: "14px", color: "#166534" }}>Upload berhasil! Data periode {periodMonth} siap dibandingkan di atas.</div>
-          </div>
-        )}
-
-        {/* ── EDI Matrix upload ── */}
+        {/* ═══ DATA EDI (MATRIX) — upload + preview tabel data tersimpan ═══ */}
         {activePeriod && (
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 18px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "10px" }}>
               <div>
-                <div style={{ fontSize: "13px", fontWeight: 800, marginBottom: "2px" }}>📥 Upload EDI Target (Matrix) — periode {activePeriod}</div>
+                <div style={{ fontSize: "13px", fontWeight: 800, marginBottom: "2px" }}>📥 Data EDI (Matrix) — periode {activePeriod}</div>
                 <div style={{ fontSize: "11px", color: "var(--text3)" }}>
                   Sheet <strong>COMBINE</strong> dari export EDI. Key-nya sama persis dengan Excel, jadi exact-match sampai level Pcode.
                   {ediRows.length > 0 && <span style={{ color: "#166534", fontWeight: 700 }}> · {ediRows.length.toLocaleString("id-ID")} baris EDI tersimpan</span>}
@@ -2154,88 +2227,36 @@ export default function TargetComparePage() {
               <div style={{ marginTop: "10px", fontSize: "12px", fontWeight: 700, color: "#166534" }}>✅ EDI tersimpan otomatis — kolom &quot;Matrix Target PHI&quot; di tabel atas sudah aktif.</div>
             )}
 
-            {/* Preview data EDI mentah yang sudah tersimpan, dengan search */}
+            {/* Preview tabel data EDI yang sudah tersimpan */}
             {ediRows.length > 0 && (
               <div style={{ marginTop: "14px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "7px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 11px", flex: 1, maxWidth: "320px" }}>
-                    <Search size={13} color="var(--text3)" />
-                    <input value={ediPreviewSearch} onChange={e => setEdiPreviewSearch(e.target.value)} placeholder="Cari ADP/Salesman/SKU..."
-                      style={{ background: "none", border: "none", outline: "none", fontSize: "12px", color: "var(--text)", width: "100%", fontFamily: "inherit" }} />
-                  </div>
-                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>{ediRows.length.toLocaleString("id-ID")} baris tersimpan</span>
-                </div>
-                {(() => {
-                  const q = ediPreviewSearch.trim().toLowerCase()
-                  const matches = !q ? [] : ediRows.filter(r =>
-                    r.adp_code.toLowerCase().includes(q) || r.depot.toLowerCase().includes(q) ||
-                    r.salesman_code.toLowerCase().includes(q) || r.salesman_name.toLowerCase().includes(q) ||
-                    r.sku_code.toLowerCase().includes(q) || r.sku_description.toLowerCase().includes(q)
-                  )
-                  const shown = matches.slice(0, 200)
-                  return (
-                    <div style={{ background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "10px", overflow: "auto", maxHeight: "320px" }}>
-                      {!q ? (
-                        <div style={{ padding: "20px", textAlign: "center", fontSize: "12px", color: "var(--text3)" }}>Ketik buat cari baris EDI (ADP, Salesman, atau SKU)</div>
-                      ) : (
-                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px" }}>
-                          <thead style={{ position: "sticky", top: 0, background: "var(--surface2)" }}>
-                            <tr>
-                              {["ADP", "Depot", "Salesman", "SKU", "Target Amount", "Target Cases"].map((h, i) => (
-                                <th key={h} style={{ padding: "7px 10px", fontWeight: 700, color: "var(--text3)", textAlign: i >= 4 ? "right" : "left", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {shown.map((r, i) => (
-                              <tr key={`${r.adp_code}-${r.salesman_code}-${r.sku_code}-${i}`} style={{ borderBottom: "1px solid var(--border)" }}>
-                                <td style={{ padding: "6px 10px" }}>{r.adp_code}</td>
-                                <td style={{ padding: "6px 10px" }}>{r.depot}</td>
-                                <td style={{ padding: "6px 10px" }}>{r.salesman_code} · {r.salesman_name}</td>
-                                <td style={{ padding: "6px 10px" }}>{r.sku_code} · {r.sku_description}</td>
-                                <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "monospace" }}>{fmt(r.target_amount)}</td>
-                                <td style={{ padding: "6px 10px", textAlign: "right", fontFamily: "monospace" }}>{fmt(r.target_cases)}</td>
-                              </tr>
-                            ))}
-                            {matches.length === 0 && (
-                              <tr><td colSpan={6} style={{ padding: "20px", textAlign: "center", color: "var(--text3)" }}>Tidak ada baris yang cocok</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      )}
-                      {matches.length > shown.length && (
-                        <div style={{ padding: "8px 10px", fontSize: "11px", color: "var(--text3)", textAlign: "center", borderTop: "1px solid var(--border)" }}>
-                          Menampilkan {shown.length} dari {matches.length.toLocaleString("id-ID")} baris cocok — persempit pencarian buat lihat sisanya
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
+                <RawDataTable rows={ediRows} emptyHint="Belum ada data Matrix Target PHI (EDI)" />
               </div>
             )}
+          </div>
+        )}
 
-            {ediUploadOpen && (
-              <div onClick={e => { if (e.target === e.currentTarget) setEdiUploadOpen(false) }}
-                style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(3px)" }}>
-                <div style={{ background: "var(--surface)", borderRadius: "16px", padding: "28px", width: "440px", maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "18px" }}>
-                    <div>
-                      <div style={{ fontSize: "17px", fontWeight: 800 }}>Upload EDI Target</div>
-                      <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>File dengan sheet &quot;COMBINE&quot; (DIST_CODE, SLSNO, PCODE, TRGRP1, ...)</div>
-                    </div>
-                    <button onClick={() => setEdiUploadOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: "22px", lineHeight: 1, padding: "0 4px" }}>×</button>
-                  </div>
-                  <input ref={ediFileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) { setEdiFile(f); handleEdiFile(f); setEdiUploadOpen(false) }; e.target.value = "" }} />
-                  <div onClick={() => ediFileRef.current?.click()}
-                    style={{ border: "2px dashed var(--border)", borderRadius: "12px", padding: "36px 20px", textAlign: "center", cursor: "pointer", background: "var(--surface2)" }}>
-                    <Upload size={32} color="#7C3AED" style={{ margin: "0 auto 12px" }} />
-                    <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>Klik untuk pilih file</div>
-                    <div style={{ fontSize: "11px", color: "var(--text3)" }}>EDI_Target_Salesman.xlsx</div>
-                  </div>
+        {/* Upload Modal EDI */}
+        {ediUploadOpen && (
+          <div onClick={e => { if (e.target === e.currentTarget) setEdiUploadOpen(false) }}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(3px)" }}>
+            <div style={{ background: "var(--surface)", borderRadius: "16px", padding: "28px", width: "440px", maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", border: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "18px" }}>
+                <div>
+                  <div style={{ fontSize: "17px", fontWeight: 800 }}>Upload EDI Target</div>
+                  <div style={{ fontSize: "12px", color: "var(--text3)", marginTop: "2px" }}>File dengan sheet &quot;COMBINE&quot; (DIST_CODE, SLSNO, PCODE, TRGRP1, ...)</div>
                 </div>
+                <button onClick={() => setEdiUploadOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: "22px", lineHeight: 1, padding: "0 4px" }}>×</button>
               </div>
-            )}
+              <input ref={ediFileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) { setEdiFile(f); handleEdiFile(f); setEdiUploadOpen(false) }; e.target.value = "" }} />
+              <div onClick={() => ediFileRef.current?.click()}
+                style={{ border: "2px dashed var(--border)", borderRadius: "12px", padding: "36px 20px", textAlign: "center", cursor: "pointer", background: "var(--surface2)" }}>
+                <Upload size={32} color="#7C3AED" style={{ margin: "0 auto 12px" }} />
+                <div style={{ fontSize: "13px", fontWeight: 700, marginBottom: "4px" }}>Klik untuk pilih file</div>
+                <div style={{ fontSize: "11px", color: "var(--text3)" }}>EDI_Target_Salesman.xlsx</div>
+              </div>
+            </div>
           </div>
         )}
       </div>

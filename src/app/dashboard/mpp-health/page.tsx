@@ -59,6 +59,9 @@ export default function MPPHealthPage() {
   const [showPassMap, setShowPassMap] = useState<Record<string,boolean>>({})
   const [expandedRDM, setExpandedRDM] = useState<Set<string>>(new Set())
   const [search, setSearch]         = useState("")
+  const [syncing, setSyncing]       = useState(false)
+  const [syncMsg, setSyncMsg]       = useState("")
+  const [loadError, setLoadError]   = useState("")
 
   useEffect(() => {
     loadData()
@@ -68,14 +71,31 @@ export default function MPPHealthPage() {
 
   async function loadData() {
     setLoading(true)
-    const [{ data: h }, { data: snap }, { data: det }, { data: master }, { data: ficom }, { data: hist }] = await Promise.all([
-      supabase.from("m_dashboard_health").select("*").order("id",{ascending:false}).limit(1).single(),
-      supabase.from("mpp_alert_snapshot").select("*").order("id",{ascending:false}).limit(1).single(),
-      supabase.from("mpp_alert_detail").select("rdm_name,adm_name,ads_name,salesman_name,last_date").order("snapshot_time",{ascending:false}).limit(500),
-      supabase.from("master_data_adp").select("adp_code,depot,distributor_name,server,server_name,area_name,adm_name,ads_name"),
-      supabase.from("ficom_passwords").select("user_login,sales_name,password,position"),
-      supabase.from("m_dashboard_health").select("snapshot_time,subdist_issue").order("id",{ascending:false}).limit(200),
-    ])
+    setLoadError("")
+    // try/catch: kalau ada kegagalan JARINGAN (bukan cuma "0 baris" —
+    // itu ditangani wajar oleh maybeSingle di bawah, resolve null tanpa
+    // reject), Promise.all bisa reject dan bikin setLoading(false) di
+    // bawah tidak kepanggil, halaman stuck loading selamanya.
+    // .single()->.maybeSingle(): tabel BISA genuinely kosong sekarang
+    // (percobaan pertama sebelum sync API pertama jalan, sebelum ini
+    // n8n yang selalu isi duluan) — .single() nganggep 0 baris sbg error
+    // (walau tidak throw, cuma bikin field error keisi & data null,
+    // padahal itu bukan error beneran di kondisi awal).
+    let h, snap, det, master, ficom, hist
+    try {
+      ;({ data: h } = await supabase.from("m_dashboard_health").select("*").order("id",{ascending:false}).limit(1).maybeSingle())
+      ;({ data: snap } = await supabase.from("mpp_alert_snapshot").select("*").order("id",{ascending:false}).limit(1).maybeSingle())
+      ;[{ data: det }, { data: master }, { data: ficom }, { data: hist }] = await Promise.all([
+        supabase.from("mpp_alert_detail").select("rdm_name,adm_name,ads_name,salesman_name,last_date").order("snapshot_time",{ascending:false}).limit(500),
+        supabase.from("master_data_adp").select("adp_code,depot,distributor_name,server,server_name,area_name,adm_name,ads_name"),
+        supabase.from("ficom_passwords").select("user_login,sales_name,password,position").in("position",["ADM","ADS"]),
+        supabase.from("m_dashboard_health").select("snapshot_time,subdist_issue").order("id",{ascending:false}).limit(200),
+      ])
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "Gagal memuat data")
+      setLoading(false)
+      return
+    }
 
     if (h) {
       setHealth(h)
@@ -149,6 +169,20 @@ export default function MPPHealthPage() {
     setLoading(false)
   }
 
+  async function handleSync() {
+    setSyncing(true); setSyncMsg("")
+    try {
+      const res = await fetch("/api/mpp-health-sync", { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Sync gagal")
+      setSyncMsg(`✅ Sync selesai — ${data.subdistIssue} subdist bermasalah, ${data.totalNotUpdate} salesman tanpa aktivitas`)
+      await loadData()
+    } catch (e) {
+      setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
+    }
+    setSyncing(false)
+  }
+
   const isHealthy   = (health?.subdist_issue||0) === 0
   const statusColor = isHealthy ? "#16A34A" : "#DC2626"
   const fmtTime = (s:string) => s ? new Date(s).toLocaleString("id-ID",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}) : "—"
@@ -188,18 +222,34 @@ export default function MPPHealthPage() {
                   <span style={{fontSize:10,fontWeight:700,color:statusColor}}>{isHealthy?"HEALTHY":"WARNING"}</span>
                 </div>
               </div>
-              <p style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Last update: {fmtTime(health?.snapshot_time||"")} · Auto-refresh 5 menit</p>
+              <p style={{fontSize:11,color:"rgba(255,255,255,0.5)"}}>Last update: {fmtTime(health?.snapshot_time||"")} · Auto-sync tiap jam (Vercel Cron) · Auto-refresh tampilan 5 menit</p>
             </div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {!isHealthy&&<div style={{padding:"6px 12px",borderRadius:8,background:"rgba(239,68,68,0.2)",border:"1px solid rgba(239,68,68,0.4)",fontSize:11,fontWeight:700,color:"#FCA5A5"}}>🚨 {health?.subdist_issue} Subdist Issue</div>}
             <div style={{padding:"6px 12px",borderRadius:8,background:"rgba(251,146,60,0.2)",border:"1px solid rgba(251,146,60,0.4)",fontSize:11,fontWeight:700,color:"#FED7AA"}}>📵 {alertSnap?.total_not_update||0} Tanpa Aktivitas</div>
+            <button onClick={handleSync} disabled={syncing}
+              title="Login Ficom & hitung ulang MPP Health langsung dari API (ganti n8n)"
+              style={{padding:"6px 12px",borderRadius:8,border:"1px solid rgba(255,255,255,0.25)",background:syncing?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.18)",cursor:syncing?"not-allowed":"pointer",fontSize:11,fontWeight:700,color:"white",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5}}>
+              <span style={{animation:syncing?"spin 0.8s linear infinite":"none",display:"inline-block"}}>⚡</span> {syncing?"Sync...":"Sync dari Ficom"}
+            </button>
             <button onClick={loadData} disabled={loading} style={{padding:"6px 12px",borderRadius:8,border:"1px solid rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.1)",cursor:"pointer",fontSize:11,color:"white",fontFamily:"inherit",display:"flex",alignItems:"center",gap:5}}>
               <span style={{animation:loading?"spin 0.8s linear infinite":"none",display:"inline-block"}}>↻</span> Refresh
             </button>
           </div>
         </div>
       </div>
+
+      {syncMsg && (
+        <div style={{background:syncMsg.startsWith("✅")?"#DCFCE7":"#FEE2E2",border:`1px solid ${syncMsg.startsWith("✅")?"#BBF7D0":"#FECACA"}`,borderRadius:8,padding:"10px 14px",fontSize:12,color:syncMsg.startsWith("✅")?"#166534":"#991B1B"}}>
+          {syncMsg}
+        </div>
+      )}
+      {loadError && (
+        <div style={{background:"#FEE2E2",border:"1px solid #FECACA",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#991B1B"}}>
+          ❌ Gagal memuat data: {loadError}
+        </div>
+      )}
 
       {/* KPI row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
@@ -348,8 +398,14 @@ export default function MPPHealthPage() {
             </div>
           ) : (
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
-              {filteredCards.map((card,i)=>(
-                <div key={i} style={{background:"var(--surface)",border:"1.5px solid var(--border)",borderRadius:12,overflow:"hidden",transition:"box-shadow 0.15s"}}
+              {filteredCards.map((card,i)=>{
+                // wf bisa fallback "—" (belum ketemu padanan) buat lebih dari
+                // 1 kartu — kalau cuma pakai card.wf sbg key, state per-kartu
+                // (showPassMap, React key) bisa tabrakan/nyasar antar kartu
+                // yang tidak berhubungan. Gabung sama index biar selalu unik.
+                const cardKey = `${card.wf}-${i}`
+                return (
+                <div key={cardKey} style={{background:"var(--surface)",border:"1.5px solid var(--border)",borderRadius:12,overflow:"hidden",transition:"box-shadow 0.15s"}}
                   onMouseEnter={e=>(e.currentTarget as HTMLElement).style.boxShadow="0 4px 16px rgba(220,38,38,0.12)"}
                   onMouseLeave={e=>(e.currentTarget as HTMLElement).style.boxShadow="none"}>
                   {/* Card header */}
@@ -386,8 +442,8 @@ export default function MPPHealthPage() {
                     {/* Ficom passwords - ADM + ADS */}
                     <div style={{borderTop:"1px solid var(--border)",paddingTop:8,marginTop:2,display:"flex",flexDirection:"column",gap:5}}>
                       {[
-                        {role:"ADM", user:card.ficom_adm_user, pass:card.ficom_adm_pass, pic:card.ficom_adm_pic, key:card.wf+"_adm"},
-                        {role:"ADS", user:card.ficom_ads_user, pass:card.ficom_ads_pass, pic:card.ficom_ads_pic, key:card.wf+"_ads"},
+                        {role:"ADM", user:card.ficom_adm_user, pass:card.ficom_adm_pass, pic:card.ficom_adm_pic, key:cardKey+"_adm"},
+                        {role:"ADS", user:card.ficom_ads_user, pass:card.ficom_ads_pass, pic:card.ficom_ads_pic, key:cardKey+"_ads"},
                       ].map(({role,user,pass,pic,key})=>(
                         <div key={key}>
                           {user ? (
@@ -415,7 +471,7 @@ export default function MPPHealthPage() {
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
               {filteredCards.length===0&&search&&(
                 <p style={{fontSize:12,color:"var(--text3)",gridColumn:"1/-1",textAlign:"center",padding:"20px"}}>Tidak ada hasil untuk "{search}"</p>
               )}

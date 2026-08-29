@@ -34,17 +34,144 @@ interface TreeNode {
   children: TreeNode[]
 }
 
+// ── Validasi silang: dashboard RESMI Ficom Lite ─────────────────
+// Endpoint api/ficom-lite-dashboard/team (BEDA jalur dari EDI2600006 di
+// atas) dipanggil REKURSIF: kasih user-id SD -> balik daftar RDM; kasih
+// user-id RDM -> balik daftar ADM; dst turun terus SAMPAI baris yang
+// dibalikin punya distributorId TERISI (bukan null) — itu tandanya baris
+// itu SALESMAN INDIVIDUAL (leaf), bukan node organisasi lagi, jadi
+// rekursi berhenti TANPA perlu call lagi (data salesman-nya sudah
+// lengkap di respons parent). Makanya walau total ratusan salesman
+// se-nasional, jumlah CALL yang dibutuhkan cuma sebesar jumlah NODE
+// ORGANISASI (SD+RDM+ADM+ADS) — bukan 1 call per salesman.
+// Dipanggil LANGSUNG dari browser (CORS-open, pola sama kayak
+// target-compare) pakai concurrency limiter yang sama — kalau taruh di
+// server (API route) gampang kelamaan / kena timeout serverless karena
+// bisa ratusan call rekursif.
+interface FicomLiteCard {
+  label: string; value: number | null; target: number | null; percent: number | null
+  componentId: string; targetExcluded?: number | null; percentExcluded?: number | null
+}
+interface FicomLiteTeamRow {
+  userId: string; name: string; cards: FicomLiteCard[]
+  distributorId: string | null; salesforceId: string | null; salesforceName: string | null
+}
+interface FicomLiteTeam { daily: FicomLiteTeamRow[]; monthly: FicomLiteTeamRow[] }
+interface FicomLiteValue { target: number; realisasi: number }
+
+const FICOM_LITE_BASE = "https://ficom-phi.mayora.co.id/web/phi"
+const FICOM_LITE_CONCURRENCY = 6
+
+function createLimiter(limit: number) {
+  let active = 0
+  const queue: (() => void)[] = []
+  return function run<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const attempt = () => {
+        active++
+        fn().then(resolve, reject).finally(() => {
+          active--
+          const next = queue.shift()
+          if (next) next()
+        })
+      }
+      if (active < limit) attempt()
+      else queue.push(attempt)
+    })
+  }
+}
+
+async function ficomLiteLogin(username: string, password: string): Promise<string> {
+  const res = await fetch(`${FICOM_LITE_BASE}/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) throw new Error(`Login Ficom gagal (HTTP ${res.status}) — cek akun SD di Master Data → Ficom Password`)
+  const data = await res.json()
+  if (!data?.token) throw new Error("Login Ficom gagal: response tidak ada token")
+  return data.token as string
+}
+
+async function fetchFicomLiteTeamRaw(token: string, userId: string): Promise<FicomLiteTeam> {
+  const res = await fetch(`${FICOM_LITE_BASE}/api/ficom-lite-dashboard/team?user-id=${userId}`, {
+    headers: { Authorization: `F1C0m ${token}` },
+  })
+  if (!res.ok) throw new Error(`GET team gagal (HTTP ${res.status})`)
+  return res.json()
+}
+
+interface FicomLiteCrawlResult {
+  byId: Map<string, Map<string, FicomLiteValue>>    // key: userId
+  byName: Map<string, Map<string, FicomLiteValue>>  // key: nama dinormalisasi (fallback level Salesman, ID-nya kadang beda namespace dari EDI)
+}
+
+// Komponen ber-label "STT" (lihat COMPONENT_LABELS) itu omset/turnover —
+// dikonfirmasi user, angkanya di dashboard Ficom Lite ditulis DALAM
+// RIBUAN (sama kayak detilChange di target-compare: "290.263" artinya
+// "290.263.000"), jadi dikali 1000 di sini biar satuannya sama persis
+// dgn component_target/component_realisasi hasil parse EDI2600006 kita
+// (yang sudah dalam satuan penuh, bukan ribuan). Komponen COUNT (Prod
+// Call, Eff Call, Calls Made, AO, dst) TIDAK dikali — itu jumlah
+// kunjungan/outlet, bukan nilai uang, satuannya sudah pas apa adanya.
+const OMSET_COMPONENTS = new Set(["C1", "C4", "C12", "C17"])
+
+async function crawlFicomLiteTeam(token: string, rootUserId: string, log: (m: string) => void): Promise<FicomLiteCrawlResult> {
+  const byId = new Map<string, Map<string, FicomLiteValue>>()
+  const byName = new Map<string, Map<string, FicomLiteValue>>()
+  const limiter = createLimiter(FICOM_LITE_CONCURRENCY)
+  const seen = new Set<string>()
+  let visited = 0, failed = 0
+
+  async function visit(userId: string) {
+    if (seen.has(userId)) return
+    seen.add(userId)
+    let team: FicomLiteTeam
+    try {
+      team = await limiter(() => fetchFicomLiteTeamRaw(token, userId))
+    } catch (e) {
+      failed++
+      log(`⚠ Gagal ambil node ${userId}: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    visited++
+    if (visited % 5 === 0 || visited <= 3) log(`⏳ ${visited} node organisasi dicek...`)
+    const childIds: string[] = []
+    for (const row of [...team.daily, ...team.monthly]) {
+      let m = byId.get(row.userId)
+      if (!m) { m = new Map(); byId.set(row.userId, m) }
+      const nameKey = row.name.replace(/\s+/g, "").toUpperCase()
+      let mn = byName.get(nameKey)
+      if (!mn) { mn = new Map(); byName.set(nameKey, mn) }
+      for (const c of row.cards) {
+        if (c.value == null || c.target == null) continue
+        const scale = OMSET_COMPONENTS.has(c.componentId) ? 1000 : 1
+        const v = { target: c.target * scale, realisasi: c.value * scale }
+        m.set(c.componentId, v)
+        mn.set(c.componentId, v)
+      }
+      if (row.distributorId == null) childIds.push(row.userId)
+    }
+    await Promise.all(childIds.map(id => visit(id)))
+  }
+
+  await visit(rootUserId)
+  log(`✅ Selesai — ${visited} node organisasi dicek${failed ? `, ${failed} gagal` : ""}`)
+  return { byId, byName }
+}
+
 // ── Mapping TIPE_ID/COMPONENT_ID → VIEW SFA (dari Form Request File Set
 // RBAC MTX PHI) — dipakai buat urutan & label tab. C3 muncul di T1 & T5
 // dengan label sama ("Prod. Call"), jadi tab tetap unik per component_id.
 const COMPONENT_LABELS: Record<string, string> = {
+  C0: "Calls Made",
   C1: "STT", C3: "Prod. Call", C36: "Effective Call",
   C4: "STT", C7: "Prod. Call",
   C12: "STT", C16: "AO",
   C17: "STT",
   C22: "AVG Linesold", C25: "QR Scan", C37: "Effective Call",
 }
-const COMPONENT_ORDER = ["C1", "C3", "C36", "C4", "C7", "C12", "C16", "C17", "C22", "C25", "C37"]
+const COMPONENT_ORDER = ["C0", "C1", "C3", "C36", "C4", "C7", "C12", "C16", "C17", "C22", "C25", "C37"]
 
 const LEVELS: { idField: keyof ProdRow; nameField: keyof ProdRow; label: string }[] = [
   { idField: "nsm_id", nameField: "nsm_nm", label: "SD" },
@@ -121,20 +248,38 @@ async function fetchProductivityRows(periodMonth: string, onProgress?: (m: strin
   return all
 }
 
+const GRID_COLS = "1fr 120px 120px 90px 110px 110px 100px"
+
 // ── TREE ROW (recursive, expand/collapse) ──────────────────────
-function TreeRow({ node, depth, expanded, toggle }: {
+function TreeRow({ node, depth, expanded, toggle, ficomLiteLookup }: {
   node: TreeNode; depth: number
   expanded: Set<string>; toggle: (path: string) => void
+  ficomLiteLookup: (node: TreeNode) => FicomLiteValue | undefined
 }) {
   const path = `${depth}:${node.key}`
   const isOpen = expanded.has(path)
   const pct = node.target ? Math.round(node.realisasi / node.target * 1000) / 10 : (node.realisasi ? 100 : 0)
   const hasChildren = node.children.length > 0
+
+  // Level SD (depth 0) SENGAJA tidak ditampilkan — endpoint "team" cuma
+  // balikin data ANAK (RDM/ADM/dst), bukan baris buat SD itu sendiri, jadi
+  // sempat dicoba jumlah bottom-up dari children. TERNYATA salah utk
+  // metrik count (Prod Call dkk): dikonfirmasi user, target Prod Call SD
+  // di dashboard Ficom asli = 27, BUKAN hasil jumlah 15 target RDM (~400)
+  // — beda dari STT/omset yang memang aditif antar wilayah. Karena tidak
+  // ada cara terverifikasi ambil angka asli SD, drpd nebak & salah lagi,
+  // level SD tampil "—" — cuma level RDM/ADM/ADS/Salesman yang ditampilkan
+  // (itu genuinely angka asli dari Ficom per node, bukan hasil hitungan kita).
+  const ficomLite = depth === 0 ? undefined : ficomLiteLookup(node)
+  const diffPct = ficomLite != null
+    ? (ficomLite.realisasi ? Math.abs(node.realisasi - ficomLite.realisasi) / ficomLite.realisasi * 100 : (node.realisasi ? 100 : 0))
+    : null
+
   return (
     <>
       <div onClick={() => hasChildren && toggle(path)}
         style={{
-          display: "grid", gridTemplateColumns: "1fr 130px 130px 110px", alignItems: "center",
+          display: "grid", gridTemplateColumns: GRID_COLS, alignItems: "center",
           padding: "8px 12px", cursor: hasChildren ? "pointer" : "default",
           borderBottom: "1px solid var(--border)", background: depth === 0 ? "var(--surface2)" : "transparent",
         }}>
@@ -148,9 +293,24 @@ function TreeRow({ node, depth, expanded, toggle }: {
         <div style={{ textAlign: "right" }}>
           <span style={{ fontSize: "10.5px", fontWeight: 800, padding: "2px 8px", borderRadius: "99px", background: achBg(pct), color: achColor(pct) }}>{pct.toFixed(1)}%</span>
         </div>
+        <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: "11.5px", color: "var(--text3)" }}>
+          {ficomLite == null ? "—" : fmt(ficomLite.target)}
+        </div>
+        <div style={{ textAlign: "right", fontFamily: "monospace", fontSize: "11.5px", color: "var(--text2)" }}>
+          {ficomLite == null ? "—" : fmt(ficomLite.realisasi)}
+        </div>
+        <div style={{ textAlign: "right", fontSize: "10.5px" }}>
+          {ficomLite == null ? (
+            <span style={{ color: "var(--text3)" }}>—</span>
+          ) : (
+            <span style={{ fontWeight: 700, color: (diffPct ?? 0) < 1 ? "#166534" : "#C2410C" }}>
+              {(diffPct ?? 0) < 1 ? "✓ cocok" : `⚠ ${(diffPct ?? 0).toFixed(1)}%`}
+            </span>
+          )}
+        </div>
       </div>
       {isOpen && node.children.map(c => (
-        <TreeRow key={`${path}/${c.key}`} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} />
+        <TreeRow key={`${path}/${c.key}`} node={c} depth={depth + 1} expanded={expanded} toggle={toggle} ficomLiteLookup={ficomLiteLookup} />
       ))}
     </>
   )
@@ -167,6 +327,9 @@ export default function ProductivityComparePage() {
   const [search, setSearch] = useState("")
   const [component, setComponent] = useState("")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [ficomLiteResult, setFicomLiteResult] = useState<FicomLiteCrawlResult | null>(null)
+  const [ficomLiteCrawling, setFicomLiteCrawling] = useState(false)
+  const [ficomLiteLog, setFicomLiteLog] = useState<string[]>([])
 
   const defaultPeriod = useMemo(() => {
     const d = new Date()
@@ -219,6 +382,19 @@ export default function ProductivityComparePage() {
   const tree = useMemo(() => componentRows.length ? buildTree(componentRows) : [], [componentRows])
   const filteredTree = useMemo(() => filterTree(tree, search), [tree, search])
 
+  // Lookup Ficom Lite (Target+Realisasi) per node, utk componentId yang
+  // lagi aktif — by ID dulu, fallback by nama dinormalisasi (perlu utk
+  // level Salesman: userId di endpoint team ini kadang beda namespace
+  // dari sls_id EDI2600006, sedangkan RDM/ADM/ADS sejauh ini konsisten
+  // pakai kode "WF####" yang sama).
+  const ficomLiteLookup = useCallback((node: TreeNode): FicomLiteValue | undefined => {
+    if (!ficomLiteResult) return undefined
+    const byId = ficomLiteResult.byId.get(node.key)?.get(component)
+    if (byId) return byId
+    const nameKey = node.name.replace(/\s+/g, "").toUpperCase()
+    return ficomLiteResult.byName.get(nameKey)?.get(component)
+  }, [ficomLiteResult, component])
+
   const summary = useMemo(() => {
     const target = tree.reduce((s, n) => s + n.target, 0)
     const realisasi = tree.reduce((s, n) => s + n.realisasi, 0)
@@ -247,6 +423,35 @@ export default function ProductivityComparePage() {
       setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
     }
     setSyncing(false)
+  }
+
+  // Validasi silang manual (bukan bagian sync EDI2600006 di atas) — crawl
+  // rekursif dashboard resmi Ficom Lite dari browser (lihat crawlFicomLiteTeam),
+  // dipisah tombolnya sendiri karena bisa makan waktu (ratusan node
+  // organisasi) & datanya selalu "live hari ini" (cuma relevan buat
+  // periode bulan berjalan, tidak disimpan ke DB).
+  const handleFicomLiteCrawl = async () => {
+    setFicomLiteCrawling(true); setFicomLiteLog([])
+    const addLog = (m: string) => setFicomLiteLog(l => [...l.slice(-40), m])
+    try {
+      const { data: sdCred, error: credErr } = await supabase
+        .from("ficom_passwords")
+        .select("user_login,password")
+        .eq("position", "SD")
+        .limit(1)
+        .maybeSingle()
+      if (credErr) throw new Error(credErr.message)
+      if (!sdCred?.user_login || !sdCred?.password) {
+        throw new Error('Belum ada akun posisi "SD" di Master Data → Ficom Password')
+      }
+      addLog(`🔐 Login sbg ${sdCred.user_login}...`)
+      const token = await ficomLiteLogin(sdCred.user_login, sdCred.password)
+      const result = await crawlFicomLiteTeam(token, sdCred.user_login, addLog)
+      setFicomLiteResult(result)
+    } catch (e) {
+      addLog(`❌ ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setFicomLiteCrawling(false)
   }
 
   return (
@@ -286,12 +491,25 @@ export default function ProductivityComparePage() {
             <RefreshCw size={13} style={{ animation: loading ? "spin 1s linear infinite" : "none" }} />
             Refresh
           </button>
+
+          <button onClick={handleFicomLiteCrawl} disabled={ficomLiteCrawling}
+            title="Crawl rekursif dashboard resmi Ficom Lite (SD→RDM→ADM→ADS→Salesman) dari browser, buat validasi silang — bisa makan waktu, datanya live hari ini"
+            style={{ display: "flex", alignItems: "center", gap: "6px", padding: "7px 14px", borderRadius: "8px", border: "1px solid var(--border)", background: ficomLiteCrawling ? "#94A3B8" : "var(--surface2)", color: ficomLiteCrawling ? "white" : "var(--text2)", fontSize: "12px", fontWeight: 700, cursor: ficomLiteCrawling ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            <RefreshCw size={13} style={{ animation: ficomLiteCrawling ? "spin 1s linear infinite" : "none" }} />
+            {ficomLiteCrawling ? "Crawl..." : "Validasi Ficom Lite"}
+          </button>
         </div>
       </div>
 
       {syncMsg && (
         <div style={{ background: syncMsg.startsWith("✅") ? "#DCFCE7" : "#FEE2E2", border: `1px solid ${syncMsg.startsWith("✅") ? "#BBF7D0" : "#FECACA"}`, borderRadius: "8px", padding: "10px 14px", fontSize: "12px", color: syncMsg.startsWith("✅") ? "#166534" : "#991B1B" }}>
           {syncMsg}
+        </div>
+      )}
+
+      {(ficomLiteCrawling || ficomLiteLog.length > 0) && (
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", fontSize: "11px", color: "var(--text3)", maxHeight: "120px", overflowY: "auto", fontFamily: "monospace" }}>
+          {ficomLiteLog.map((m, i) => <div key={i}>{m}</div>)}
         </div>
       )}
 
@@ -349,11 +567,14 @@ export default function ProductivityComparePage() {
 
         {/* Hierarchy tree */}
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 130px 110px", padding: "9px 12px", background: "var(--surface2)", fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: GRID_COLS, padding: "9px 12px", background: "var(--surface2)", fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
             <div>SD / RDM / ADM / ADS / Salesman</div>
             <div style={{ textAlign: "right" }}>Target</div>
             <div style={{ textAlign: "right" }}>Realisasi</div>
             <div style={{ textAlign: "right" }}>Ach.</div>
+            <div style={{ textAlign: "right" }}>FL Target</div>
+            <div style={{ textAlign: "right" }}>FL Realisasi</div>
+            <div style={{ textAlign: "right" }}>Selisih</div>
           </div>
           <div style={{ maxHeight: "600px", overflowY: "auto" }}>
             {loading ? (
@@ -364,10 +585,15 @@ export default function ProductivityComparePage() {
             ) : filteredTree.length === 0 ? (
               <div style={{ padding: "24px", textAlign: "center", color: "var(--text3)", fontSize: "12px" }}>Tidak ada data untuk komponen {component}</div>
             ) : filteredTree.map(n => (
-              <TreeRow key={`0:${n.key}`} node={n} depth={0} expanded={expanded} toggle={toggle} />
+              <TreeRow key={`0:${n.key}`} node={n} depth={0} expanded={expanded} toggle={toggle} ficomLiteLookup={ficomLiteLookup} />
             ))}
           </div>
         </div>
+        {ficomLiteResult && (
+          <div style={{ fontSize: "11px", color: "var(--text3)", padding: "0 4px" }}>
+            Kolom &quot;FL Target/Realisasi&quot; = angka asli dari dashboard Ficom Lite (live hari ini) per RDM/ADM/ADS/Salesman — level SD sengaja &quot;—&quot; (Ficom tidak balikin angka SD sendiri lewat endpoint ini, dan hasil jumlah RDM di bawahnya TIDAK selalu sama dengan yang Ficom tampilkan, khususnya utk komponen count). Cuma relevan kalau lihat periode bulan berjalan.
+          </div>
+        )}
       </>)}
 
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
