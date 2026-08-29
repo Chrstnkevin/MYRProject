@@ -12,39 +12,67 @@ import {
 // ─────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────
-const STATUSES = ["OPEN", "OPEN DEV", "OPEN DR", "ON PROGRESS", "REVIEW BR", "PILOT", "DONE", "HOLD", "CANCELLED"] as const
+// Diperluas dari 9 -> 19 nilai — import backlog PHI (111 baris dari Excel
+// "Backlog Project PHI 2") ternyata pakai status jauh lebih beragam dari
+// yang tadinya cuma ada di form manual. Disimpan APA ADANYA (bukan
+// dipetakan paksa ke status lama) supaya makna aslinya tidak hilang/salah
+// kaprah — dikonfirmasi user, lebih aman drpd nebak "OPEN PI"/"OPG DR"/dst
+// itu maksudnya status lama yang mana.
+const STATUSES = [
+  "OPEN", "OPEN BR", "OPEN DEV", "OPEN DR", "OPEN PI", "OPEN PILOT", "OPEN ST",
+  "ON PROGRESS", "OPG DR", "OPG TEST (Status Not OK)", "OPG TEST (Status OK)",
+  "REVIEW BR", "PILOT", "TO BE CONFIRM", "RELEASE", "DONE", "HOLD", "CANCELLED", "CANCEL",
+] as const
 type Status = typeof STATUSES[number]
 
+// Kanban tetap 6 kolom (biar tidak kelewat ramai) — status baru dikelompokkan
+// ke kolom yang paling dekat maknanya. Ini CUMA pengelompokan tampilan
+// Kanban, nilai status aslinya di tabel/database tetap utuh persis (lihat
+// tab Tabel buat nilai literal per item).
 const KANBAN_COLS: { key: Status | "OPEN_ALL"; label: string; color: string; statuses: Status[] }[] = [
-  { key: "OPEN_ALL",    label: "Open",       color: "#6b7280", statuses: ["OPEN","OPEN DEV","OPEN DR"] },
-  { key: "ON PROGRESS", label: "On Progress", color: "#3b82f6", statuses: ["ON PROGRESS"] },
+  { key: "OPEN_ALL",    label: "Open",       color: "#6b7280", statuses: ["OPEN","OPEN BR","OPEN DEV","OPEN DR","OPEN PI","OPEN ST","TO BE CONFIRM"] },
+  { key: "ON PROGRESS", label: "On Progress", color: "#3b82f6", statuses: ["ON PROGRESS","OPG DR","OPG TEST (Status Not OK)","OPG TEST (Status OK)"] },
   { key: "REVIEW BR",   label: "Review BR",  color: "#8b5cf6", statuses: ["REVIEW BR"] },
-  { key: "PILOT",       label: "Pilot",      color: "#f59e0b", statuses: ["PILOT"] },
-  { key: "DONE",        label: "Done",       color: "#10b981", statuses: ["DONE"] },
-  { key: "HOLD",        label: "Hold / Cancelled", color: "#ef4444", statuses: ["HOLD","CANCELLED"] },
+  { key: "PILOT",       label: "Pilot",      color: "#f59e0b", statuses: ["PILOT","OPEN PILOT"] },
+  { key: "DONE",        label: "Done",       color: "#10b981", statuses: ["DONE","RELEASE"] },
+  { key: "HOLD",        label: "Hold / Cancelled", color: "#ef4444", statuses: ["HOLD","CANCELLED","CANCEL"] },
 ]
 
-const TYPES = ["Request","Issue","Concern","Discussion","Decision"] as const
+// Sama halnya, Type diperluas 5 -> 8 dari data real Excel.
+const TYPES = ["Request","Issue","Concern","Discussion","Decision","Findings","Improvement","Procedure"] as const
 type ItemType = typeof TYPES[number]
 
 const TYPE_COLOR: Record<ItemType, { bg: string; text: string }> = {
-  Request:    { bg: "#dbeafe", text: "#1d4ed8" },
-  Issue:      { bg: "#fee2e2", text: "#991b1b" },
-  Concern:    { bg: "#fef3c7", text: "#92400e" },
-  Discussion: { bg: "#f3e8ff", text: "#6b21a8" },
-  Decision:   { bg: "#d1fae5", text: "#065f46" },
+  Request:     { bg: "#dbeafe", text: "#1d4ed8" },
+  Issue:       { bg: "#fee2e2", text: "#991b1b" },
+  Concern:     { bg: "#fef3c7", text: "#92400e" },
+  Discussion:  { bg: "#f3e8ff", text: "#6b21a8" },
+  Decision:    { bg: "#d1fae5", text: "#065f46" },
+  Findings:    { bg: "#e0f2fe", text: "#0369a1" },
+  Improvement: { bg: "#ecfccb", text: "#3f6212" },
+  Procedure:   { bg: "#fae8ff", text: "#86198f" },
 }
 
 const STATUS_COLOR: Record<string, { bg: string; text: string; border: string }> = {
-  "OPEN":        { bg: "#f9fafb", text: "#374151", border: "#d1d5db" },
-  "OPEN DEV":    { bg: "#ede9fe", text: "#5b21b6", border: "#c4b5fd" },
-  "OPEN DR":     { bg: "#fce7f3", text: "#9d174d", border: "#f9a8d4" },
-  "ON PROGRESS": { bg: "#dbeafe", text: "#1d4ed8", border: "#93c5fd" },
-  "REVIEW BR":   { bg: "#f3e8ff", text: "#6d28d9", border: "#c4b5fd" },
-  "PILOT":       { bg: "#fef3c7", text: "#92400e", border: "#fcd34d" },
-  "DONE":        { bg: "#d1fae5", text: "#065f46", border: "#6ee7b7" },
-  "HOLD":        { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" },
-  "CANCELLED":   { bg: "#f3f4f6", text: "#6b7280", border: "#d1d5db" },
+  "OPEN":                       { bg: "#f9fafb", text: "#374151", border: "#d1d5db" },
+  "OPEN BR":                    { bg: "#f5f3ff", text: "#5b21b6", border: "#ddd6fe" },
+  "OPEN DEV":                   { bg: "#ede9fe", text: "#5b21b6", border: "#c4b5fd" },
+  "OPEN DR":                    { bg: "#fce7f3", text: "#9d174d", border: "#f9a8d4" },
+  "OPEN PI":                    { bg: "#f0f9ff", text: "#0c4a6e", border: "#bae6fd" },
+  "OPEN PILOT":                 { bg: "#fffbeb", text: "#92400e", border: "#fde68a" },
+  "OPEN ST":                    { bg: "#f8fafc", text: "#334155", border: "#cbd5e1" },
+  "ON PROGRESS":                { bg: "#dbeafe", text: "#1d4ed8", border: "#93c5fd" },
+  "OPG DR":                     { bg: "#e0e7ff", text: "#3730a3", border: "#c7d2fe" },
+  "OPG TEST (Status Not OK)":   { bg: "#fef2f2", text: "#b91c1c", border: "#fecaca" },
+  "OPG TEST (Status OK)":       { bg: "#eff6ff", text: "#1e40af", border: "#bfdbfe" },
+  "REVIEW BR":                  { bg: "#f3e8ff", text: "#6d28d9", border: "#c4b5fd" },
+  "PILOT":                      { bg: "#fef3c7", text: "#92400e", border: "#fcd34d" },
+  "TO BE CONFIRM":              { bg: "#fdf4ff", text: "#a21caf", border: "#f5d0fe" },
+  "RELEASE":                    { bg: "#ecfdf5", text: "#047857", border: "#a7f3d0" },
+  "DONE":                       { bg: "#d1fae5", text: "#065f46", border: "#6ee7b7" },
+  "HOLD":                       { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" },
+  "CANCELLED":                  { bg: "#f3f4f6", text: "#6b7280", border: "#d1d5db" },
+  "CANCEL":                     { bg: "#f3f4f6", text: "#6b7280", border: "#d1d5db" },
 }
 
 const PRIORITY_MAP: Record<number, { label: string; color: string; bg: string }> = {
