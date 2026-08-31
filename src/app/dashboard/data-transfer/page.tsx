@@ -27,6 +27,8 @@ interface StagingRow {
   rsm:            string
   grsm:           string
   release:        string
+  hka_hke?:       string  // format "HKA/HKE" dari EDI, mis. "22/26" — lihat parseHkaHke/overallAsd
+  kota?:          string
   // joined from master_data_adp:
   server?:        string
   server_name?:   string
@@ -78,6 +80,7 @@ interface SnapshotDetail {
   spv?:           string
   grsm?:          string
   release?:       string
+  hka_hke?:       string
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -117,6 +120,17 @@ function calcLama(tglISO: string, baselineISO: string): number {
 }
 
 function pct(n: number, d: number) { return d === 0 ? 0 : Math.round(n / d * 1000) / 10 }
+
+// EDI kirim "hka_hke" sbg 1 string gabungan format "HKA/HKE" (mis. "22/26"
+// — Hari Kerja Aktif / Hari Kerja Efektif), bukan angka terpisah. Dipecah
+// di sini biar bisa dihitung (overallAsd), tampilan tabelnya tetap raw
+// apa adanya ("22/26") karena sudah cukup jelas dibaca manusia.
+function parseHkaHke(raw: string | undefined): { hka: number; hke: number } | null {
+  if (!raw) return null
+  const m = raw.trim().match(/^(\d+)\s*\/\s*(\d+)$/)
+  if (!m) return null
+  return { hka: Number(m[1]), hke: Number(m[2]) }
+}
 
 // Exclude: ONLY remarks = Inactive (Excel does not exclude Vacant)
 function isVacantOrInactive(m: MasterRow) { return m.remarks === "Inactive" }
@@ -227,7 +241,30 @@ export default function DataTransferPage() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { loadMaster(); loadStaging() }, [loadMaster, loadStaging])
+  // Muat keputusan manual Include/Exclude yang sudah tersimpan (tabel
+  // edi_transfer_overrides) — sebelumnya cuma di React state, hilang tiap
+  // reload; sekarang persist supaya konsisten lintas reload/device.
+  const loadOverrides = useCallback(async () => {
+    const { data } = await supabase.from("edi_transfer_overrides").select("distributor_id,excluded")
+    if (data) setOverrides(new Map(data.map((r: { distributor_id: string; excluded: boolean }) => [r.distributor_id, r.excluded])))
+  }, [])
+
+  useEffect(() => { loadMaster(); loadStaging(); loadOverrides() }, [loadMaster, loadStaging, loadOverrides])
+
+  // Toggle Include/Exclude — update state LANGSUNG (biar responsif di UI)
+  // sekaligus upsert ke edi_transfer_overrides (biar tidak hilang pas reload).
+  const toggleOverride = async (distributorId: string, currentExcluded: boolean) => {
+    const next = !currentExcluded
+    setOverrides(p => { const n = new Map(p); n.set(distributorId, next); return n })
+    const { error } = await supabase.from("edi_transfer_overrides")
+      .upsert({ distributor_id: distributorId, excluded: next, updated_at: new Date().toISOString() }, { onConflict: "distributor_id" })
+    if (error) {
+      // Gagal simpan ke DB — rollback state lokal biar tidak "kelihatan
+      // kesimpan" padahal sebenarnya tidak, dan kasih tau usernya.
+      setOverrides(p => { const n = new Map(p); n.set(distributorId, currentExcluded); return n })
+      alert(`Gagal simpan perubahan: ${error.message}`)
+    }
+  }
 
   // Auto-refresh staging setiap 5 menit (n8n update tiap jam)
   useEffect(() => {
@@ -297,9 +334,40 @@ export default function DataTransferPage() {
   const activeRows = useMemo(() => displayRows.filter(r => !r.excluded), [displayRows])
 
   // ── Summary stats ──────────────────────────────────────────
+  // "Overall ADP": dedup per distributor_id (activeRows). SEBELUMNYA cuma
+  // ada 1 card "Overall" yang diam-diam SELALU pakai activeRows ini walau
+  // user lagi buka tab "By WF" — sekarang dipisah eksplisit jadi 2 card
+  // (ADP & WF) yang masing-masing hitung dari sumber row-nya sendiri,
+  // supaya tidak ada lagi angka yang "tidak dinamis" ikut tab yang dibuka.
   const overall = useMemo(() => {
     const ok = activeRows.filter(r => r.lama <= 0).length
     return { ok, total: activeRows.length, p: pct(ok, activeRows.length) }
+  }, [activeRows])
+
+  const activeWfRows = useMemo(() => wfRows.filter(r => !r.excluded), [wfRows])
+  const overallWf = useMemo(() => {
+    const ok = activeWfRows.filter(r => r.lama <= 0).length
+    return { ok, total: activeWfRows.length, p: pct(ok, activeWfRows.length) }
+  }, [activeWfRows])
+
+  // "Overall ASD" = rata-rata HKA (dikonfirmasi user). Sumbernya field
+  // "hka_hke" dari EDI, format "HKA/HKE" (mis. "22/26") — diambil HKA-nya
+  // (angka pertama) doang buat dirata-rata, HKE ikut dirata-rata juga
+  // sbg konteks tambahan di tampilan card.
+  const overallAsd = useMemo(() => {
+    const parsed = activeRows.map(r => parseHkaHke(r.hka_hke)).filter((v): v is { hka: number; hke: number } => v !== null)
+    const avgHka = parsed.length ? parsed.reduce((s, v) => s + v.hka, 0) / parsed.length : 0
+    const avgHke = parsed.length ? parsed.reduce((s, v) => s + v.hke, 0) / parsed.length : 0
+    return { avg: Math.round(avgHka * 10) / 10, avgHke: Math.round(avgHke * 10) / 10, count: parsed.length }
+  }, [activeRows])
+
+  const releaseStats = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const r of activeRows) {
+      const v = (r.release || "").trim() || "(kosong)"
+      map.set(v, (map.get(v) || 0) + 1)
+    }
+    return [...map.entries()].sort((a, b) => b[1] - a[1])
   }, [activeRows])
 
   const aorStats = useMemo(() => {
@@ -396,6 +464,11 @@ export default function DataTransferPage() {
         tas:            r.tas,
         spv:            r.spv,
         grsm:           r.grsm,
+        // "release" sebelumnya kelewat di sini padahal interface
+        // SnapshotDetail & tampilan expanded row sudah lama baca field
+        // ini — kolomnya kemungkinan sudah ada di tabel, cuma tidak
+        // pernah ikut disimpan waktu Save Snapshot.
+        release:        r.release,
       }))
       const chunk = 100
       for (let i = 0; i < details.length; i += chunk) {
@@ -491,12 +564,14 @@ export default function DataTransferPage() {
 
   const ovColor = overall.p >= 90 ? "#166534" : overall.p >= 70 ? "#0369A1" : "#991B1B"
   const ovBg    = overall.p >= 90 ? "#DCFCE7" : overall.p >= 70 ? "#EFF6FF" : "#FEE2E2"
+  const ovColorWf = overallWf.p >= 90 ? "#166534" : overallWf.p >= 70 ? "#0369A1" : "#991B1B"
+  const ovBgWf    = overallWf.p >= 90 ? "#DCFCE7" : overallWf.p >= 70 ? "#EFF6FF" : "#FEE2E2"
 
   // ── TABLE component (shared) ───────────────────────────────
   const DataTable = ({ rows, isHistory = false, showSpv = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean, showSpv?: boolean }) => {
     const headers = showSpv
-      ? ["","No","WF/SPV","ADP","Distributor","Server","Area","TAS","Tgl Transfer","Status"]
-      : ["","No","ADP","Distributor","Server","Area","TAS","Tgl Transfer","Status"]
+      ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer","Release","Status"]
+      : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer","Release","Status"]
     const colCount = headers.length + (isHistory ? 0 : 1)
     return (
     <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"auto" }}>
@@ -534,23 +609,21 @@ export default function DataTransferPage() {
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontWeight:700, color:"#0369A1", fontSize:"11px" }}>{r.distributor_id}</td>
                   <td style={{ padding:"8px 12px", maxWidth:"220px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontWeight:600 }}>{r.distributor_nm}</td>
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{r.server||"—"}</td>
+                  <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text2)", maxWidth:"160px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.server_name||"—"}</td>
                   <td style={{ padding:"8px 12px" }}>
                     {aorKey ? <span style={{ background:aorColor+"15", color:aorColor, padding:"2px 8px", borderRadius:"99px", fontSize:"10px", fontWeight:700 }}>{aorKey}</span> : "—"}
                   </td>
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{r.tas||"—"}</td>
+                  <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text3)" }}>{r.hka_hke || "—"}</td>
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px" }}>{r.tgl_gudang||r.tgl_iso||"—"}</td>
+                  <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)", whiteSpace:"nowrap" }}>{r.release || "—"}</td>
                   <td style={{ padding:"8px 12px" }}>
                     {r.excluded ? <span style={{ fontSize:"10px", color:"var(--text3)" }}>— Excluded</span> : <StatusBadge lama={r.lama}/>}
                   </td>
                   {!isHistory && (
                     <td style={{ padding:"8px 12px" }}>
-                      <button onClick={() => setOverrides(p => {
-                        // Set eksplisit ke KEBALIKAN status yang lagi tampil
-                        // (bukan toggle keberadaan di set) — biar selalu
-                        // menang atas auto-exclude, termasuk kasus baris yang
-                        // auto-excluded (remarks=Inactive di master).
-                        const n = new Map(p); n.set(r.distributor_id, !r.excluded); return n
-                      })} style={{ fontSize:"10px", padding:"2px 8px", borderRadius:"6px", border:"1px solid var(--border)", background:"var(--surface2)", cursor:"pointer", color:"var(--text3)", fontFamily:"inherit" }}>
+                      <button onClick={() => toggleOverride(r.distributor_id, r.excluded)}
+                        style={{ fontSize:"10px", padding:"2px 8px", borderRadius:"6px", border:"1px solid var(--border)", background:"var(--surface2)", cursor:"pointer", color:"var(--text3)", fontFamily:"inherit" }}>
                         {r.excluded ? "Include" : "Exclude"}
                       </button>
                     </td>
@@ -678,20 +751,52 @@ export default function DataTransferPage() {
             </div>
           </div>
         ) : (<>
-          {/* Summary cards */}
+          {/* Summary cards — "Overall ADP"/"Overall WF" (dipisah eksplisit,
+              masing2 dari sumber row-nya sendiri), "Overall ASD" (rata2 HKA),
+              "Summary Release" (breakdown per nilai release). Card GMA/NOL/SOL
+              lama dihapus (dikonfirmasi user) — breakdown per Area/TAS tetap
+              ada di section "Per Area"/"Per TAS" di bawah. */}
           <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"10px" }}>
             <div style={{ background:ovBg, borderRadius:"10px", padding:"14px 16px" }}>
-              <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall</div>
+              <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall Data Transfer ADP</div>
               <div style={{ fontSize:"28px", fontWeight:900, color:ovColor }}>{overall.p}%</div>
               <div style={{ fontSize:"11px", color:ovColor, marginTop:"2px" }}>{overall.ok}/{overall.total} on time</div>
             </div>
-            {aorStats.slice(0,3).map(s => (
-              <div key={s.aor} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
-                <div style={{ fontSize:"10px", fontWeight:700, color:AOR_COLORS[s.aor], textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>{s.aor}</div>
-                <div style={{ fontSize:"22px", fontWeight:900, color:AOR_COLORS[s.aor] }}>{s.p}%</div>
-                <div style={{ fontSize:"11px", color:"var(--text3)", marginTop:"2px" }}>{s.ok}/{s.total}</div>
+            <div style={{ background:ovBgWf, borderRadius:"10px", padding:"14px 16px" }}>
+              <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall Data Transfer WF</div>
+              <div style={{ fontSize:"28px", fontWeight:900, color:ovColorWf }}>{overallWf.p}%</div>
+              <div style={{ fontSize:"11px", color:ovColorWf, marginTop:"2px" }}>{overallWf.ok}/{overallWf.total} on time</div>
+            </div>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
+              <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall ASD</div>
+              <div style={{ fontSize:"28px", fontWeight:900, color:"var(--text)" }}>{overallAsd.count ? overallAsd.avg : "—"}</div>
+              <div style={{ fontSize:"11px", color:"var(--text3)", marginTop:"2px" }}>
+                {overallAsd.count ? `rata-rata HKA · HKE ${overallAsd.avgHke} (${overallAsd.count} baris)` : "belum ada data HKA"}
               </div>
-            ))}
+            </div>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
+              <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"8px" }}>Summary Release</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:"6px" }}>
+                {releaseStats.slice(0,3).map(([v,n]) => {
+                  const releasePct = pct(n, activeRows.length)
+                  return (
+                    <div key={v}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:"2px" }}>
+                        <span style={{ fontSize:"11px", fontWeight:600, color:"var(--text)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{v}</span>
+                        <span style={{ fontSize:"11px", fontWeight:700, color:"var(--accent)", flexShrink:0, marginLeft:"8px" }}>{releasePct}% <span style={{ fontWeight:400, color:"var(--text3)" }}>({n})</span></span>
+                      </div>
+                      <div style={{ background:"var(--surface3)", borderRadius:"99px", height:"4px", overflow:"hidden" }}>
+                        <div style={{ height:"100%", width:`${releasePct}%`, background:"var(--accent)", borderRadius:"99px" }}/>
+                      </div>
+                    </div>
+                  )
+                })}
+                {releaseStats.length > 3 && (
+                  <div style={{ fontSize:"10px", color:"var(--text3)" }}>+{releaseStats.length - 3} nilai lainnya</div>
+                )}
+                {releaseStats.length === 0 && <div style={{ fontSize:"11px", color:"var(--text3)" }}>Tidak ada data</div>}
+              </div>
+            </div>
           </div>
 
           {/* Area + TAS progress bars */}
