@@ -169,7 +169,15 @@ export default function DataTransferPage() {
   })
   const [editBaseline, setEditBaseline] = useState(false)
   const [tempBaseline, setTempBaseline] = useState("")
-  const [excludedIds,  setExcludedIds]  = useState<Set<string>>(new Set())
+  // Override MANUAL per distributor_id: true = paksa exclude, false = paksa
+  // include (menang atas auto-exclude "remarks=Inactive" di master data),
+  // tidak ada entri = ikuti hasil auto-check apa adanya. SEBELUMNYA ini
+  // Set<string> ("manual exclude" doang) yang di-OR sama auto-check — jadi
+  // kalau baris auto-excluded (mis. Barobo, remarks="Inactive" di master),
+  // tombol "Include" TIDAK PERNAH bisa menang (OR selalu true), bahkan
+  // arah togglenya kebalik (nambah ke set malah bikin double-excluded).
+  // Sekarang Map ini SELALU jadi keputusan final kalau ada entrinya.
+  const [overrides,  setOverrides]  = useState<Map<string, boolean>>(new Map())
   const [search,       setSearch]       = useState("")
   const [filterAor,    setFilterAor]    = useState("ALL")
   const [filterStatus, setFilterStatus] = useState("ALL")
@@ -258,11 +266,11 @@ export default function DataTransferPage() {
         region_name: aor,
         tas:         TAS_MAP[aor] || "",
         lama:        calcLama(iso, baseline),
-        excluded:    excludedIds.has(r.distributor_id) || (m ? isVacantOrInactive(m) : false),
+        excluded:    overrides.has(r.distributor_id) ? overrides.get(r.distributor_id)! : (m ? isVacantOrInactive(m) : false),
         tgl_iso:     iso,
       }
     })
-  }, [staging, master, baseline, excludedIds])
+  }, [staging, master, baseline, overrides])
 
   // ── Join staging + master TANPA dedup — satu baris per SPV (buat view "By WF") ──
   const wfRows = useMemo((): DisplayRow[] => {
@@ -280,11 +288,11 @@ export default function DataTransferPage() {
         region_name: aor,
         tas:         TAS_MAP[aor] || "",
         lama:        calcLama(iso, baseline),
-        excluded:    excludedIds.has(r.distributor_id) || (m ? isVacantOrInactive(m) : false),
+        excluded:    overrides.has(r.distributor_id) ? overrides.get(r.distributor_id)! : (m ? isVacantOrInactive(m) : false),
         tgl_iso:     iso,
       }
     })
-  }, [staging, master, baseline, excludedIds])
+  }, [staging, master, baseline, overrides])
 
   const activeRows = useMemo(() => displayRows.filter(r => !r.excluded), [displayRows])
 
@@ -536,8 +544,12 @@ export default function DataTransferPage() {
                   </td>
                   {!isHistory && (
                     <td style={{ padding:"8px 12px" }}>
-                      <button onClick={() => setExcludedIds(p => {
-                        const n = new Set(p); n.has(r.distributor_id)?n.delete(r.distributor_id):n.add(r.distributor_id); return n
+                      <button onClick={() => setOverrides(p => {
+                        // Set eksplisit ke KEBALIKAN status yang lagi tampil
+                        // (bukan toggle keberadaan di set) — biar selalu
+                        // menang atas auto-exclude, termasuk kasus baris yang
+                        // auto-excluded (remarks=Inactive di master).
+                        const n = new Map(p); n.set(r.distributor_id, !r.excluded); return n
                       })} style={{ fontSize:"10px", padding:"2px 8px", borderRadius:"6px", border:"1px solid var(--border)", background:"var(--surface2)", cursor:"pointer", color:"var(--text3)", fontFamily:"inherit" }}>
                         {r.excluded ? "Include" : "Exclude"}
                       </button>
