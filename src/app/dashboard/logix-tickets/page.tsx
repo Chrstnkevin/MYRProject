@@ -79,6 +79,7 @@ export default function LogixTicketsPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("ALL")
   const [tipeFilter, setTipeFilter] = useState("ALL")
+  const [userFilter, setUserFilter] = useState("ALL")
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
   // ── Kelola Kredensial (collapsed by default) ──
@@ -140,6 +141,7 @@ export default function LogixTicketsPage() {
 
   const statusOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_status))).sort(), [tickets])
   const tipeOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.tipe_ticket))).sort(), [tickets])
+  const userOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_user))).sort(), [tickets])
 
   // Tren tiket dibuat per hari, 14 hari terakhir.
   // PENTING: pakai tanggal kalender LOKAL buat key-nya (bukan toISOString,
@@ -211,7 +213,7 @@ export default function LogixTicketsPage() {
       .sort((a, b) => b.value - a.value)
   }, [ticketsByKategori])
 
-    const RANK_COLOR = ["#DC2626", "#F97316", "#0369A1"]
+  const RANK_COLOR = ["#DC2626", "#F97316", "#0369A1"]
   const [expandedKategori, setExpandedKategori] = useState<string | null>(null)
   const [kategoriMaximized, setKategoriMaximized] = useState(false)
   const KATEGORI_MIN_SHOW = 3
@@ -242,10 +244,11 @@ export default function LogixTicketsPage() {
           (t.email_user || "").toLowerCase().includes(q)
         const matchStatus = statusFilter === "ALL" || t.nm_status === statusFilter
         const matchTipe = tipeFilter === "ALL" || t.tipe_ticket === tipeFilter
-        return matchQ && matchStatus && matchTipe
+        const matchUser = userFilter === "ALL" || t.nm_user === userFilter
+        return matchQ && matchStatus && matchTipe && matchUser
       })
       .sort((a, b) => Number(b.date_created) - Number(a.date_created))
-  }, [tickets, search, statusFilter, tipeFilter])
+  }, [tickets, search, statusFilter, tipeFilter, userFilter])
 
   const th: React.CSSProperties = {
     padding: "10px 12px", fontSize: "10px", fontWeight: 700, color: "var(--text3)",
@@ -409,7 +412,7 @@ export default function LogixTicketsPage() {
           {/* Semua Kategori Issue — klik buat lihat detail tiketnya */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
-                            <div>
+              <div>
                 <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>
                   {kategoriMaximized ? "Semua Kategori" : `Top ${KATEGORI_MIN_SHOW}`}
                 </div>
@@ -489,6 +492,11 @@ export default function LogixTicketsPage() {
           style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "12px", fontFamily: "inherit", cursor: "pointer" }}>
           <option value="ALL">Semua Tipe</option>
           {tipeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={userFilter} onChange={e => setUserFilter(e.target.value)}
+          style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "12px", fontFamily: "inherit", cursor: "pointer" }}>
+          <option value="ALL">Semua Dibuat Oleh</option>
+          {userOptions.map(u => <option key={u} value={u}>{u}</option>)}
         </select>
         <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "auto" }}>{filtered.length}/{tickets.length} tiket</span>
       </div>

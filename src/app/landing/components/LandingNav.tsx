@@ -9,6 +9,7 @@ const NAV_LINKS = [
   { label: "Applications",  href: "/landing/applications" },
   { label: "Utilisation",   href: "/landing/utilisation" },
   { label: "Data Transfer", href: "/landing/data-transfer" },
+  { label: "Req Fileset",   href: "/landing/req-fileset" },
   { label: "Tutorials",     href: "/landing/tutorials" },
   { label: "Infographic",   href: "/landing/infographics" },
 ]

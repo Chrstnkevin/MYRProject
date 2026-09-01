@@ -194,6 +194,7 @@ export default function DataTransferPage() {
   const [overrides,  setOverrides]  = useState<Map<string, boolean>>(new Map())
   const [search,       setSearch]       = useState("")
   const [filterAor,    setFilterAor]    = useState("ALL")
+  const [filterTas,    setFilterTas]    = useState("ALL")
   const [filterStatus, setFilterStatus] = useState("ALL")
   const [expandedIds,  setExpandedIds]  = useState<Set<string>>(new Set())
   const [saveNote,     setSaveNote]     = useState("")
@@ -218,6 +219,7 @@ export default function DataTransferPage() {
   const [snapLoading,  setSnapLoading]  = useState(false)
   const [histSearch,   setHistSearch]   = useState("")
   const [histAor,      setHistAor]      = useState("ALL")
+  const [histTas,      setHistTas]      = useState("ALL")
   const [histStatus,   setHistStatus]   = useState("ALL")
 
   // ── Load master + staging ──────────────────────────────────
@@ -394,6 +396,7 @@ export default function DataTransferPage() {
     const source = viewMode === "wf" ? wfRows : displayRows
     return source.filter(r => {
       if (filterAor !== "ALL" && r.aor !== filterAor) return false
+      if (filterTas !== "ALL" && r.tas !== filterTas) return false
       if (filterStatus === "OK"   && r.lama > 0)  return false
       if (filterStatus === "LATE" && r.lama <= 0) return false
       if (q && !r.distributor_id.toLowerCase().includes(q) &&
@@ -401,7 +404,7 @@ export default function DataTransferPage() {
                !(r.spv || "").toLowerCase().includes(q)) return false
       return true
     }).sort((a, b) => b.lama - a.lama)  // sort terlama → terpendek
-  }, [displayRows, wfRows, viewMode, search, filterAor, filterStatus])
+  }, [displayRows, wfRows, viewMode, search, filterAor, filterTas, filterStatus])
 
   // ── Manual upload EDI ──────────────────────────────────────
   const handleEdiFile = async (file: File) => {
@@ -547,13 +550,14 @@ export default function DataTransferPage() {
     const q = histSearch.toLowerCase()
     return snapDetail.filter(r => {
       if (histAor !== "ALL" && r.region_name !== histAor) return false
+      if (histTas !== "ALL" && r.tas !== histTas) return false
       if (histStatus === "OK"   && r.lama > 0)  return false
       if (histStatus === "LATE" && r.lama <= 0) return false
       if (q && !r.distributor_id.toLowerCase().includes(q) &&
                !r.distributor_nm.toLowerCase().includes(q)) return false
       return true
     })
-  }, [snapDetail, histSearch, histAor, histStatus])
+  }, [snapDetail, histSearch, histAor, histTas, histStatus])
 
   const histOverall = useMemo(() => {
     const active = snapDetail.filter(r => !r.excluded)
@@ -844,6 +848,10 @@ export default function DataTransferPage() {
               style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
               {["ALL","GMA","NOL","SOL","VIS","MIN"].map(a=><option key={a} value={a}>{a==="ALL"?"All Area":a}</option>)}
             </select>
+            <select value={filterTas} onChange={e=>setFilterTas(e.target.value)}
+              style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
+              {["ALL","JC","Van","Lindon","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
+            </select>
             <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}
               style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
               <option value="ALL">All Status</option>
@@ -928,6 +936,10 @@ export default function DataTransferPage() {
                 <select value={histAor} onChange={e=>setHistAor(e.target.value)}
                   style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
                   {["ALL","GMA","NOL","SOL","VIS","MIN"].map(a=><option key={a} value={a}>{a==="ALL"?"All Area":a}</option>)}
+                </select>
+                <select value={histTas} onChange={e=>setHistTas(e.target.value)}
+                  style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
+                  {["ALL","JC","Van","Lindon","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
                 </select>
                 <select value={histStatus} onChange={e=>setHistStatus(e.target.value)}
                   style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
