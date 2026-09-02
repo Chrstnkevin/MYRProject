@@ -3,7 +3,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import {
-  Upload, CheckCircle, RefreshCw, FileSpreadsheet,
+  Upload, Download, CheckCircle, RefreshCw, FileSpreadsheet,
   Search, TriangleAlert, TrendingUp, Trash2, Settings, ChevronUp, ChevronDown
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
@@ -696,6 +696,39 @@ async function parseEdiFile(file: File): Promise<ExcelRow[]> {
       target_amount:   Number(r["TRGRP1"]) || 0,
       target_cases:    Number(r["TRGQTY1"]) || 0,
     }))
+}
+
+// ── Template download — kolom & posisi header persis sama seperti yang
+// dibaca parseExcelFile/parseEdiFile di atas, supaya file hasil isian
+// user pasti ke-parse dengan benar begitu diupload lagi.
+async function downloadExcelTemplate() {
+  const XLSX = await import("xlsx")
+  const headers = ["AOR", "SUB AOR", "ADP CODE", "DEPOT", "SP", "SALESMAN CODE", "SALESMAN NAME", "ROUTE", "SKUGROUP", "DIVISION", "SKU CODE", "SKU DESCRIPTION", "TARGET AMOUNT", "TARGET IN CASES"]
+  const example = ["GMA", "GMA 1", "200015", "JAKARTA", "SP01", "WF1234", "BUDI SANTOSO", "ROUTE01", "BISKUIT", "FOOD", "421244", "CONTOH SKU 250G", 15000000, 1200]
+  // Baris 1 memang diabaikan sistem (parseExcelFile pakai range:1) — di file
+  // asli isinya grand-total nyasar, di sini dikasih catatan biar jelas.
+  const aoa = [
+    ["BARIS INI DIABAIKAN SAAT UPLOAD — biarkan kosong atau isi apa saja"],
+    headers,
+    example,
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws["!cols"] = headers.map(() => ({ wch: 16 }))
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "Target PHI")
+  XLSX.writeFile(wb, "Template_Excel_Target_PHI.xlsx")
+}
+
+async function downloadEdiTemplate() {
+  const XLSX = await import("xlsx")
+  const headers = ["DIST_CODE", "DIST_NAME", "SLSNO", "SLSNAME", "PCODE", "PCODENAME", "TRGRP1", "TRGQTY1"]
+  const example = ["200015", "CONTOH DISTRIBUTOR", "WF1234", "BUDI SANTOSO", "421244", "CONTOH SKU 250G", 15000000, 1200]
+  const ws = XLSX.utils.aoa_to_sheet([headers, example])
+  ws["!cols"] = headers.map(() => ({ wch: 16 }))
+  const wb = XLSX.utils.book_new()
+  // Nama sheet harus "COMBINE" — parseEdiFile cari sheet ini duluan
+  XLSX.utils.book_append_sheet(wb, ws, "COMBINE")
+  XLSX.writeFile(wb, "Template_EDI_Matrix.xlsx")
 }
 
 async function uploadEdiRows(rows: ExcelRow[], periodMonth: string, onProgress: (m: string) => void) {
@@ -2057,6 +2090,10 @@ export default function TargetComparePage() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <button onClick={downloadExcelTemplate}
+                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text2)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                <Download size={13} /> Download Template
+              </button>
               <button onClick={() => setUploadOpen(true)}
                 style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "none", background: "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 <Upload size={13} /> Upload Excel Target
@@ -2187,10 +2224,16 @@ export default function TargetComparePage() {
                   {ediRows.length > 0 && <span style={{ color: "#166534", fontWeight: 700 }}> · {ediRows.length.toLocaleString("id-ID")} baris EDI tersimpan</span>}
                 </div>
               </div>
-              <button onClick={() => setEdiUploadOpen(true)}
-                style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "none", background: "#7C3AED", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                <Upload size={13} /> Upload EDI
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button onClick={downloadEdiTemplate}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text2)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  <Download size={13} /> Download Template
+                </button>
+                <button onClick={() => setEdiUploadOpen(true)}
+                  style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 16px", borderRadius: "8px", border: "none", background: "#7C3AED", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  <Upload size={13} /> Upload EDI
+                </button>
+              </div>
             </div>
 
             {ediFile && (
