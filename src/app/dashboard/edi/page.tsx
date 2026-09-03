@@ -9,8 +9,8 @@
 // Tab Salesman SPV & Trace Target Omzet Dashboard masih placeholder —
 // belum ada detail query/params EDI-nya dari Ficom.
 
-import { useState, useEffect, useCallback } from "react"
-import { RefreshCw, Zap, Calendar, Info } from "lucide-react"
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { RefreshCw, Zap, Calendar, Info, Search, X } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 
 type TabKey = "masa-sfa" | "productivity" | "visit" | "hirarki" | "salesman-spv" | "trace-target-omzet"
@@ -56,6 +56,9 @@ export default function EdiPage() {
   const [msg, setMsg] = useState("")
   const [rows, setRows] = useState<Record<string, unknown>[]>([])
   const [loadingPreview, setLoadingPreview] = useState(false)
+  const [search, setSearch] = useState("")
+  const [filterCol, setFilterCol] = useState("")
+  const [filterVal, setFilterVal] = useState("")
 
   const today = ficomDateNoPad(new Date())
   const [visitFrom, setVisitFrom] = useState(today)
@@ -69,13 +72,13 @@ export default function EdiPage() {
 
   const loadPreview = useCallback(async (table: string) => {
     setLoadingPreview(true)
-    const { data } = await supabase.from(table).select("*").order("fetched_at", { ascending: false }).limit(50)
+    const { data } = await supabase.from(table).select("*").order("fetched_at", { ascending: false }).limit(300)
     setRows((data as Record<string, unknown>[]) || [])
     setLoadingPreview(false)
   }, [])
 
   useEffect(() => {
-    setMsg("")
+    setMsg(""); setSearch(""); setFilterCol(""); setFilterVal("")
     if (active.table) loadPreview(active.table)
     else setRows([])
   }, [tab, active.table, loadPreview])
@@ -100,7 +103,26 @@ export default function EdiPage() {
     setSyncing(false)
   }
 
-  const columns = rows.length ? Object.keys(rows[0]).filter(k => k !== "id") : []
+  const columns = useMemo(() => rows.length ? Object.keys(rows[0]).filter(k => k !== "id") : [], [rows])
+
+  // Nilai unik kolom yang lagi dipilih buat filter dropdown "Nilai" —
+  // dihitung dari rows yang sudah ditarik (bukan query baru ke Supabase),
+  // jadi filter ini murni client-side di atas 300 baris terbaru yang di-preview.
+  const filterOptions = useMemo(() => {
+    if (!filterCol) return []
+    const set = new Set<string>()
+    rows.forEach(r => { const v = r[filterCol]; if (v !== null && v !== undefined && v !== "") set.add(String(v)) })
+    return Array.from(set).sort()
+  }, [rows, filterCol])
+
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return rows.filter(r => {
+      if (filterCol && filterVal && String(r[filterCol] ?? "") !== filterVal) return false
+      if (q && !columns.some(c => String(r[c] ?? "").toLowerCase().includes(q))) return false
+      return true
+    })
+  }, [rows, search, filterCol, filterVal, columns])
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -188,9 +210,44 @@ export default function EdiPage() {
 
         {active.table && (
           <div style={{ marginTop: "14px" }}>
-            <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-              Preview data terbaru {loadingPreview ? "· memuat..." : `· ${rows.length} baris`}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", flexWrap: "wrap", marginBottom: "8px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Preview data terbaru {loadingPreview ? "· memuat..." : `· ${filteredRows.length}/${rows.length} baris`}
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "6px 10px" }}>
+                  <Search size={12} color="var(--text3)" />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari di semua kolom..."
+                    style={{ border: "none", outline: "none", fontSize: "11px", color: "var(--text)", background: "transparent", fontFamily: "inherit", width: "150px" }} />
+                  {search && (
+                    <button onClick={() => setSearch("")} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", padding: 0, display: "flex" }}><X size={12} /></button>
+                  )}
+                </div>
+
+                <select value={filterCol} onChange={e => { setFilterCol(e.target.value); setFilterVal("") }}
+                  style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit" }}>
+                  <option value="">Filter kolom...</option>
+                  {columns.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+
+                {filterCol && (
+                  <select value={filterVal} onChange={e => setFilterVal(e.target.value)}
+                    style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontFamily: "inherit", maxWidth: "160px" }}>
+                    <option value="">Semua nilai</option>
+                    {filterOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                )}
+
+                {(search || (filterCol && filterVal)) && (
+                  <button onClick={() => { setSearch(""); setFilterCol(""); setFilterVal("") }}
+                    style={{ fontSize: "11px", padding: "6px 10px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", cursor: "pointer", fontFamily: "inherit" }}>
+                    Reset
+                  </button>
+                )}
+              </div>
             </div>
+
             <div style={{ border: "1px solid var(--border)", borderRadius: "10px", overflow: "auto", maxHeight: "440px" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px" }}>
                 <thead>
@@ -201,9 +258,11 @@ export default function EdiPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.length === 0 ? (
-                    <tr><td colSpan={columns.length || 1} style={{ padding: "30px", textAlign: "center", color: "var(--text3)" }}>Belum ada data — klik &quot;Tarik EDI&quot;</td></tr>
-                  ) : rows.map((r, i) => (
+                  {filteredRows.length === 0 ? (
+                    <tr><td colSpan={columns.length || 1} style={{ padding: "30px", textAlign: "center", color: "var(--text3)" }}>
+                      {rows.length === 0 ? "Belum ada data — klik “Tarik EDI”" : "Tidak ada baris yang cocok dengan pencarian/filter"}
+                    </td></tr>
+                  ) : filteredRows.map((r, i) => (
                     <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                       {columns.map(c => (
                         <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap", color: "var(--text2)" }}>{String(r[c] ?? "—")}</td>

@@ -16,9 +16,12 @@ const EDI_ID = "EDI2600008"
 interface EdiParam { var: string; label: string; placeholder: string; maxLength: number }
 interface EdiTemplate { ediId: string; ediNm: string; query: string; params: EdiParam[] }
 
-// Kolom yang BUKAN text di edi_visit_staging — "" dari parseEdiText harus
-// dijadiin null buat kolom ini, soalnya Postgres nolak "invalid input
-// syntax" kalau string kosong di-cast ke date/numeric/integer/timestamptz.
+// Kolom yang BUKAN text di edi_visit_staging — "" ATAU literal teks "null"
+// dari Ficom (dikonfirmasi dari error produksi: "invalid input syntax for
+// type numeric: \"null\"" — Ficom kirim kata "null" apa adanya, bukan
+// string kosong, buat field yang kosong) harus dijadiin null asli buat
+// kolom ini, soalnya Postgres nolak string itu di-cast ke
+// date/numeric/integer/timestamptz.
 const NON_TEXT_COLUMNS = new Set([
   "visit_date", "is_in_route", "visit_km", "is_scan",
   "longitude_outlet", "latitude_outlet", "longitude_real", "latitude_real",
@@ -28,7 +31,8 @@ const NON_TEXT_COLUMNS = new Set([
 function cleanRow(row: Record<string, string>): Record<string, string | null> {
   const out: Record<string, string | null> = {}
   for (const [k, v] of Object.entries(row)) {
-    out[k] = NON_TEXT_COLUMNS.has(k) && v === "" ? null : v
+    const empty = v === "" || v.trim().toLowerCase() === "null"
+    out[k] = NON_TEXT_COLUMNS.has(k) && empty ? null : v
   }
   return out
 }
