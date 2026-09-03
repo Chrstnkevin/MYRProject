@@ -41,6 +41,7 @@ const NAV_BACKUP_RESTORE = [
 ]
 
 const NAV_UTILISASI = [
+  { icon: TrendingUp, label: "EDI Ficom", path: "/dashboard/edi", desc: "Hub tarik EDI Ficom Lite (per tab)", badge: "EDI", badgeColor: "#0891B2" },
   { icon: BarChart3,  label: "SFA Upload",        path: "/dashboard/sfa-upload",        desc: "Update data SFA",        badge: "SFA",   badgeColor: "#E8381A" },
   { icon: TrendingUp, label: "Ficom Upload",       path: "/dashboard/ficom-upload",      desc: "Update data Ficom",      badge: "Ficom", badgeColor: "#FB8C00" },
   { icon: TrendingUp, label: "Ficom Lite Upload",  path: "/dashboard/ficom-lite-upload", desc: "Update data Ficom Lite", badge: "Lite",  badgeColor: "#22C55E" },

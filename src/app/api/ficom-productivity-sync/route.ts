@@ -38,6 +38,21 @@ function periodMonthOf(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
 }
 
+// "1 OCT 2025" -> "2025-10" — dipakai buat turunin period_month dari
+// dateFrom MANUAL yang diketik user (lihat POST override di bawah), biar
+// bisa juga tarik ulang bulan lampau, bukan cuma bulan berjalan.
+function periodMonthFromFicomDate(s: string): string | null {
+  const months: Record<string, string> = {
+    JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
+    JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12",
+  }
+  const m = s.trim().toUpperCase().match(/^(\d{1,2})\s+([A-Z]{3})\s+(\d{4})$/)
+  if (!m) return null
+  const [, , mon, year] = m
+  if (!months[mon]) return null
+  return `${year}-${months[mon]}`
+}
+
 async function ficomLogin(username: string, password: string): Promise<string> {
   const res = await fetch(`${FICOM_BASE}/auth`, {
     method: "POST",
@@ -73,40 +88,16 @@ async function fetchEdiText(token: string, dateFrom: string, dateTo: string): Pr
   return extractRes.text()
 }
 
-// Endpoint dashboard RESMI Ficom Lite (BUKAN EDI export) — beda jalur dari
-// EDI2600006 di atas, kasih rollup Target/Realisasi per RDM langsung dari
-// Ficom sendiri (bukan hasil agregasi kita), scope-nya SELALU "hari ini/
-// bulan berjalan" (tidak ada param tanggal, tidak per-periode kayak
-// EDI2600006). Dipakai user buat validasi silang: userId di sini match
-// PERSIS ke grsm_id (RDM) kita, jadi dicocokkan by ID langsung — tidak
-// perlu name-matching kayak target-compare. "user-id" query param-nya =
-// emp_id akun SD (posisi "SD" di Master Data → Ficom Password, sama
-// dengan yang dipakai target-compare buat crawl hierarki/produk), BUKAN
-// akun posisi "EDI" yang dipakai buat extract EDI2600006 di atas — jadi
-// login-nya terpisah pakai kredensial SD.
-interface FicomLiteCard {
-  label: string; value: number; target: number; percent: number
-  componentId: string; targetExcluded?: number; percentExcluded?: number
-}
-interface FicomLiteTeamRow { userId: string; name: string; cards: FicomLiteCard[] }
-interface FicomLiteTeam { daily: FicomLiteTeamRow[]; monthly: FicomLiteTeamRow[] }
-
-async function fetchFicomLiteTeam(token: string, sdEmpId: string): Promise<FicomLiteTeam> {
-  const res = await fetch(`${FICOM_BASE}/api/ficom-lite-dashboard/team?user-id=${sdEmpId}`, {
-    headers: { Authorization: `F1C0m ${token}` },
-  })
-  if (!res.ok) throw new Error(`Gagal ambil Ficom Lite Team (HTTP ${res.status})`)
-  return res.json()
-}
-
-async function runSync() {
+// override: dateFrom/dateTo MANUAL dari body POST (lihat handler POST di
+// bawah) — kalau diisi user di halaman EDI Ficom, dipakai apa adanya
+// (termasuk buat tarik histori bulan lampau). Kalau tidak diisi (tombol
+// "Tarik dari Ficom" lama, atau cron), fallback ke default lama: awal
+// bulan berjalan s.d. hari ini.
+async function runSync(override?: { dateFrom: string; dateTo: string }) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-  // Akun login sama dengan EDI200001 (posisi "EDI" di Master Data → Ficom
-  // Password) — akun fungsional yang sama juga punya akses ke template
-  // EDI2600006 ini (satu sistem Ficom, satu login).
   const { data: cred, error: credErr } = await supabase
     .from("ficom_passwords")
     .select("user_login,password")
@@ -120,9 +111,20 @@ async function runSync() {
   }
 
   const now = new Date()
-  const dateFrom = ficomDateNoPad(startOfMonth(now))
-  const dateTo = ficomDateNoPad(now)
-  const periodMonth = periodMonthOf(now)
+  let dateFrom: string, dateTo: string, periodMonth: string
+  if (override) {
+    dateFrom = override.dateFrom
+    dateTo = override.dateTo
+    const pm = periodMonthFromFicomDate(dateFrom)
+    if (!pm) {
+      return NextResponse.json({ error: 'Format tanggal harus "D MON YYYY", mis. "1 OCT 2025"' }, { status: 400 })
+    }
+    periodMonth = pm
+  } else {
+    dateFrom = ficomDateNoPad(startOfMonth(now))
+    dateTo = ficomDateNoPad(now)
+    periodMonth = periodMonthOf(now)
+  }
 
   try {
     const token = await ficomLogin(cred.user_login, cred.password)
@@ -139,18 +141,6 @@ async function runSync() {
 
     const num = (v: string) => v === "" || v == null ? null : Number(v)
 
-    // Response mentah dari Ficom itu granular per (salesman × hari × pcode ×
-    // komponen) — bisa RATUSAN RIBU baris buat sebulan penuh skala nasional.
-    // Halaman Productivity Compare cuma butuh angka per (Salesman, Komponen)
-    // — jadi diagregasi DI SINI dulu sebelum insert, bukan simpan mentah:
-    //   - component_realisasi: SUM (additive per event/pcode/hari, valid dijumlah)
-    //   - component_target: diambil SEKALI per (sls_id, component_id, tipe_id)
-    //     — nilainya konstan/berulang di tiap baris detail, kalau ikut di-SUM
-    //     akan overcount berkali-kali lipat (persis kasus di halaman, lihat
-    //     buildTree di productivity-compare/page.tsx).
-    // Efeknya: dari kemungkinan ratusan ribu baris jadi paling banyak
-    // (jumlah salesman × komponen per orang) — biasanya cuma ribuan baris,
-    // sync & load halaman jadi jauh lebih cepat.
     interface AggRow {
       nsm_id: string | null; nsm_nm: string | null
       grsm_id: string | null; grsm_nm: string | null
@@ -193,34 +183,15 @@ async function runSync() {
     if (delErr) throw new Error(`Gagal hapus staging periode lama: ${delErr.message}`)
 
     const chunk = 1000
-    for (let i = 0; i < rows.length; i += chunk) {
-      const { error: insErr } = await supabase.from("ficom_productivity_staging").insert(rows.slice(i, i + chunk))
-      if (insErr) throw new Error(`Gagal insert staging: ${insErr.message}`)
-    }
+    const chunks: typeof rows[] = []
+    for (let i = 0; i < rows.length; i += chunk) chunks.push(rows.slice(i, i + chunk))
+    const insertResults = await Promise.all(
+      chunks.map(c => supabase.from("ficom_productivity_staging").insert(c))
+    )
+    const insErr = insertResults.find(r => r.error)?.error
+    if (insErr) throw new Error(`Gagal insert staging: ${insErr.message}`)
 
-    // Validasi silang: tarik juga rollup resmi Ficom Lite (per RDM, live
-    // hari ini) — TIDAK disimpan ke tabel (bukan data historis per-periode),
-    // cuma dikembalikan apa adanya di response biar halaman bisa tampilkan
-    // sbg kolom pembanding. Non-fatal kalau gagal — sync utama (EDI2600006)
-    // di atas sudah berhasil, jangan sampai gagal cuma gara-gara validasi
-    // tambahan ini (mis. akun SD belum diisi).
-    let ficomLiteTeam: FicomLiteTeam | null = null
-    try {
-      const { data: sdCred } = await supabase
-        .from("ficom_passwords")
-        .select("user_login,password")
-        .eq("position", "SD")
-        .limit(1)
-        .maybeSingle()
-      if (sdCred?.user_login && sdCred?.password) {
-        const sdToken = await ficomLogin(sdCred.user_login, sdCred.password)
-        ficomLiteTeam = await fetchFicomLiteTeam(sdToken, sdCred.user_login)
-      }
-    } catch (e) {
-      console.error("Gagal ambil Ficom Lite Team (non-fatal):", e)
-    }
-
-    return NextResponse.json({ success: true, rows: rows.length, rawRows: parsed.length, periodMonth, dateFrom, dateTo, syncedAt: new Date().toISOString(), ficomLiteTeam })
+    return NextResponse.json({ success: true, rows: rows.length, rawRows: parsed.length, periodMonth, dateFrom, dateTo, syncedAt: new Date().toISOString() })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
@@ -228,7 +199,8 @@ async function runSync() {
   }
 }
 
-// Dipanggil Vercel Cron (lihat vercel.json).
+// Dipanggil Vercel Cron (lihat vercel.json) — selalu bulan berjalan, tidak
+// pernah pakai override manual.
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET
   if (secret && req.headers.get("authorization") !== `Bearer ${secret}`) {
@@ -237,7 +209,19 @@ export async function GET(req: NextRequest) {
   return runSync()
 }
 
-// Dipanggil tombol "Tarik dari Ficom" di halaman Productivity Compare.
-export async function POST() {
-  return runSync()
+// Dipanggil tombol "Tarik dari Ficom" di halaman Productivity Compare
+// (body kosong → auto bulan berjalan, TIDAK berubah), atau tab
+// "Productivity" di halaman EDI Ficom yang boleh isi dateFrom/dateTo
+// manual (mis. buat tarik ulang bulan lampau).
+export async function POST(req: NextRequest) {
+  let override: { dateFrom: string; dateTo: string } | undefined
+  try {
+    const body = await req.json()
+    const dateFrom = String(body?.dateFrom || "").trim()
+    const dateTo = String(body?.dateTo || "").trim()
+    if (dateFrom && dateTo) override = { dateFrom, dateTo }
+  } catch {
+    // body kosong/invalid — fallback ke auto (bulan berjalan)
+  }
+  return runSync(override)
 }
