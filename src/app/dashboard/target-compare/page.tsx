@@ -181,7 +181,13 @@ async function crawlFicomLiteTeam(token: string, rootUserId: string, log: (m: st
       const v = pickSttCard(row.cards)
       if (v) {
         byId.set(row.userId, v)
-        byName.set(row.name.replace(/\s+/g, "").toUpperCase(), v)
+        // Simpan DUA varian normalisasi nama sekaligus (bukan cuma satu) —
+        // RDM/ADM/ADS formatnya "LOKASI - ROLE Nama" (cocok normalizeEmpName),
+        // Salesman formatnya "LASTNAME, FIRSTNAME - V.. SALESMAN - ..." (cocok
+        // normalizeSalesmanName). Row yang sama cuma akan match SALAH SATU
+        // pola ini, jadi aman disimpan dua-duanya tanpa saling menimpa.
+        byName.set(normalizeEmpName(row.name), v)
+        byName.set(normalizeSalesmanName(row.name), v)
       }
       if (row.distributorId == null) childIds.push(row.userId)
     }
@@ -191,6 +197,23 @@ async function crawlFicomLiteTeam(token: string, rootUserId: string, log: (m: st
   await visit(rootUserId)
   log(`✅ Ficom Lite selesai — ${visited} node organisasi dicek${failed ? `, ${failed} gagal` : ""}`)
   return { byId, byName }
+}
+
+// Lookup RDM/ADM/ADS ke Ficom Lite — by emp_id (WF-code) DULU, tapi FALLBACK
+// ke nama (normalizeEmpName) kalau tidak ketemu. Dikonfirmasi dari kasus
+// nyata user: satu ADM ("CENTRPNT-BUL - ADM R. Suello") ada di Ficom Main
+// DAN Ficom Lite, tapi userId Ficom Lite-nya BEDA dari emp_id Ficom Main —
+// jadi asumsi awal "WF-code selalu konsisten antar dua sistem Ficom" TIDAK
+// selalu benar (beda dari RDM/ADM lain yang kebetulan konsisten). Pola
+// byId-dulu-fallback-nama ini SAMA PERSIS dengan yang sudah lebih dulu
+// terbukti jalan di productivity-compare/page.tsx (ficomLiteLookup di sana
+// juga begini, buat SEMUA level termasuk RDM/ADM, bukan cuma Salesman).
+function ficomLiteLookupNode(maps: { byId: Map<string, FicomLiteValue>; byName: Map<string, FicomLiteValue> }, empId: string | null | undefined, empName: string): FicomLiteValue | undefined {
+  if (empId) {
+    const v = maps.byId.get(empId)
+    if (v) return v
+  }
+  return maps.byName.get(normalizeEmpName(empName))
 }
 
 const MONTH_ID: Record<string, string> = {
@@ -1455,7 +1478,7 @@ function OrgHierarchyTree({
         const admNodes = rdmFicomNode?.emp_id
           ? ficomOrgNodes.filter(n => n.level === "ADM_ADS" && n.parent_emp_id === rdmFicomNode.emp_id && n.emp_id)
           : []
-        const rdmFicomLite = rdmFicomNode?.emp_id ? ficomLiteMaps.byId.get(rdmFicomNode.emp_id) : undefined
+        const rdmFicomLite = rdmFicomNode ? ficomLiteLookupNode(ficomLiteMaps, rdmFicomNode.emp_id, rdmFicomNode.emp_name) : undefined
         const rdmValues: BaselineValues = {
           ficom_main: ficomMaps.bySubAor.get(rdm.key)?.target,
           ficom_dash: ficomDashMaps.bySubAor.get(rdm.key)?.target,
@@ -1489,7 +1512,7 @@ function OrgHierarchyTree({
               const admEdiTotal = admEdiRows.reduce((s, r) => s + r.target_amount, 0)
               const slsRows = aggregate(admExcelRows, r => r.salesman_code, r => `${r.salesman_code} · ${r.salesman_name}`, r => r.route)
               const ficomDashAdm = ficomDashMaps.byEmpName.get(normalizeEmpName(admNode.emp_name))
-              const admFicomLite = ficomLiteMaps.byId.get(admEmpId)
+              const admFicomLite = ficomLiteLookupNode(ficomLiteMaps, admEmpId, admNode.emp_name)
               const admValues: BaselineValues = {
                 ficom_main: admNode.target,
                 ficom_dash: ficomDashAdm?.target,
@@ -1917,7 +1940,7 @@ export default function TargetComparePage() {
       if (dash) dashByKey.set(empId, dash)
       const ediRowsForNode = ediRows.filter(r => adpCodes.has(r.adp_code))
       if (ediRowsForNode.length) ediByKey.set(empId, { target: ediRowsForNode.reduce((s, r) => s + r.target_amount, 0), actual: 0 })
-      const flVal = ficomLiteMaps.byId.get(empId)
+      const flVal = ficomLiteLookupNode(ficomLiteMaps, empId, n.emp_name)
       if (flVal) ficomLiteByKey.set(empId, flVal)
     }
     rollup.sort((a, b) => b.targetAmount - a.targetAmount)
@@ -2189,7 +2212,7 @@ export default function TargetComparePage() {
           </div>
 
           {activeLevel === "hierarchy" && <OrgHierarchyTree rows={rows} ediRows={ediRows} masterByAdp={masterByAdp} ficomOrgNodes={ficomOrgNodes} admAdsAdpCodes={admAdsAdpCodes} ficomMaps={ficomMaps} ficomDashMaps={ficomDashMaps} salesmanMaps={salesmanMaps} ficomLiteMaps={ficomLiteMaps} baseline={baseline} />}
-          {activeLevel === "rdm"      && <RollupTable data={levels.rdm} subLabel="RDM" baseline={baseline} ficomLookup={row => ficomMaps.bySubAor.get(row.key)} categoryLookup={row => ficomDashMaps.bySubAor.get(row.key)} ediLookup={ediLookupFor(ediLevels?.rdm)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" ficomLiteLookup={row => { const n = ficomRdmByCodeTop.get(row.key); return n?.emp_id ? ficomLiteMaps.byId.get(n.emp_id) : undefined }} ficomLiteNote="Belum ditarik Ficom Lite — klik &quot;Tarik Ficom Lite&quot; di Kelola Sumber Data" />}
+          {activeLevel === "rdm"      && <RollupTable data={levels.rdm} subLabel="RDM" baseline={baseline} ficomLookup={row => ficomMaps.bySubAor.get(row.key)} categoryLookup={row => ficomDashMaps.bySubAor.get(row.key)} ediLookup={ediLookupFor(ediLevels?.rdm)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" ficomLiteLookup={row => { const n = ficomRdmByCodeTop.get(row.key); return n ? ficomLiteLookupNode(ficomLiteMaps, n.emp_id, n.emp_name) : undefined }} ficomLiteNote="Belum ditarik Ficom Lite — klik &quot;Tarik Ficom Lite&quot; di Kelola Sumber Data" />}
           {activeLevel === "admads"   && <RollupTable data={ficomAdmAdsRows.rollup} subLabel="ADP Code" baseline={baseline} ficomLookup={row => ficomAdmAdsRows.ficomByKey.get(row.key)} ficomNote="Belum sync dari Ficom — klik &quot;Kelola Sumber Data&quot; di atas" categoryLookup={row => ficomAdmAdsRows.dashByKey.get(row.key)} categoryNote="Nama ADM/ADS tidak ketemu padanan di Ficom Dashboard Category" ediLookup={row => ficomAdmAdsRows.ediByKey.get(row.key)} ediNote="Belum ada data EDI untuk ADP ini" ficomLiteLookup={row => ficomAdmAdsRows.ficomLiteByKey.get(row.key)} ficomLiteNote="Belum ditarik Ficom Lite, atau ADM/ADS ini belum ketemu di Ficom Lite" />}
           {activeLevel === "adp"      && <RollupTable data={levels.adp} subLabel="AOR" baseline={baseline} ficomLookup={row => sumByAdp(row, salesmanMaps.byAdp)} ficomNote="Belum sinkron breakdown Salesman per ADP — klik &quot;Sync dari Ficom&quot; di atas" ediLookup={ediLookupFor(ediLevels?.adp)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />}
           {activeLevel === "salesman" && <RollupTable data={levels.salesman} subLabel="Route" baseline={baseline} ficomLookup={row => salesmanMaps.byName.get(normalizeSalesmanName(nameFromLabel(row.label)))} ficomNote="Nama Salesman tidak ketemu padanan di Ficom — belum tentu sama persis penulisannya, atau belum sync" categoryLookup={row => ficomDashMaps.bySalesmanName.get(normalizeSalesmanName(nameFromLabel(row.label)))} categoryNote="Nama Salesman tidak ketemu padanan di Ficom Dashboard Category" ediLookup={ediLookupFor(ediLevels?.salesman)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" ficomLiteLookup={row => ficomLiteMaps.byName.get(normalizeSalesmanName(nameFromLabel(row.label)))} ficomLiteNote="Nama Salesman tidak ketemu padanan di Ficom Lite" />}
