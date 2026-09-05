@@ -101,6 +101,98 @@ interface FicomSalesmanRow {
   omset: number
   raw: unknown
 }
+
+// ── Ficom Lite (api/ficom-lite-dashboard) — sumber KEEMPAT, terpisah dari
+// Main (detilChange), Dashboard Category (group-div), dan EDI Matrix di
+// atas. Cuma dipakai buat 1 metrik: "Monthly STT" (componentId "C12"),
+// dikonfirmasi user lewat capture manual per level:
+//   - RDM/ADM/ADS/Salesman → endpoint "team" (rekursif, sama pola dgn
+//     productivity-compare/page.tsx: kasih userId SD/RDM/ADM → balik
+//     daftar anak, berhenti begitu distributorId terisi = leaf salesman).
+//   - SD → endpoint "missions" (SATU-SATUNYA jalur yang balikin angka
+//     milik SD itu sendiri, bukan hasil jumlah RDM di bawahnya — beda
+//     dari Main yang harus dihitung bottom-up karena Ficom tidak expose
+//     angka SD asli lewat detilChange/team).
+// emp_id RDM/ADM/ADS di sini SAMA (kode WF####) dengan emp_id di
+// ficomOrgNodes (Main tree) — jadi dicocokkan LANGSUNG lewat emp_id,
+// tidak perlu regex nama kayak ficomMaps.bySubAor. Level Salesman tetap
+// dicocokkan lewat nama (normalizeSalesmanName) karena namespace ID-nya
+// beda dari sumber lain (konsisten dengan salesmanMaps.byName di atas).
+interface FicomLiteCard {
+  label: string; value: number | null; target: number | null; percent: number | null
+  componentId: string
+}
+interface FicomLiteTeamRow {
+  userId: string; name: string; cards: FicomLiteCard[]
+  distributorId: string | null
+}
+interface FicomLiteTeam { daily: FicomLiteTeamRow[]; monthly: FicomLiteTeamRow[] }
+interface FicomLiteValue { target: number; value: number }
+interface FicomLiteMissions { monthly: { missions: FicomLiteCard[] } }
+
+const FICOM_LITE_STT_COMPONENT = "C12"
+// Komponen ber-label STT/omset di Ficom Lite ditulis DALAM RIBUAN
+// (dikonfirmasi user, sama kayak OMSET_COMPONENTS di productivity-compare/
+// page.tsx) — dikali 1000 di sini biar satuannya sama dgn Excel/Main/Dash.
+const FICOM_LITE_SCALE = 1000
+
+function pickSttCard(cards: FicomLiteCard[]): FicomLiteValue | undefined {
+  const c = cards.find(c => c.componentId === FICOM_LITE_STT_COMPONENT)
+  if (!c || c.value == null || c.target == null) return undefined
+  return { target: c.target * FICOM_LITE_SCALE, value: c.value * FICOM_LITE_SCALE }
+}
+
+interface FicomLiteCrawlResult {
+  byId: Map<string, FicomLiteValue>      // key: userId (emp_id WF-code) — RDM/ADM/ADS
+  byName: Map<string, FicomLiteValue>    // key: nama dinormalisasi — fallback level Salesman
+}
+
+async function fetchFicomLiteTeamRaw(token: string, userId: string): Promise<FicomLiteTeam> {
+  return ficomGet<FicomLiteTeam>(`/api/ficom-lite-dashboard/team?user-id=${userId}`, token)
+}
+
+async function fetchFicomLiteMissions(token: string, userId: string): Promise<FicomLiteValue | undefined> {
+  const data = await ficomGet<FicomLiteMissions>(`/api/ficom-lite-dashboard/missions?user-id=${userId}`, token)
+  return pickSttCard(data.monthly?.missions || [])
+}
+
+async function crawlFicomLiteTeam(token: string, rootUserId: string, log: (m: string) => void): Promise<FicomLiteCrawlResult> {
+  const byId = new Map<string, FicomLiteValue>()
+  const byName = new Map<string, FicomLiteValue>()
+  const limiter = createLimiter(CRAWL_CONCURRENCY)
+  const seen = new Set<string>()
+  let visited = 0, failed = 0
+
+  async function visit(userId: string) {
+    if (seen.has(userId)) return
+    seen.add(userId)
+    let team: FicomLiteTeam
+    try {
+      team = await limiter(() => fetchFicomLiteTeamRaw(token, userId))
+    } catch (e) {
+      failed++
+      log(`⚠ Ficom Lite: gagal ambil node ${userId}: ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    visited++
+    if (visited % 10 === 0 || visited <= 3) log(`⏳ Ficom Lite: ${visited} node organisasi dicek...`)
+    const childIds: string[] = []
+    for (const row of [...team.daily, ...team.monthly]) {
+      const v = pickSttCard(row.cards)
+      if (v) {
+        byId.set(row.userId, v)
+        byName.set(row.name.replace(/\s+/g, "").toUpperCase(), v)
+      }
+      if (row.distributorId == null) childIds.push(row.userId)
+    }
+    await Promise.all(childIds.map(id => visit(id)))
+  }
+
+  await visit(rootUserId)
+  log(`✅ Ficom Lite selesai — ${visited} node organisasi dicek${failed ? `, ${failed} gagal` : ""}`)
+  return { byId, byName }
+}
+
 const MONTH_ID: Record<string, string> = {
   januari: "01", februari: "02", maret: "03", april: "04", mei: "05", juni: "06",
   juli: "07", agustus: "08", september: "09", oktober: "10", november: "11", desember: "12",
@@ -799,11 +891,13 @@ function RollupTable({
   ficomLookup, ficomNote = "Belum sinkron — klik \"Sync dari Ficom\" di atas",
   categoryLookup, categoryNote = "Belum sinkron — klik \"Sync dari Ficom\" di atas",
   ediLookup, ediNote = "Belum ada data EDI untuk periode ini — upload di atas",
+  ficomLiteLookup, ficomLiteNote = "Belum ditarik — klik \"Tarik Ficom Lite\" di atas",
 }: {
   data: RollupRow[]; subLabel?: string; baseline: BaselineKey
   ficomLookup?: (row: RollupRow) => FicomAgg | undefined; ficomNote?: string
   categoryLookup?: (row: RollupRow) => FicomAgg | undefined; categoryNote?: string
   ediLookup?: (row: RollupRow) => FicomAgg | undefined; ediNote?: string
+  ficomLiteLookup?: (row: RollupRow) => FicomLiteValue | undefined; ficomLiteNote?: string
 }) {
   const [search, setSearch] = useState("")
 
@@ -814,13 +908,14 @@ function RollupTable({
 
   const colLabel = (key: BaselineKey) => key === baseline ? `★ ${BASELINE_LABELS[key]}` : BASELINE_LABELS[key]
 
-  // Urutan kolom: Label/Area → Ficom Main → Ficom Dash. Category → Excel Target PHI → Matrix Target PHI
+  // Urutan kolom: Label/Area → Ficom Main → Ficom Dash. Category → Excel Target PHI → Matrix Target PHI → Ficom Lite
   const headers = ["", ...(subLabel ? [subLabel] : []),
     ...(ficomLookup ? [colLabel("ficom_main")] : []),
     ...(categoryLookup ? [colLabel("ficom_dash")] : []),
     colLabel("excel"),
-    ...(ediLookup ? [colLabel("matrix_edi")] : [])]
-  const numericFrom = headers.length - ((ficomLookup ? 1 : 0) + (categoryLookup ? 1 : 0) + 1 + (ediLookup ? 1 : 0))
+    ...(ediLookup ? [colLabel("matrix_edi")] : []),
+    ...(ficomLiteLookup ? [colLabel("ficom_lite")] : [])]
+  const numericFrom = headers.length - ((ficomLookup ? 1 : 0) + (categoryLookup ? 1 : 0) + 1 + (ediLookup ? 1 : 0) + (ficomLiteLookup ? 1 : 0))
 
   return (
     <div>
@@ -851,6 +946,7 @@ function RollupTable({
                 ficom_main: ficomLookup?.(row)?.target,
                 ficom_dash: categoryLookup?.(row)?.target,
                 matrix_edi: ediLookup?.(row)?.target,
+                ficom_lite: ficomLiteLookup?.(row)?.target,
               }
               return (
                 <tr key={row.key} style={{ borderBottom: "1px solid var(--border)" }}>
@@ -860,6 +956,7 @@ function RollupTable({
                   {categoryLookup && <td style={{ padding: "9px 12px", textAlign: "right" }}><ValueCell value={values.ficom_dash} colKey="ficom_dash" baseline={baseline} values={values} note={categoryNote} /></td>}
                   <td style={{ padding: "9px 12px", textAlign: "right" }}><ValueCell value={values.excel} colKey="excel" baseline={baseline} values={values} /></td>
                   {ediLookup && <td style={{ padding: "9px 12px", textAlign: "right" }}><ValueCell value={values.matrix_edi} colKey="matrix_edi" baseline={baseline} values={values} note={ediNote} /></td>}
+                  {ficomLiteLookup && <td style={{ padding: "9px 12px", textAlign: "right" }}><ValueCell value={values.ficom_lite} colKey="ficom_lite" baseline={baseline} values={values} note={ficomLiteNote} /></td>}
                 </tr>
               )
             })}
@@ -1234,12 +1331,13 @@ function PcodeCategoryTree({
 // Dulu SEMUA hitungan beda % hardcode ke Excel Target PHI sebagai acuan
 // tetap. Sekarang user bisa pilih sumber mana pun jadi acuan (mis. "Ficom
 // Main"), sumber lain (termasuk Excel) dibandingkan TERHADAP acuan itu.
-type BaselineKey = "excel" | "ficom_main" | "ficom_dash" | "matrix_edi"
+type BaselineKey = "excel" | "ficom_main" | "ficom_dash" | "matrix_edi" | "ficom_lite"
 const BASELINE_LABELS: Record<BaselineKey, string> = {
   excel: "Excel Target PHI",
   ficom_main: "Ficom Main",
   ficom_dash: "Ficom Dash. Category",
   matrix_edi: "Matrix Target PHI",
+  ficom_lite: "Ficom Lite (Monthly STT)",
 }
 type BaselineValues = Partial<Record<BaselineKey, number | undefined>>
 
@@ -1294,7 +1392,7 @@ function ValueCell({ value, colKey, baseline, values, note }: {
 // di bawah Salesman murni Excel vs EDI, karena Ficom tidak sampai situ.
 // ─────────────────────────────────────────────────────────────
 function OrgHierarchyTree({
-  rows, ediRows, masterByAdp, ficomOrgNodes, admAdsAdpCodes, ficomMaps, ficomDashMaps, salesmanMaps, baseline,
+  rows, ediRows, masterByAdp, ficomOrgNodes, admAdsAdpCodes, ficomMaps, ficomDashMaps, salesmanMaps, ficomLiteMaps, baseline,
 }: {
   rows: ExcelRow[]
   ediRows: ExcelRow[]
@@ -1304,6 +1402,7 @@ function OrgHierarchyTree({
   ficomMaps: { bySubAor: Map<string, FicomAgg> }
   ficomDashMaps: { bySubAor: Map<string, FicomAgg>; byEmpName: Map<string, FicomAgg>; bySalesmanName: Map<string, FicomAgg> }
   salesmanMaps: { byAdp: Map<string, FicomAgg>; byName: Map<string, FicomAgg> }
+  ficomLiteMaps: { byId: Map<string, FicomLiteValue>; byName: Map<string, FicomLiteValue> }
   baseline: BaselineKey
 }) {
   const [openRdm, setOpenRdm] = useState<Set<string>>(new Set())
@@ -1333,7 +1432,7 @@ function OrgHierarchyTree({
     return m
   }, [ficomOrgNodes])
 
-  const gridCols = "1fr 140px 140px 140px 140px"
+  const gridCols = "1fr 140px 140px 140px 140px 140px"
   const colLabel = (key: BaselineKey, label: string) => key === baseline ? `★ ${label}` : label
 
   return (
@@ -1344,6 +1443,7 @@ function OrgHierarchyTree({
         <div style={{ textAlign: "right" }}>{colLabel("ficom_dash", "Ficom Dash. Category")}</div>
         <div style={{ textAlign: "right" }}>{colLabel("excel", "Excel Target PHI")}</div>
         <div style={{ textAlign: "right" }}>{colLabel("matrix_edi", "Matrix Target PHI")}</div>
+        <div style={{ textAlign: "right" }}>{colLabel("ficom_lite", "Ficom Lite (STT)")}</div>
       </div>
 
       {rdmRows.map(rdm => {
@@ -1355,11 +1455,13 @@ function OrgHierarchyTree({
         const admNodes = rdmFicomNode?.emp_id
           ? ficomOrgNodes.filter(n => n.level === "ADM_ADS" && n.parent_emp_id === rdmFicomNode.emp_id && n.emp_id)
           : []
+        const rdmFicomLite = rdmFicomNode?.emp_id ? ficomLiteMaps.byId.get(rdmFicomNode.emp_id) : undefined
         const rdmValues: BaselineValues = {
           ficom_main: ficomMaps.bySubAor.get(rdm.key)?.target,
           ficom_dash: ficomDashMaps.bySubAor.get(rdm.key)?.target,
           excel: rdm.targetAmount,
           matrix_edi: rdmEdiRows.length ? rdmEdiTotal : undefined,
+          ficom_lite: rdmFicomLite?.target,
         }
         return (
           <div key={rdm.key} style={{ borderBottom: "1px solid var(--border)" }}>
@@ -1373,6 +1475,7 @@ function OrgHierarchyTree({
               <div style={{ textAlign: "right" }}><ValueCell value={rdmValues.ficom_dash} colKey="ficom_dash" baseline={baseline} values={rdmValues} /></div>
               <div style={{ textAlign: "right" }}><ValueCell value={rdmValues.excel} colKey="excel" baseline={baseline} values={rdmValues} /></div>
               <div style={{ textAlign: "right" }}><ValueCell value={rdmValues.matrix_edi} colKey="matrix_edi" baseline={baseline} values={rdmValues} note="Belum ada data EDI" /></div>
+              <div style={{ textAlign: "right" }}><ValueCell value={rdmValues.ficom_lite} colKey="ficom_lite" baseline={baseline} values={rdmValues} note="Belum ditarik Ficom Lite, atau RDM ini belum ketemu di Ficom Lite" /></div>
             </div>
 
             {rdmOpen && admNodes.map(admNode => {
@@ -1386,11 +1489,13 @@ function OrgHierarchyTree({
               const admEdiTotal = admEdiRows.reduce((s, r) => s + r.target_amount, 0)
               const slsRows = aggregate(admExcelRows, r => r.salesman_code, r => `${r.salesman_code} · ${r.salesman_name}`, r => r.route)
               const ficomDashAdm = ficomDashMaps.byEmpName.get(normalizeEmpName(admNode.emp_name))
+              const admFicomLite = ficomLiteMaps.byId.get(admEmpId)
               const admValues: BaselineValues = {
                 ficom_main: admNode.target,
                 ficom_dash: ficomDashAdm?.target,
                 excel: admExcelTotal,
                 matrix_edi: admEdiRows.length ? admEdiTotal : undefined,
+                ficom_lite: admFicomLite?.target,
               }
               return (
                 <div key={admKey}>
@@ -1405,6 +1510,7 @@ function OrgHierarchyTree({
                     <div style={{ textAlign: "right" }}><ValueCell value={admValues.ficom_dash} colKey="ficom_dash" baseline={baseline} values={admValues} note="Nama ADM/ADS tidak ketemu padanan di Ficom Dashboard Category" /></div>
                     <div style={{ textAlign: "right" }}><ValueCell value={admValues.excel} colKey="excel" baseline={baseline} values={admValues} /></div>
                     <div style={{ textAlign: "right" }}><ValueCell value={admValues.matrix_edi} colKey="matrix_edi" baseline={baseline} values={admValues} note="Belum ada data EDI" /></div>
+                    <div style={{ textAlign: "right" }}><ValueCell value={admValues.ficom_lite} colKey="ficom_lite" baseline={baseline} values={admValues} note="Belum ditarik Ficom Lite, atau ADM/ADS ini belum ketemu di Ficom Lite" /></div>
                   </div>
 
                   {admOpen && slsRows.map(sls => {
@@ -1416,11 +1522,13 @@ function OrgHierarchyTree({
                     const slsEdiSkuRows = aggregate(slsEdiRows, r => r.sku_code, r => `${r.sku_code} · ${r.sku_description}`)
                     const ficomSls = salesmanMaps.byName.get(normalizeSalesmanName(nameFromLabel(sls.label)))
                     const ficomDashSls = ficomDashMaps.bySalesmanName.get(normalizeSalesmanName(nameFromLabel(sls.label)))
+                    const ficomLiteSls = ficomLiteMaps.byName.get(normalizeSalesmanName(nameFromLabel(sls.label)))
                     const slsValues: BaselineValues = {
                       ficom_main: ficomSls?.target,
                       ficom_dash: ficomDashSls?.target,
                       excel: sls.targetAmount,
                       matrix_edi: slsEdiRows.length ? slsEdiRows.reduce((s, r) => s + r.target_amount, 0) : undefined,
+                      ficom_lite: ficomLiteSls?.target,
                     }
                     return (
                       <div key={slsKey}>
@@ -1435,6 +1543,7 @@ function OrgHierarchyTree({
                           <div style={{ textAlign: "right" }}><ValueCell value={slsValues.ficom_dash} colKey="ficom_dash" baseline={baseline} values={slsValues} note="Nama tidak ketemu padanan di Ficom Dashboard Category" /></div>
                           <div style={{ textAlign: "right" }}><ValueCell value={slsValues.excel} colKey="excel" baseline={baseline} values={slsValues} /></div>
                           <div style={{ textAlign: "right" }}><ValueCell value={slsValues.matrix_edi} colKey="matrix_edi" baseline={baseline} values={slsValues} note="Belum ada data EDI" /></div>
+                          <div style={{ textAlign: "right" }}><ValueCell value={slsValues.ficom_lite} colKey="ficom_lite" baseline={baseline} values={slsValues} note="Nama tidak ketemu padanan di Ficom Lite" /></div>
                         </div>
                         {slsOpen && (
                           <div style={{ padding: "8px 12px 12px 60px" }}>
@@ -1548,10 +1657,37 @@ export default function TargetComparePage() {
   const [ficomSalesmanRows, setFicomSalesmanRows] = useState<FicomSalesmanRow[]>([])
   const [ficomDashSalesmanRows, setFicomDashSalesmanRows] = useState<FicomSalesmanRow[]>([])
 
+  // ── Ficom Lite (Monthly STT) — validasi silang manual, TERPISAH dari
+  // handleSync di atas (bisa makan waktu crawl ratusan node, datanya "live
+  // hari ini" jadi sengaja tidak disimpan ke Supabase — persis pola tombol
+  // "Validasi Ficom Lite" di productivity-compare/page.tsx).
+  const [ficomLiteResult, setFicomLiteResult] = useState<FicomLiteCrawlResult | null>(null)
+  const [ficomLiteSd, setFicomLiteSd] = useState<FicomLiteValue | undefined>(undefined)
+  const [ficomLiteCrawling, setFicomLiteCrawling] = useState(false)
+  const [ficomLiteLog, setFicomLiteLog] = useState<string[]>([])
+
   useEffect(() => {
     supabase.from("ficom_passwords").select("user_login,password").eq("position", "SD").limit(1).maybeSingle()
       .then(({ data }) => setFicomCred(data || null))
   }, [])
+
+  const handleFicomLiteCrawl = async () => {
+    if (!ficomCred) { setFicomLiteLog(["❌ Belum ada akun SD di Master Data → Ficom Password"]); return }
+    setFicomLiteCrawling(true); setFicomLiteLog([])
+    const addFlLog = (m: string) => setFicomLiteLog(l => [...l.slice(-40), m])
+    try {
+      addFlLog(`🔐 Login sbg ${ficomCred.user_login}...`)
+      const token = await ficomLogin(ficomCred.user_login, ficomCred.password)
+      const sd = await fetchFicomLiteMissions(token, ficomCred.user_login)
+      setFicomLiteSd(sd)
+      addFlLog(sd ? `✅ SD: Monthly STT target ${fmt(sd.target)}` : "⚠ SD: componentId C12 tidak ditemukan di missions")
+      const result = await crawlFicomLiteTeam(token, ficomCred.user_login, addFlLog)
+      setFicomLiteResult(result)
+    } catch (e) {
+      addFlLog(`❌ ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setFicomLiteCrawling(false)
+  }
 
   const handleSync = async () => {
     if (!ficomCred) { setFicomError("Belum ada akun SD di Master Data → Ficom Password"); return }
@@ -1668,6 +1804,21 @@ export default function TargetComparePage() {
     return { sd, bySubAor }
   }, [ficomOrgNodes])
 
+  // Node RDM Main by kode Sub AOR — dipakai buat cari emp_id RDM (jembatan
+  // ke ficomLiteMaps.byId) di tab "RDM" (flat RollupTable), sama persis
+  // logikanya dengan ficomRdmByCode di dalam OrgHierarchyTree, cuma versi
+  // top-level karena tab RDM dirender langsung di sini, bukan lewat
+  // OrgHierarchyTree.
+  const ficomRdmByCodeTop = useMemo(() => {
+    const m = new Map<string, FicomOrgNode>()
+    for (const n of ficomOrgNodes) {
+      if (n.level !== "RDM") continue
+      const code = extractSubAor(n.emp_name)
+      if (code) m.set(code, n)
+    }
+    return m
+  }, [ficomOrgNodes])
+
   // Sama seperti ficomMaps, tapi dari sumber Dashboard Category (group-div) —
   // dipakai buat kolom/kartu "Ficom Dash. Category".
   const ficomDashMaps = useMemo(() => {
@@ -1710,6 +1861,14 @@ export default function TargetComparePage() {
     return { byAdp, byName }
   }, [ficomSalesmanRows])
 
+  // Fallback map kosong biar OrgHierarchyTree/RollupTable tidak perlu cek
+  // null tiap kali lookup — tetap aman dipanggil sebelum tombol "Tarik
+  // Ficom Lite" pernah diklik (ficomLiteResult masih null).
+  const ficomLiteMaps = useMemo(() => ({
+    byId: ficomLiteResult?.byId ?? new Map<string, FicomLiteValue>(),
+    byName: ficomLiteResult?.byName ?? new Map<string, FicomLiteValue>(),
+  }), [ficomLiteResult])
+
   // ADP code per node ADM_ADS di org tree Main — didapat dari child-nya di
   // level "SALESMAN" (breakdown per-distributor, lihat extractAdpCodeFromDistName).
   // Biasanya 1:1 (satu ADM/ADS cuma pegang 1 distributor), tapi disimpan
@@ -1741,6 +1900,7 @@ export default function TargetComparePage() {
     const ficomByKey = new Map<string, FicomAgg>()
     const dashByKey = new Map<string, FicomAgg>()
     const ediByKey = new Map<string, FicomAgg>()
+    const ficomLiteByKey = new Map<string, FicomLiteValue>()
     for (const n of ficomOrgNodes) {
       if (n.level !== "ADM_ADS" || !n.emp_id) continue
       const empId = n.emp_id
@@ -1757,10 +1917,12 @@ export default function TargetComparePage() {
       if (dash) dashByKey.set(empId, dash)
       const ediRowsForNode = ediRows.filter(r => adpCodes.has(r.adp_code))
       if (ediRowsForNode.length) ediByKey.set(empId, { target: ediRowsForNode.reduce((s, r) => s + r.target_amount, 0), actual: 0 })
+      const flVal = ficomLiteMaps.byId.get(empId)
+      if (flVal) ficomLiteByKey.set(empId, flVal)
     }
     rollup.sort((a, b) => b.targetAmount - a.targetAmount)
-    return { rollup, ficomByKey, dashByKey, ediByKey }
-  }, [ficomOrgNodes, admAdsAdpCodes, rows, ediRows, ficomDashMaps])
+    return { rollup, ficomByKey, dashByKey, ediByKey, ficomLiteByKey }
+  }, [ficomOrgNodes, admAdsAdpCodes, rows, ediRows, ficomDashMaps, ficomLiteMaps])
 
   // ── Ficom Dashboard Category — dipakai buat drill-down Divisi→Subbrand
   // langsung di tab Pcode, bukan section terpisah. Datanya sudah ada dari
@@ -1980,6 +2142,21 @@ export default function TargetComparePage() {
                 Belum ada data EDI — upload di &quot;Kelola Sumber Data&quot;
               </div>
             )}
+            {ficomLiteSd ? (
+              <div style={{ borderLeft: "1px solid rgba(255,255,255,0.3)", paddingLeft: "24px" }}>
+                <div style={{ fontSize: "10px", fontWeight: 700, opacity: 0.85, textTransform: "uppercase", letterSpacing: "0.06em" }}>Ficom Lite (Monthly STT)</div>
+                <div style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "-0.02em", marginTop: "4px" }}>{fmt(ficomLiteSd.target)}</div>
+                <div style={{ fontSize: "12px", fontWeight: 700, marginTop: "2px" }}>
+                  {Math.abs(ficomLiteSd.target - summary.grandAmount) / (summary.grandAmount || 1) * 100 <= 1
+                    ? "✓ cocok dengan Excel"
+                    : `⚠ beda ${(Math.abs(ficomLiteSd.target - summary.grandAmount) / (summary.grandAmount || 1) * 100).toFixed(1)}% dari Excel`}
+                </div>
+              </div>
+            ) : (
+              <div style={{ borderLeft: "1px solid rgba(255,255,255,0.3)", paddingLeft: "24px", display: "flex", alignItems: "center", fontSize: "12px", opacity: 0.85 }}>
+                Belum ditarik Ficom Lite — klik &quot;Kelola Sumber Data&quot; di atas
+              </div>
+            )}
           </div>
 
           {/* Tabs + Patokan */}
@@ -2011,11 +2188,11 @@ export default function TargetComparePage() {
             </div>
           </div>
 
-          {activeLevel === "hierarchy" && <OrgHierarchyTree rows={rows} ediRows={ediRows} masterByAdp={masterByAdp} ficomOrgNodes={ficomOrgNodes} admAdsAdpCodes={admAdsAdpCodes} ficomMaps={ficomMaps} ficomDashMaps={ficomDashMaps} salesmanMaps={salesmanMaps} baseline={baseline} />}
-          {activeLevel === "rdm"      && <RollupTable data={levels.rdm} subLabel="RDM" baseline={baseline} ficomLookup={row => ficomMaps.bySubAor.get(row.key)} categoryLookup={row => ficomDashMaps.bySubAor.get(row.key)} ediLookup={ediLookupFor(ediLevels?.rdm)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />}
-          {activeLevel === "admads"   && <RollupTable data={ficomAdmAdsRows.rollup} subLabel="ADP Code" baseline={baseline} ficomLookup={row => ficomAdmAdsRows.ficomByKey.get(row.key)} ficomNote="Belum sync dari Ficom — klik &quot;Kelola Sumber Data&quot; di atas" categoryLookup={row => ficomAdmAdsRows.dashByKey.get(row.key)} categoryNote="Nama ADM/ADS tidak ketemu padanan di Ficom Dashboard Category" ediLookup={row => ficomAdmAdsRows.ediByKey.get(row.key)} ediNote="Belum ada data EDI untuk ADP ini" />}
+          {activeLevel === "hierarchy" && <OrgHierarchyTree rows={rows} ediRows={ediRows} masterByAdp={masterByAdp} ficomOrgNodes={ficomOrgNodes} admAdsAdpCodes={admAdsAdpCodes} ficomMaps={ficomMaps} ficomDashMaps={ficomDashMaps} salesmanMaps={salesmanMaps} ficomLiteMaps={ficomLiteMaps} baseline={baseline} />}
+          {activeLevel === "rdm"      && <RollupTable data={levels.rdm} subLabel="RDM" baseline={baseline} ficomLookup={row => ficomMaps.bySubAor.get(row.key)} categoryLookup={row => ficomDashMaps.bySubAor.get(row.key)} ediLookup={ediLookupFor(ediLevels?.rdm)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" ficomLiteLookup={row => { const n = ficomRdmByCodeTop.get(row.key); return n?.emp_id ? ficomLiteMaps.byId.get(n.emp_id) : undefined }} ficomLiteNote="Belum ditarik Ficom Lite — klik &quot;Tarik Ficom Lite&quot; di Kelola Sumber Data" />}
+          {activeLevel === "admads"   && <RollupTable data={ficomAdmAdsRows.rollup} subLabel="ADP Code" baseline={baseline} ficomLookup={row => ficomAdmAdsRows.ficomByKey.get(row.key)} ficomNote="Belum sync dari Ficom — klik &quot;Kelola Sumber Data&quot; di atas" categoryLookup={row => ficomAdmAdsRows.dashByKey.get(row.key)} categoryNote="Nama ADM/ADS tidak ketemu padanan di Ficom Dashboard Category" ediLookup={row => ficomAdmAdsRows.ediByKey.get(row.key)} ediNote="Belum ada data EDI untuk ADP ini" ficomLiteLookup={row => ficomAdmAdsRows.ficomLiteByKey.get(row.key)} ficomLiteNote="Belum ditarik Ficom Lite, atau ADM/ADS ini belum ketemu di Ficom Lite" />}
           {activeLevel === "adp"      && <RollupTable data={levels.adp} subLabel="AOR" baseline={baseline} ficomLookup={row => sumByAdp(row, salesmanMaps.byAdp)} ficomNote="Belum sinkron breakdown Salesman per ADP — klik &quot;Sync dari Ficom&quot; di atas" ediLookup={ediLookupFor(ediLevels?.adp)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />}
-          {activeLevel === "salesman" && <RollupTable data={levels.salesman} subLabel="Route" baseline={baseline} ficomLookup={row => salesmanMaps.byName.get(normalizeSalesmanName(nameFromLabel(row.label)))} ficomNote="Nama Salesman tidak ketemu padanan di Ficom — belum tentu sama persis penulisannya, atau belum sync" categoryLookup={row => ficomDashMaps.bySalesmanName.get(normalizeSalesmanName(nameFromLabel(row.label)))} categoryNote="Nama Salesman tidak ketemu padanan di Ficom Dashboard Category" ediLookup={ediLookupFor(ediLevels?.salesman)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />}
+          {activeLevel === "salesman" && <RollupTable data={levels.salesman} subLabel="Route" baseline={baseline} ficomLookup={row => salesmanMaps.byName.get(normalizeSalesmanName(nameFromLabel(row.label)))} ficomNote="Nama Salesman tidak ketemu padanan di Ficom — belum tentu sama persis penulisannya, atau belum sync" categoryLookup={row => ficomDashMaps.bySalesmanName.get(normalizeSalesmanName(nameFromLabel(row.label)))} categoryNote="Nama Salesman tidak ketemu padanan di Ficom Dashboard Category" ediLookup={ediLookupFor(ediLevels?.salesman)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" ficomLiteLookup={row => ficomLiteMaps.byName.get(normalizeSalesmanName(nameFromLabel(row.label)))} ficomLiteNote="Nama Salesman tidak ketemu padanan di Ficom Lite" />}
           {activeLevel === "pcode"    && (
             divisionNodes.length > 0
               ? <PcodeCategoryTree rows={rows} divisionNodes={divisionNodes} subbrandsByDivision={subbrandsByDivision} productsBySubbrand={productsBySubbrand} baseline={baseline} ediLookup={ediLookupFor(ediLevels?.pcode)} ediNote="Belum ada data EDI — upload di Kelola Sumber Data" />
@@ -2075,6 +2252,26 @@ export default function TargetComparePage() {
           {ficomLog.length > 0 && (
             <div style={{ marginTop: "10px", maxHeight: "140px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
               {ficomLog.map((l, i) => <div key={i} style={{ fontSize: "11px", color: l.startsWith("✅") || l.startsWith("🎉") ? "#166534" : "var(--text3)" }}>{l}</div>)}
+            </div>
+          )}
+        </div>
+
+        {/* Tarik Ficom Lite (Monthly STT) — sumber KEEMPAT, terpisah dari
+            Sync dari Ficom di atas. Live hari ini, tidak disimpan ke DB —
+            harus ditarik ulang tiap buka halaman kalau mau lihat kolom
+            "Ficom Lite" terisi. */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 18px" }}>
+          <div style={{ fontSize: "13px", fontWeight: 800, marginBottom: "4px" }}>⚡ Tarik Ficom Lite (Monthly STT)</div>
+          <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "12px" }}>
+            Sumber terpisah dari Main/Dashboard Category di atas — nge-crawl <code>api/ficom-lite-dashboard</code> (SD lewat <code>missions</code>, RDM/ADM/ADS/Salesman lewat <code>team</code>, rekursif). Cuma isi kolom &quot;Ficom Lite (Monthly STT)&quot;, datanya live hari ini (tidak disimpan), jadi tarik ulang tiap kali mau lihat angka terbaru.
+          </div>
+          <button onClick={handleFicomLiteCrawl} disabled={ficomLiteCrawling || !ficomCred}
+            style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 18px", borderRadius: "8px", border: "none", background: ficomLiteCrawling || !ficomCred ? "#94A3B8" : "#7C3AED", color: "white", fontSize: "12px", fontWeight: 700, cursor: ficomLiteCrawling || !ficomCred ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
+            {ficomLiteCrawling ? <><RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} /> Crawl...</> : "Tarik Ficom Lite"}
+          </button>
+          {ficomLiteLog.length > 0 && (
+            <div style={{ marginTop: "10px", maxHeight: "140px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>
+              {ficomLiteLog.map((l, i) => <div key={i} style={{ fontSize: "11px", color: l.startsWith("✅") || l.startsWith("🎉") ? "#166534" : l.startsWith("❌") ? "#991B1B" : "var(--text3)" }}>{l}</div>)}
             </div>
           )}
         </div>
