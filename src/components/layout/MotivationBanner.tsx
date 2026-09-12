@@ -2,7 +2,7 @@
 
 // Taruh di: src/components/layout/MotivationBanner.tsx
 
-type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password" | "data-transfer" | "productivity-compare"
+type PageType = "home" | "notulensi" | "finance" | "kanban" | "userflow" | "docreq" | "restore" | "master-data" | "ficom-password" | "data-transfer" | "productivity-compare" | "logix-tickets"
 
 const QUOTES: Record<PageType, string[]> = {
   home: [
@@ -104,6 +104,15 @@ const QUOTES: Record<PageType, string[]> = {
     "Satu salesman yang aktif hari ini adalah satu target yang lebih dekat tercapai.",
     "Produktivitas terlihat dari angka — tapi lahir dari konsistensi harian.",
   ],
+  "logix-tickets": [
+    "Setiap tiket yang selesai adalah satu masalah yang tidak lagi mengganggu pengguna.",
+    "Response time cepat adalah bentuk respect ke pengguna yang menunggu.",
+    "BR yang terlacak jelas adalah BR yang pasti selesai, bukan yang terlupakan.",
+    "Tiket yang menumpuk hari ini adalah keluhan yang membesar besok.",
+    "Satu status yang ter-update adalah satu kepercayaan yang terjaga.",
+    "Support terbaik bukan yang tercepat menjawab, tapi yang paling tuntas menyelesaikan.",
+    "Setiap OPEN BR yang closed adalah bukti tim bergerak, bukan cuma menunggu.",
+  ],
 }
 
 const CONFIG: Record<PageType, {
@@ -122,6 +131,7 @@ const CONFIG: Record<PageType, {
   "data-transfer":   { label: "Data Naik, Report Aman",          emoji: "📡",  bg: "linear-gradient(135deg,#ecfeff,#cffafe)", border: "#a5f3fc", labelColor: "#0891B2", textColor: "#164e63", primary: "#06b6d4", light: "#a5f3fc" },
   "ficom-password":  { label: "Jaga Akses, Jaga Kepercayaan",  emoji: "🔐",  bg: "linear-gradient(135deg,#fdf4ff,#fae8ff)", border: "#e9d5ff", labelColor: "#7C3AED", textColor: "#581c87", primary: "#a855f7", light: "#e9d5ff" },
   "productivity-compare": { label: "Target vs Realisasi, Jelas Tanpa Ragu", emoji: "📈", bg: "linear-gradient(135deg,#f0fdf4,#dcfce7)", border: "#bbf7d0", labelColor: "#16A34A", textColor: "#14532d", primary: "#22c55e", light: "#86efac" },
+  "logix-tickets": { label: "Ticket Commander", emoji: "🎫", bg: "linear-gradient(135deg,#fef2f2,#ffedd5)", border: "#fecaca", labelColor: "#DC2626", textColor: "#7c2d12", primary: "#F97316", light: "#fed7aa" },
 }
 
 function getDailyQuote(page: PageType): string {
@@ -348,6 +358,29 @@ function RestoreSVG({ p, l }: { p: string; l: string }) {
   )
 }
 
+function LogixTicketsSVG({ p, l }: { p: string; l: string }) {
+  return (
+    <>
+      <style>{`
+        @keyframes lg-pop   { 0%,40%{r:0} 70%,100%{r:6} }
+        @keyframes lg-check { 0%,40%{stroke-dashoffset:10} 80%,100%{stroke-dashoffset:0} }
+        @keyframes lg-blink { 0%,90%,100%{opacity:1} 95%{opacity:0.3} }
+        .lg-circ  { animation: lg-pop 3s ease-in-out infinite }
+        .lg-tick  { stroke-dasharray:10; animation: lg-check 3s ease-in-out infinite }
+        .lg-dot   { animation: lg-blink 1.6s ease-in-out infinite }
+      `}</style>
+      <svg width="72" height="72" viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
+        <path d="M8 22 a4 4 0 0 1 0-8 h48 a4 4 0 0 1 0 8 a4 4 0 0 0 0 8 a4 4 0 0 1 0 8 h-48 a4 4 0 0 1 0-8 a4 4 0 0 0 0-8 Z" fill={l} stroke={p} strokeWidth="1.5" transform="translate(0,10)" />
+        <line x1="32" y1="16" x2="32" y2="48" stroke={p} strokeWidth="1.5" strokeDasharray="3 3" opacity="0.5" />
+        <circle cx="20" cy="32" r="2" fill={p} className="lg-dot" />
+        <circle cx="20" cy="40" r="2" fill={p} className="lg-dot" />
+        <circle cx="48" cy="48" r="0" fill="#22c55e" className="lg-circ" />
+        <path d="M45 48 L47 50 L51 45" stroke="white" strokeWidth="1.5" fill="none" strokeLinecap="round" className="lg-tick" />
+      </svg>
+    </>
+  )
+}
+
 export default function MotivationBanner({ page }: { page: PageType }) {
   const c = CONFIG[page]
   const quote = getDailyQuote(page)
@@ -378,6 +411,7 @@ export default function MotivationBanner({ page }: { page: PageType }) {
       {page === "userflow"  && <UserFlowSVG  {...svgProps} />}
       {page === "docreq"   && <DocReqSVG    p={c.primary} l={c.light} />}
       {page === "restore"  && <RestoreSVG   p={c.primary} l={c.light} />}
+      {page === "logix-tickets" && <LogixTicketsSVG {...svgProps} />}
 
       {/* Text */}
       <div style={{ flex: 1, position: "relative" }}>

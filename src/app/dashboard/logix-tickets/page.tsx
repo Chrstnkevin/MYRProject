@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, Fragment } from "react"
 import {
   Ticket, RefreshCw, Search, AlertCircle, KeyRound, Settings,
   ChevronUp, ChevronDown, Eye, EyeOff, Save, ExternalLink,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, X, Copy, Check,
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
@@ -69,6 +69,60 @@ function currentPic(t: LogixTicket): string {
   return t.nm_dev || t.nm_br || t.nm_tas || "—"
 }
 
+// ── Timeline internal per-tiket (khusus status Logix "OPEN BR") ────
+// Data tiket sendiri tidak disimpan di Supabase (selalu live dari Logix),
+// jadi tabel ini cuma anotasi lokal dikaitkan lewat no_ticket sebagai key.
+// Satu tiket bisa punya beberapa baris (one-to-many) — satu per tahap.
+interface TimelineEntry {
+  id: string
+  no_ticket: string
+  status: string
+  date_from: string | null
+  date_to: string | null
+  created_at: string
+}
+const TIMELINE_STAGES = [
+  "OPEN TRACE", "OPEN DR PI", "OPEN REVIEW BR", "OPG DEV", "OPEN TEST",
+  "READY TO PILOT", "PILOT", "RELEASE", "OK+NOTE", "NOT OK",
+]
+const STAGE_COLOR: Record<string, { bg: string; color: string }> = {
+  "OPEN TRACE":     { bg: "#DBEAFE", color: "#1D4ED8" },
+  "OPEN DR PI":     { bg: "#FEE2E2", color: "#B91C1C" },
+  "OPEN REVIEW BR": { bg: "#EDE9FE", color: "#7C3AED" },
+  "OPG DEV":        { bg: "#E0F2FE", color: "#0369A1" },
+  "OPEN TEST":      { bg: "#FEF3C7", color: "#92400E" },
+  "READY TO PILOT": { bg: "#D1FAE5", color: "#047857" },
+  "PILOT":          { bg: "#ECFCCB", color: "#4D7C0F" },
+  "RELEASE":        { bg: "#DCFCE7", color: "#166534" },
+  "OK+NOTE":        { bg: "#1D4ED8", color: "#FFFFFF" },
+  "NOT OK":         { bg: "#DC2626", color: "#FFFFFF" },
+}
+function isoDate(d: Date): string {
+  return d.toISOString().slice(0, 10)
+}
+function startOfWeek(iso: string): string {
+  const d = new Date(iso + "T00:00:00")
+  const day = d.getDay()
+  const diff = day === 0 ? -6 : 1 - day // Senin sebagai awal minggu
+  d.setDate(d.getDate() + diff)
+  return isoDate(d)
+}
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00")
+  d.setDate(d.getDate() + days)
+  return isoDate(d)
+}
+function fmtWeekLabel(weekStartIso: string): string {
+  const start = new Date(weekStartIso + "T00:00:00")
+  const end = new Date(addDaysIso(weekStartIso, 6) + "T00:00:00")
+  const sameMonth = start.getMonth() === end.getMonth()
+  const optsDay: Intl.DateTimeFormatOptions = { day: "2-digit" }
+  const optsFull: Intl.DateTimeFormatOptions = { day: "2-digit", month: "short" }
+  const startLabel = start.toLocaleDateString("id-ID", sameMonth ? optsDay : optsFull)
+  const endLabel = end.toLocaleDateString("id-ID", optsFull)
+  return `${startLabel}–${endLabel}`
+}
+
 export default function LogixTicketsPage() {
   const [tickets, setTickets] = useState<LogixTicket[]>([])
   const [recordsTotal, setRecordsTotal] = useState("0")
@@ -81,6 +135,13 @@ export default function LogixTicketsPage() {
   const [tipeFilter, setTipeFilter] = useState("ALL")
   const [userFilter, setUserFilter] = useState("ALL")
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
+
+  // ── Timeline internal (Open BR) — semua tahap tetap langsung ditampilkan per tiket,
+  // tinggal isi rentang tanggalnya per tahap ──
+  const [timelines, setTimelines] = useState<TimelineEntry[]>([])
+  const [stageDraft, setStageDraft] = useState<Record<string, { from: string; to: string }>>({})
+  const [timelineSaving, setTimelineSaving] = useState(false)
+  const [timelineError, setTimelineError] = useState("")
 
   // ── Kelola Kredensial (collapsed by default) ──
   const [credOpen, setCredOpen] = useState(false)
@@ -115,7 +176,91 @@ export default function LogixTicketsPage() {
     if (data) { setCredEmail(data.email); setCredPassword(data.password) }
   }
 
-  useEffect(() => { loadCredentials(); fetchTickets() }, [])
+  const loadTimelines = async () => {
+    const { data } = await supabase.from("logix_ticket_timeline").select("*").order("date_from", { ascending: true })
+    if (data) setTimelines(data as TimelineEntry[])
+  }
+
+  useEffect(() => { loadCredentials(); fetchTickets(); loadTimelines() }, [])
+
+  const timelineByTicket = useMemo(() => {
+    const m = new Map<string, TimelineEntry[]>()
+    for (const t of timelines) {
+      if (!m.has(t.no_ticket)) m.set(t.no_ticket, [])
+      m.get(t.no_ticket)!.push(t)
+    }
+    return m
+  }, [timelines])
+
+  // ── Timeline Mingguan: kelompokkan tiap entri timeline BR ke minggu (Senin-Minggu) yang dilaluinya ──
+  const weeklyTimeline = useMemo(() => {
+    if (timelines.length === 0) return { weeks: [] as string[], rows: [] as { no_ticket: string; judul: string; cells: Map<string, TimelineEntry> }[] }
+
+    const todayIso = isoDate(new Date())
+    let minWeek = ""
+    let maxWeek = ""
+    for (const t of timelines) {
+      if (!t.date_from) continue
+      const wFrom = startOfWeek(t.date_from)
+      const wTo = startOfWeek(t.date_to || todayIso)
+      if (!minWeek || wFrom < minWeek) minWeek = wFrom
+      if (!maxWeek || wTo > maxWeek) maxWeek = wTo
+    }
+    if (!minWeek) return { weeks: [], rows: [] }
+
+    const weeks: string[] = []
+    for (let c = minWeek; c <= maxWeek; c = addDaysIso(c, 7)) weeks.push(c)
+
+    const ticketTitle = new Map(tickets.map(t => [t.no_ticket, t.judul_ticket]))
+
+    const rows = Array.from(timelineByTicket.entries()).map(([no_ticket, entries]) => {
+      const cells = new Map<string, TimelineEntry>()
+      for (const e of entries) {
+        if (!e.date_from) continue
+        const wFrom = startOfWeek(e.date_from)
+        const wTo = startOfWeek(e.date_to || todayIso)
+        for (let c = wFrom; c <= wTo; c = addDaysIso(c, 7)) cells.set(c, e)
+      }
+      return { no_ticket, judul: ticketTitle.get(no_ticket) || "", cells }
+    }).sort((a, b) => {
+      const aWeeks = Array.from(a.cells.keys())
+      const bWeeks = Array.from(b.cells.keys())
+      return (aWeeks[0] || "").localeCompare(bWeeks[0] || "")
+    })
+
+    return { weeks, rows }
+  }, [timelines, timelineByTicket, tickets])
+
+  const saveStageEntry = async (noTicket: string, stage: string, existingId: string | undefined, dateFrom: string, dateTo: string) => {
+    if (!dateFrom) { setTimelineError("Tanggal mulai wajib diisi"); return }
+    setTimelineSaving(true); setTimelineError("")
+    if (existingId) {
+      const { data, error: err } = await supabase.from("logix_ticket_timeline")
+        .update({ date_from: dateFrom, date_to: dateTo || null })
+        .eq("id", existingId).select().single()
+      setTimelineSaving(false)
+      if (err) { setTimelineError(err.message); return }
+      if (data) setTimelines(prev => prev.map(t => t.id === existingId ? data as TimelineEntry : t))
+    } else {
+      const { data, error: err } = await supabase.from("logix_ticket_timeline")
+        .insert({ no_ticket: noTicket, status: stage, date_from: dateFrom, date_to: dateTo || null })
+        .select().single()
+      setTimelineSaving(false)
+      if (err) { setTimelineError(err.message); return }
+      if (data) setTimelines(prev => [...prev, data as TimelineEntry])
+    }
+    setStageDraft(prev => {
+      const n = { ...prev }
+      delete n[`${noTicket}::${stage}`]
+      return n
+    })
+  }
+
+  const deleteTimelineEntry = async (id: string) => {
+    setTimelines(prev => prev.filter(t => t.id !== id))
+    const { error: err } = await supabase.from("logix_ticket_timeline").delete().eq("id", id)
+    if (err) { setTimelineError(err.message); loadTimelines() }
+  }
 
   const saveCredentials = async () => {
     if (!credEmail.trim() || !credPassword.trim()) { setCredError("Email dan password tidak boleh kosong"); return }
@@ -130,14 +275,50 @@ export default function LogixTicketsPage() {
 
   const summary = useMemo(() => {
     const count = (status: string) => tickets.filter(t => (t.nm_status || "").toUpperCase() === status).length
+    const solved = count("SOLVED")
     return {
       total: tickets.length,
       open: count("OPEN"),
       appsR1: count("APPS R1"),
       openBr: count("OPEN BR"),
-      solved: count("SOLVED"),
+      solved,
+      pctSolved: tickets.length > 0 ? (solved / tickets.length) * 100 : 0,
     }
   }, [tickets])
+
+  // ── Salin pesan update harian ke stakeholder ──
+  const [copyOk, setCopyOk] = useState(false)
+  const [copyError, setCopyError] = useState("")
+
+  const buildStatusMessage = () => {
+    const now = new Date()
+    const hour = now.getHours()
+    const greeting = hour < 11 ? "pagi" : hour < 15 ? "siang" : hour < 18 ? "sore" : "malam"
+    const todayLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })
+    const timeLabel = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })
+    return `Selamat ${greeting} pak @Head SS Pak Rudy Haryanto , pak @BR APPG Pak Yonathan , dan pak @APPG Pak Risky
+
+Berikut adalah status ticket logix cut off ${todayLabel} ${timeLabel} WIB
+- Total Issue: ${summary.total}
+- Total Done: ${summary.solved} (${summary.pctSolved.toFixed(0)}%)
+- Total Open: ${summary.open}
+- Total Open Confirm/Apps R1: ${summary.appsR1}
+- Total Open BR: ${summary.openBr}
+
+Terimakasih pak`
+  }
+
+  const copyStatusMessage = async () => {
+    setCopyError("")
+    try {
+      await navigator.clipboard.writeText(buildStatusMessage())
+      setCopyOk(true)
+      setTimeout(() => setCopyOk(false), 2000)
+    } catch {
+      setCopyError("Gagal menyalin, coba lagi")
+      setTimeout(() => setCopyError(""), 2500)
+    }
+  }
 
   const statusOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_status))).sort(), [tickets])
   const tipeOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.tipe_ticket))).sort(), [tickets])
@@ -259,7 +440,7 @@ export default function LogixTicketsPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-      <MotivationBanner page="docreq" />
+      <MotivationBanner page="logix-tickets" />
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
@@ -274,7 +455,11 @@ export default function LogixTicketsPage() {
             </p>
           </div>
         </div>
-        <div style={{ display: "flex", gap: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+          <button onClick={copyStatusMessage} disabled={loading || tickets.length === 0}
+            style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "none", background: copyOk ? "#166534" : "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: (loading || tickets.length === 0) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (loading || tickets.length === 0) ? 0.6 : 1 }}>
+            {copyOk ? <Check size={14} /> : <Copy size={14} />} {copyOk ? "Tersalin!" : "Salin Pesan Update"}
+          </button>
           <button onClick={() => setCredOpen(v => !v)}
             style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text2)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
             <Settings size={14} /> Kelola Kredensial
@@ -286,6 +471,7 @@ export default function LogixTicketsPage() {
           </button>
         </div>
       </div>
+      {copyError && <div style={{ fontSize: "11px", color: "#DC2626", textAlign: "right" }}>{copyError}</div>}
 
       {/* Kelola Kredensial panel */}
       {credOpen && (
@@ -334,17 +520,18 @@ export default function LogixTicketsPage() {
       )}
 
       {/* Summary cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: "14px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "14px" }}>
         {([
-          ["Total Tiket", summary.total, "#0369A1"],
-          ["Open", summary.open, "#991B1B"],
-          ["APPS R1", summary.appsR1, "#92400E"],
-          ["Open BR", summary.openBr, "#C2410C"],
-          ["Solved", summary.solved, "#166534"],
+          ["Total Tiket", loading ? "—" : String(summary.total), "#0369A1"],
+          ["Open", loading ? "—" : String(summary.open), "#991B1B"],
+          ["APPS R1", loading ? "—" : String(summary.appsR1), "#92400E"],
+          ["Open BR", loading ? "—" : String(summary.openBr), "#C2410C"],
+          ["Solved", loading ? "—" : String(summary.solved), "#166534"],
+          ["Percentage Solved", loading ? "—" : `${summary.pctSolved.toFixed(0)}%`, "#0891B2"],
         ] as const).map(([label, value, color]) => (
-          <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px" }}>
+          <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "6px" }}>{label}</div>
-            <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{loading ? "—" : value}</div>
+            <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{value}</div>
           </div>
         ))}
       </div>
@@ -372,7 +559,7 @@ export default function LogixTicketsPage() {
             </ResponsiveContainer>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px", alignItems: "start" }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
               <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Distribusi</div>
               <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Severity</div>
@@ -407,72 +594,122 @@ export default function LogixTicketsPage() {
               )}
             </div>
 
+            {/* Semua Kategori Issue — klik buat lihat detail tiketnya */}
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+                <div>
+                  <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>
+                    {kategoriMaximized ? "Semua Kategori" : `Top ${KATEGORI_MIN_SHOW}`}
+                  </div>
+                  <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>Issue Terbanyak</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text3)" }}>{kategoriData.length} kategori</span>
+                  {kategoriData.length > KATEGORI_MIN_SHOW && (
+                    <button onClick={() => setKategoriMaximized(v => !v)}
+                      style={{ display: "flex", alignItems: "center", gap: "5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text2)", fontSize: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                      {kategoriMaximized ? <><Minimize2 size={12} /> Tampilkan {KATEGORI_MIN_SHOW}</> : <><Maximize2 size={12} /> Lihat Semua</>}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {kategoriData.length === 0 ? (
+                <div style={{ height: "120px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Belum ada tiket yang dikategorikan</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: kategoriMaximized ? "480px" : "none", overflowY: kategoriMaximized ? "auto" : "visible", paddingRight: "4px" }}>
+                  {visibleKategoriData.map((item, i) => {
+                    const isOpenK = expandedKategori === item.name
+                    const color = RANK_COLOR[i] || "#64748B"
+                    const kTickets = ticketsByKategori.get(item.name) || []
+                    return (
+                      <div key={item.name}>
+                        <div onClick={() => setExpandedKategori(isOpenK ? null : item.name)}
+                          style={{ cursor: "pointer", background: isOpenK ? "var(--surface2)" : "transparent", borderRadius: "8px", padding: "6px 8px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "5px" }}>
+                            <span style={{ width: "20px", height: "20px", borderRadius: "50%", background: color, color: "white", fontSize: "10px", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)", flex: 1 }}>{item.name}</span>
+                            <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", whiteSpace: "nowrap" }}>{item.value} tiket · {item.pct.toFixed(0)}%</span>
+                            {isOpenK ? <ChevronUp size={13} color="var(--text3)" /> : <ChevronDown size={13} color="var(--text3)" />}
+                          </div>
+                          <div style={{ height: "6px", background: "var(--surface2)", borderRadius: "99px", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${item.pct}%`, background: color, borderRadius: "99px" }} />
+                          </div>
+                        </div>
+                        {isOpenK && (
+                          <div style={{ marginTop: "6px", marginLeft: "28px", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
+                            {kTickets.map((t, ti) => {
+                              const bucket = statusBucket(t.nm_status)
+                              const bc = BUCKET_COLOR[bucket]
+                              return (
+                                <div key={t.no_ticket} onClick={() => { setSearch(t.no_ticket); setExpandedRow(t.no_ticket) }}
+                                  style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", cursor: "pointer", borderBottom: ti < kTickets.length - 1 ? "1px solid var(--border)" : "none" }}>
+                                  <span style={{ fontFamily: "monospace", fontSize: "10px", color: "#0369A1", fontWeight: 700, whiteSpace: "nowrap" }}>{t.no_ticket}</span>
+                                  <span style={{ fontSize: "11px", color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.judul_ticket}>{t.judul_ticket}</span>
+                                  <span style={{ fontSize: "9px", fontWeight: 700, padding: "2px 7px", borderRadius: "99px", whiteSpace: "nowrap", ...bc }}>{t.nm_status}</span>
+                                  <span style={{ fontSize: "10px", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date_created)}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Semua Kategori Issue — klik buat lihat detail tiketnya */}
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
-              <div>
-                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>
-                  {kategoriMaximized ? "Semua Kategori" : `Top ${KATEGORI_MIN_SHOW}`}
+          {weeklyTimeline.rows.length > 0 && (
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Timeline</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px", flexWrap: "wrap", gap: "8px" }}>
+                <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>Timeline Mingguan — Tiket BR</div>
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  {TIMELINE_STAGES.map(s => (
+                    <span key={s} style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "10px", color: "var(--text3)" }}>
+                      <span style={{ width: "9px", height: "9px", borderRadius: "3px", background: STAGE_COLOR[s].bg, border: `1px solid ${STAGE_COLOR[s].color}` }} />
+                      {s}
+                    </span>
+                  ))}
                 </div>
-                <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>Issue Terbanyak</div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <span style={{ fontSize: "11px", color: "var(--text3)" }}>{kategoriData.length} kategori</span>
-                {kategoriData.length > KATEGORI_MIN_SHOW && (
-                  <button onClick={() => setKategoriMaximized(v => !v)}
-                    style={{ display: "flex", alignItems: "center", gap: "5px", padding: "5px 10px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text2)", fontSize: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                    {kategoriMaximized ? <><Minimize2 size={12} /> Tampilkan {KATEGORI_MIN_SHOW}</> : <><Maximize2 size={12} /> Lihat Semua</>}
-                  </button>
-                )}
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ position: "sticky", left: 0, background: "var(--surface)", textAlign: "left", padding: "4px 10px 8px 0", fontSize: "10px", fontWeight: 700, color: "var(--text3)", whiteSpace: "nowrap" }}>Tiket</th>
+                      {weeklyTimeline.weeks.map(w => (
+                        <th key={w} style={{ padding: "4px 4px 8px", fontSize: "9px", fontWeight: 700, color: "var(--text3)", whiteSpace: "nowrap", textAlign: "center" }}>{fmtWeekLabel(w)}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weeklyTimeline.rows.map(row => (
+                      <tr key={row.no_ticket}>
+                        <td onClick={() => { setSearch(row.no_ticket); setExpandedRow(row.no_ticket) }}
+                          style={{ position: "sticky", left: 0, background: "var(--surface)", padding: "4px 10px 4px 0", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                          <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0369A1" }}>{row.no_ticket}</span>
+                          {row.judul && (
+                            <div style={{ fontSize: "10px", color: "var(--text3)", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis" }}>{row.judul}</div>
+                          )}
+                        </td>
+                        {weeklyTimeline.weeks.map(w => {
+                          const entry = row.cells.get(w)
+                          const sc3 = entry ? (STAGE_COLOR[entry.status] || { bg: "#F1F5F9", color: "#475569" }) : null
+                          return (
+                            <td key={w} style={{ padding: "2px 4px" }}>
+                              <div title={entry ? entry.status : ""} style={{ height: "18px", minWidth: "40px", borderRadius: "4px", background: sc3?.bg || "transparent" }} />
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
-            {kategoriData.length === 0 ? (
-              <div style={{ height: "120px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Belum ada tiket yang dikategorikan</div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: kategoriMaximized ? "480px" : "none", overflowY: kategoriMaximized ? "auto" : "visible", paddingRight: "4px" }}>
-                {visibleKategoriData.map((item, i) => {
-                  const isOpenK = expandedKategori === item.name
-                  const color = RANK_COLOR[i] || "#64748B"
-                  const kTickets = ticketsByKategori.get(item.name) || []
-                  return (
-                    <div key={item.name}>
-                      <div onClick={() => setExpandedKategori(isOpenK ? null : item.name)}
-                        style={{ cursor: "pointer", background: isOpenK ? "var(--surface2)" : "transparent", borderRadius: "8px", padding: "6px 8px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "5px" }}>
-                          <span style={{ width: "20px", height: "20px", borderRadius: "50%", background: color, color: "white", fontSize: "10px", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
-                          <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)", flex: 1 }}>{item.name}</span>
-                          <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", whiteSpace: "nowrap" }}>{item.value} tiket · {item.pct.toFixed(0)}%</span>
-                          {isOpenK ? <ChevronUp size={13} color="var(--text3)" /> : <ChevronDown size={13} color="var(--text3)" />}
-                        </div>
-                        <div style={{ height: "6px", background: "var(--surface2)", borderRadius: "99px", overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${item.pct}%`, background: color, borderRadius: "99px" }} />
-                        </div>
-                      </div>
-                      {isOpenK && (
-                        <div style={{ marginTop: "6px", marginLeft: "28px", border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
-                          {kTickets.map((t, ti) => {
-                            const bucket = statusBucket(t.nm_status)
-                            const bc = BUCKET_COLOR[bucket]
-                            return (
-                              <div key={t.no_ticket} onClick={() => { setSearch(t.no_ticket); setExpandedRow(t.no_ticket) }}
-                                style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", cursor: "pointer", borderBottom: ti < kTickets.length - 1 ? "1px solid var(--border)" : "none" }}>
-                                <span style={{ fontFamily: "monospace", fontSize: "10px", color: "#0369A1", fontWeight: 700, whiteSpace: "nowrap" }}>{t.no_ticket}</span>
-                                <span style={{ fontSize: "11px", color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.judul_ticket}>{t.judul_ticket}</span>
-                                <span style={{ fontSize: "9px", fontWeight: 700, padding: "2px 7px", borderRadius: "99px", whiteSpace: "nowrap", ...bc }}>{t.nm_status}</span>
-                                <span style={{ fontSize: "10px", color: "var(--text3)", whiteSpace: "nowrap" }}>{fmtDate(t.date_created)}</span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
+          )}
         </>
       )}
 
@@ -532,6 +769,8 @@ export default function LogixTicketsPage() {
                   const bc = BUCKET_COLOR[bucket]
                   const sc = severityColor(t.nm_severity)
                   const isOpen = expandedRow === t.no_ticket
+                  const isBrOpen = t.nm_status.toUpperCase() === "OPEN BR"
+                  const ticketTimeline = timelineByTicket.get(t.no_ticket) || []
                   return (
                     <Fragment key={t.no_ticket}>
                       <tr onClick={() => setExpandedRow(isOpen ? null : t.no_ticket)} style={{ cursor: "pointer" }}>
@@ -564,6 +803,71 @@ export default function LogixTicketsPage() {
                               <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--text3)" }}>
                                 Kategori: <strong style={{ color: "var(--text)" }}>{t.nm_kategori}</strong>
                                 {t.nm_sub_kategori && <> · {t.nm_sub_kategori}</>}
+                              </div>
+                            )}
+
+                            {(isBrOpen || ticketTimeline.length > 0) && (
+                              <div style={{ marginTop: "14px", paddingTop: "12px", borderTop: "1px solid var(--border)" }} onClick={(e) => e.stopPropagation()}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+                                  <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                                    Timeline Internal
+                                  </div>
+                                  {!isBrOpen && (
+                                    <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "99px", background: "#DCFCE7", color: "#166534" }}>
+                                      Sudah solved di Logix (status: {t.nm_status})
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                                  {TIMELINE_STAGES.map((stage) => {
+                                    const existing = ticketTimeline.find((e) => e.status === stage)
+                                    const draftKey = `${t.no_ticket}::${stage}`
+                                    const draft = stageDraft[draftKey]
+                                    const fromVal = draft?.from ?? existing?.date_from ?? ""
+                                    const toVal = draft?.to ?? existing?.date_to ?? ""
+                                    const sc2 = STAGE_COLOR[stage] || { bg: "#F1F5F9", color: "#475569" }
+                                    return (
+                                      <div key={stage} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px", fontSize: "12px", background: "var(--surface)", borderRadius: "6px", padding: "6px 10px" }}>
+                                        <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "99px", background: sc2.bg, color: sc2.color, whiteSpace: "nowrap", minWidth: "108px", textAlign: "center" }}>
+                                          {stage}
+                                        </span>
+                                        <input
+                                          type="date"
+                                          value={fromVal}
+                                          onChange={(e) => setStageDraft(prev => ({ ...prev, [draftKey]: { from: e.target.value, to: toVal } }))}
+                                          style={{ fontSize: "12px", padding: "4px 6px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+                                        />
+                                        <span style={{ fontSize: "12px", color: "var(--text3)" }}>s/d</span>
+                                        <input
+                                          type="date"
+                                          value={toVal}
+                                          onChange={(e) => setStageDraft(prev => ({ ...prev, [draftKey]: { from: fromVal, to: e.target.value } }))}
+                                          style={{ fontSize: "12px", padding: "4px 6px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+                                        />
+                                        <button
+                                          onClick={() => saveStageEntry(t.no_ticket, stage, existing?.id, fromVal, toVal)}
+                                          disabled={timelineSaving}
+                                          style={{ fontSize: "11px", fontWeight: 700, padding: "5px 10px", borderRadius: "6px", border: "none", background: "#0369A1", color: "#fff", cursor: timelineSaving ? "default" : "pointer", opacity: timelineSaving ? 0.6 : 1 }}
+                                        >
+                                          Simpan
+                                        </button>
+                                        {existing && (
+                                          <button
+                                            onClick={() => deleteTimelineEntry(existing.id)}
+                                            style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex", alignItems: "center", padding: "2px" }}
+                                            title="Hapus"
+                                          >
+                                            <X size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                                {timelineError && (
+                                  <div style={{ marginTop: "6px", fontSize: "11px", color: "#DC2626" }}>{timelineError}</div>
+                                )}
                               </div>
                             )}
                           </td>
