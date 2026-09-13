@@ -1244,7 +1244,10 @@ function PcodeCategoryTree({
   const colLabel = (key: BaselineKey, label: string) => key === baseline ? `★ ${label}` : label
 
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflowX: "auto" }}>
+      {/* Sama seperti OrgHierarchyTree — gridCols fixed-width bikin div ini
+          perlu scroll horizontal sendiri di HP, bukan overflow:"hidden"
+          yang motong data di kolom kanan. */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, padding: "9px 12px", background: "var(--surface2)", fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
         <div>Divisi / Subbrand / SKU (struktur Ficom)</div>
         <div style={{ textAlign: "right" }}>{colLabel("ficom_dash", "Ficom Dash. Category")}</div>
@@ -1459,7 +1462,13 @@ function OrgHierarchyTree({
   const colLabel = (key: BaselineKey, label: string) => key === baseline ? `★ ${label}` : label
 
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflowX: "auto" }}>
+      {/* gridCols punya 5 kolom fixed 140px (=700px+) — di layar HP sempit itu
+          otomatis bikin div ini scroll horizontal SENDIRI (bukan geser
+          seluruh halaman), soalnya kolom grid fixed-width tidak bakal
+          menyusut di bawah ukurannya. Sebelumnya overflow:"hidden" di sini
+          malah bikin data di kolom kanan KEPOTONG HILANG di HP, bukan bisa
+          discroll — sudah dibenerin. */}
       <div style={{ display: "grid", gridTemplateColumns: gridCols, padding: "9px 12px", background: "var(--surface2)", fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
         <div>RDM / ADM-ADS / Salesman / SKU</div>
         <div style={{ textAlign: "right" }}>{colLabel("ficom_main", "Ficom Main")}</div>
@@ -1662,7 +1671,9 @@ export default function TargetComparePage() {
   // Muat EDI otomatis begitu ada periode aktif (dari upload/load Excel)
   useEffect(() => {
     if (!activePeriod) return
-    fetchEdiPeriodRows(activePeriod).then(setEdiRows).catch(() => setEdiRows([]))
+    fetchEdiPeriodRows(activePeriod)
+      .then(setEdiRows)
+      .catch(e => { setEdiRows([]); setEdiError(`Auto-load EDI periode ${activePeriod} gagal: ${e instanceof Error ? e.message : String(e)}`) })
   }, [activePeriod])
 
   // ── Sync Ficom ──────────────────────────────────────────────
@@ -1720,100 +1731,148 @@ export default function TargetComparePage() {
       const token = await ficomLogin(ficomCred.user_login, ficomCred.password)
       log("✅ Login Ficom berhasil")
 
-      // Simpan org tree SEGERA setelah berhasil crawl — biar kalau bagian
-      // produk di bawah gagal, hasil yang sudah didapat tidak hangus.
-      const orgNodes = await crawlOrgTree(token, ficomCred.user_login, ficomDate, log)
-      log("⏳ Menyimpan data organisasi ke Supabase...")
-      await uploadOrgNodes(orgNodes, ficomDate)
-      setFicomOrgNodes(orgNodes)
-      setFicomSyncedAt(ficomDate)
-      log(`✅ ${orgNodes.length} node organisasi tersimpan`)
+      // Dashboard Category (group-div) & Product tree TIDAK BUTUH orgNodes
+      // sama sekali — sebelumnya nunggu org tree kelar dulu baru mulai
+      // (full sequential), padahal keduanya independen. Sekarang di-kick-off
+      // BARENGAN dengan crawl org tree di bawah (Promise.all di akhir),
+      // bukan berurutan — total waktu sync jadi ngikut fase TERLAMA, bukan
+      // jumlah semua fase.
+      const dashCategoryTask = (async () => {
+        try {
+          const { nodes: dashNodes } = await crawlDashCategoryTree(token, ficomCred.user_login, ficomDate, log)
+          log("⏳ Menyimpan data Dashboard Category ke Supabase...")
+          await uploadDashCategoryOrgNodes(dashNodes, ficomDate)
+          setFicomDashOrgNodes(dashNodes)
+          log(`✅ ${dashNodes.length} node Dashboard Category tersimpan`)
+        } catch (eDash) {
+          log(`⚠ Dashboard Category (group-div) gagal: ${eDash instanceof Error ? eDash.message : String(eDash)}`)
+        }
+      })()
 
-      // Dashboard Category (group-div) — sumber independen kedua buat SD/RDM,
-      // gagal di sini tidak boleh menggagalkan hasil Main yang sudah tersimpan.
+      const productTask = (async () => {
+        try {
+          const catNodes = await crawlProductTree(token, ficomCred.user_login, ficomDate, log)
+          log("⏳ Menyimpan data produk ke Supabase...")
+          await uploadCatNodes(catNodes, ficomDate, ficomCred.user_login)
+          setFicomCatNodes(catNodes)
+          log(`✅ ${catNodes.length} node produk tersimpan`)
+        } catch (e2) {
+          log(`⚠ Data produk (Division/Subbrand) gagal: ${e2 instanceof Error ? e2.message : String(e2)}`)
+        }
+      })()
+
+      // Org tree WAJIB kelar duluan — breakdown Salesman (di bawah) butuh
+      // daftar node SALESMAN hasil crawl ini buat tahu ADP mana saja yang
+      // perlu di-drill. Kalau org tree gagal total, tunggu 2 task independen
+      // di atas biar progressnya tidak hilang, baru lempar error (perilaku
+      // sync dianggap gagal tetap sama seperti sebelumnya).
+      let orgNodes: FicomOrgNode[]
       try {
-        const { nodes: dashNodes } = await crawlDashCategoryTree(token, ficomCred.user_login, ficomDate, log)
-        log("⏳ Menyimpan data Dashboard Category ke Supabase...")
-        await uploadDashCategoryOrgNodes(dashNodes, ficomDate)
-        setFicomDashOrgNodes(dashNodes)
-        log(`✅ ${dashNodes.length} node Dashboard Category tersimpan`)
+        orgNodes = await crawlOrgTree(token, ficomCred.user_login, ficomDate, log)
+        log("⏳ Menyimpan data organisasi ke Supabase...")
+        await uploadOrgNodes(orgNodes, ficomDate)
+        setFicomOrgNodes(orgNodes)
+        setFicomSyncedAt(ficomDate)
+        log(`✅ ${orgNodes.length} node organisasi tersimpan`)
+      } catch (eOrg) {
+        await Promise.allSettled([dashCategoryTask, productTask])
+        throw eOrg
+      }
 
-        // Breakdown Salesman per ADP jalur Dashboard Category (div/sls) —
-        // spvId/adpCode diambil dari breakdown ADS-per-distributor Main tree
-        // yang sama dipakai team/sls (lihat komentar crawlDashSalesmanForDistributor),
-        // gagal di sini TIDAK boleh menggagalkan node Dashboard Category yang sudah tersimpan.
-        //
-        // divId SENGAJA hardcode "02", BUKAN pakai gdivId ("002", hasil
-        // group-div?superiorId=... yang dipakai user/group-div) — dikonfirmasi
-        // dari capture manual user endpoint div/sls literal pakai "divId=02".
-        // Dua endpoint ini ternyata pakai representasi ID beda format buat
-        // grup yang sama ("002" vs "02", beda string persis) — gdivId dipakai
-        // sempat bikin SEMUA request div/sls balik 0 baris (bukan galat
-        // jaringan, query-nya nyasar).
+      // Breakdown Salesman per ADP jalur Dashboard Category (div/sls) DAN
+      // jalur Main (team/sls) — dua-duanya butuh orgNodes, tapi tidak butuh
+      // satu sama lain, jadi jalan PARALEL juga (bukan berurutan).
+      //
+      // divId SENGAJA hardcode "02", BUKAN pakai gdivId ("002", hasil
+      // group-div?superiorId=... yang dipakai user/group-div) — dikonfirmasi
+      // dari capture manual user endpoint div/sls literal pakai "divId=02".
+      // Dua endpoint ini ternyata pakai representasi ID beda format buat
+      // grup yang sama ("002" vs "02", beda string persis) — gdivId dipakai
+      // sempat bikin SEMUA request div/sls balik 0 baris (bukan galat
+      // jaringan, query-nya nyasar).
+      const distNodes = orgNodes.filter(n => n.level === "SALESMAN")
+
+      const dashSalesmanTask = (async () => {
         try {
           const DIV_ID = "02"
-          const distNodesForDash = orgNodes.filter(n => n.level === "SALESMAN")
-          const dashSalesmanRows = await crawlAllDashSalesmen(token, distNodesForDash, DIV_ID, ficomDate, formatFicomDate(ficomDate), log)
+          const dashSalesmanRows = await crawlAllDashSalesmen(token, distNodes, DIV_ID, ficomDate, formatFicomDate(ficomDate), log)
           log("⏳ Menyimpan data Salesman Dashboard Category ke Supabase...")
           await uploadDashSalesmanRows(dashSalesmanRows, ficomDate)
           setFicomDashSalesmanRows(dashSalesmanRows)
           log(`✅ ${dashSalesmanRows.length} baris Salesman Dashboard Category tersimpan`)
         } catch (eDashSls) {
-          log(`⚠ Node Dashboard Category tersimpan, tapi breakdown Salesman-nya gagal: ${eDashSls instanceof Error ? eDashSls.message : String(eDashSls)}`)
+          log(`⚠ Breakdown Salesman Dashboard Category gagal: ${eDashSls instanceof Error ? eDashSls.message : String(eDashSls)}`)
         }
-      } catch (eDash) {
-        log(`⚠ Data Main tersimpan, tapi Dashboard Category (group-div) gagal: ${eDash instanceof Error ? eDash.message : String(eDash)}`)
-      }
+      })()
 
-      // Breakdown Salesman per ADP (team/sls) — sumber akurat buat tab
-      // ADM/ADS, ADP, dan Salesman (exact-match by distributorId, bukan
-      // regex nama). Dipanggil per node ADM/ADS hasil crawl Main di atas.
-      try {
-        const distNodes = orgNodes.filter(n => n.level === "SALESMAN")
-        const salesmanRows = await crawlAllSalesmen(token, distNodes, ficomDate, formatFicomDate(ficomDate), log)
-        log("⏳ Menyimpan data Salesman per ADP ke Supabase...")
-        await uploadSalesmanRows(salesmanRows, ficomDate)
-        setFicomSalesmanRows(salesmanRows)
-        log(`✅ ${salesmanRows.length} baris Salesman tersimpan`)
-      } catch (eSls) {
-        log(`⚠ Data Main tersimpan, tapi breakdown Salesman per ADP gagal: ${eSls instanceof Error ? eSls.message : String(eSls)}`)
-      }
+      const salesmanTask = (async () => {
+        try {
+          const salesmanRows = await crawlAllSalesmen(token, distNodes, ficomDate, formatFicomDate(ficomDate), log)
+          log("⏳ Menyimpan data Salesman per ADP ke Supabase...")
+          await uploadSalesmanRows(salesmanRows, ficomDate)
+          setFicomSalesmanRows(salesmanRows)
+          log(`✅ ${salesmanRows.length} baris Salesman tersimpan`)
+        } catch (eSls) {
+          log(`⚠ Breakdown Salesman per ADP gagal: ${eSls instanceof Error ? eSls.message : String(eSls)}`)
+        }
+      })()
 
-      try {
-        const catNodes = await crawlProductTree(token, ficomCred.user_login, ficomDate, log)
-        log("⏳ Menyimpan data produk ke Supabase...")
-        await uploadCatNodes(catNodes, ficomDate, ficomCred.user_login)
-        setFicomCatNodes(catNodes)
-        log(`🎉 Sync selesai! ${orgNodes.length} node organisasi · ${catNodes.length} node produk`)
-      } catch (e2) {
-        log(`⚠ Data organisasi sudah tersimpan, tapi data produk (Division/Subbrand) gagal: ${e2 instanceof Error ? e2.message : String(e2)}`)
-      }
+      await Promise.all([dashCategoryTask, productTask, dashSalesmanTask, salesmanTask])
+      log(`🎉 Sync selesai! ${orgNodes.length} node organisasi`)
     } catch (e) {
       setFicomError(`${e instanceof Error ? e.message : String(e)} — kalau ini error network/CORS, kabari saya biar dicek ulang jalur aksesnya.`)
     }
     setSyncing(false)
   }
 
-  // Kalau data Ficom untuk tanggal ini sudah pernah disync sebelumnya, muat langsung
-  // tanpa perlu login ulang.
+  // Kalau data Ficom untuk tanggal ini (ficomDate, default hari ini) sudah
+  // pernah disync sebelumnya, muat langsung tanpa perlu login/crawl ulang.
+  // SENGAJA di-scope per TANGGAL (bukan "sync terakhir apa pun") karena
+  // target/actual Ficom itu figure live yang berubah tiap hari — sync
+  // kemarin dianggap basi buat hari ini. Ini beda dengan Excel/EDI (target
+  // bulanan) yang auto-load-nya ambil periode TERAKHIR tersimpan apa pun
+  // tanggalnya.
+  // fetch*() di bawah cuma reject kalau genuinely ada error query (bukan
+  // kalau datanya belum ada) — jadi catch di sini surface ke ficomError,
+  // bukan ditelan diam-diam kayak sebelumnya.
+  // Kalau BELUM ada sync buat hari ini sama sekali, auto-trigger handleSync()
+  // sendiri (ref biar cuma sekali per buka halaman, tidak dobel kena React
+  // StrictMode/re-render) — user tidak perlu klik "Sync dari Ficom" manual.
+  const autoSyncedRef = useRef(false)
   useEffect(() => {
     if (!ficomDate || !ficomCred) return
     fetchFicomOrgNodes(ficomDate)
-      .then(nodes => { if (nodes.length) { setFicomOrgNodes(nodes); setFicomSyncedAt(ficomDate) } })
-      .catch(() => { /* belum pernah disync untuk tanggal ini, biarkan kosong */ })
+      .then(nodes => {
+        if (nodes.length) { setFicomOrgNodes(nodes); setFicomSyncedAt(ficomDate) }
+        else if (!autoSyncedRef.current) { autoSyncedRef.current = true; handleSync() }
+      })
+      .catch(e => setFicomError(`Auto-load Ficom Main gagal: ${e instanceof Error ? e.message : String(e)}`))
     fetchFicomCatNodes(ficomDate, ficomCred.user_login)
       .then(nodes => { if (nodes.length) setFicomCatNodes(nodes) })
-      .catch(() => { /* belum pernah disync, biarkan kosong */ })
+      .catch(e => setFicomError(`Auto-load Ficom Dash. Category gagal: ${e instanceof Error ? e.message : String(e)}`))
     fetchDashCategoryOrgNodes(ficomDate)
       .then(nodes => { if (nodes.length) setFicomDashOrgNodes(nodes) })
-      .catch(() => { /* belum pernah disync, biarkan kosong */ })
+      .catch(e => setFicomError(`Auto-load Dash. Category (org) gagal: ${e instanceof Error ? e.message : String(e)}`))
     fetchSalesmanRows(ficomDate)
       .then(rows => { if (rows.length) setFicomSalesmanRows(rows) })
-      .catch(() => { /* belum pernah disync, biarkan kosong */ })
+      .catch(e => setFicomError(`Auto-load Salesman gagal: ${e instanceof Error ? e.message : String(e)}`))
     fetchDashSalesmanRows(ficomDate)
       .then(rows => { if (rows.length) setFicomDashSalesmanRows(rows) })
-      .catch(() => { /* belum pernah disync, biarkan kosong */ })
+      .catch(e => setFicomError(`Auto-load Salesman Dash. Category gagal: ${e instanceof Error ? e.message : String(e)}`))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ficomDate, ficomCred])
+
+  // Ficom Lite (Monthly STT) SENGAJA tidak pernah disimpan ke Supabase
+  // (lihat komentar di atas state-nya) — jadi satu-satunya cara "auto-load"
+  // buat sumber ini adalah crawl live begitu kredensial siap, tiap kali
+  // halaman dibuka.
+  const autoLiteCrawledRef = useRef(false)
+  useEffect(() => {
+    if (!ficomCred || autoLiteCrawledRef.current) return
+    autoLiteCrawledRef.current = true
+    handleFicomLiteCrawl()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ficomCred])
 
   const ficomMaps = useMemo(() => {
     const sd = ficomOrgNodes.find(n => n.level === "SD")
@@ -2020,18 +2079,22 @@ export default function TargetComparePage() {
 
   // Auto-load periode Excel terakhir yang pernah diupload, biar begitu buka
   // halaman langsung ada tampilan compare tanpa harus klik "Muat" manual.
+  // Error di sini SEBELUMNYA diam-diam ditelan (kalau gagal, user cuma
+  // lihat tabel kosong tanpa tahu kenapa, kesannya "harus upload lagi") —
+  // sekarang di-surface ke banner error biar kelihatan penyebabnya.
   useEffect(() => {
     supabase.from("target_excel_detail")
       .select("period_month")
       .order("uploaded_at", { ascending: false })
       .limit(1)
       .maybeSingle()
-      .then(({ data }) => {
+      .then(({ data, error: qErr }) => {
+        if (qErr) { setError(`Auto-load periode terakhir gagal: ${qErr.message}`); return }
         if (data?.period_month) {
           setLoadPeriodInput(data.period_month)
           fetchPeriodRows(data.period_month)
             .then(rows => { setRows(rows); setActivePeriod(data.period_month) })
-            .catch(() => { /* diamkan, biarkan user muat manual */ })
+            .catch(e => setError(`Auto-load periode ${data.period_month} gagal: ${e instanceof Error ? e.message : String(e)}`))
         }
       })
   }, [])
@@ -2102,6 +2165,17 @@ export default function TargetComparePage() {
           {dataPanelOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
       </div>
+
+      {/* Auto-load periode terakhir gagal — WAJIB tampil di sini (bukan cuma
+          di dalam panel "Kelola Sumber Data" yang collapsed by default),
+          soalnya kalau ini gagal diam-diam, tampilannya jadi sama persis
+          kayak "belum pernah upload" padahal datanya ADA di Supabase. */}
+      {error && rows.length === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: "10px", padding: "12px 16px", color: "#991B1B", fontSize: "12px" }}>
+          <TriangleAlert size={15} style={{ flexShrink: 0 }} />
+          <div>Auto-load data tersimpan gagal: {error} — data kemungkinan tetap ada di Supabase, coba klik &quot;Kelola Sumber Data&quot; lalu &quot;Muat&quot; manual, atau refresh halaman.</div>
+        </div>
+      )}
 
       {/* ── Rollup view — konten utama halaman ── */}
       {rows.length > 0 && levels && (
