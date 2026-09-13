@@ -1,12 +1,12 @@
 "use client"
 // PATH: src/app/dashboard/master-data/page.tsx
 
-import { useState, useEffect, useMemo, useRef } from "react"
+import { useState, useEffect, useMemo, useRef, Fragment } from "react"
 import {
-  Search, X, FileSpreadsheet, Building2, MapPin, Server, Users,
+  Search, X, FileSpreadsheet, Building2,
   RefreshCw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
   Save, Upload, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
-  List, FolderTree, Link2,
+  List, FolderTree, Link2, Warehouse, Truck,
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -29,6 +29,15 @@ interface DepotRow {
   remarks: string
   updated_at?: string
   ads_id?: string | null
+}
+
+interface SchemaRef {
+  id: string
+  adp_code: number | null
+  schema_name: string | null
+  kode_branch: string | null
+  server: number | null
+  remarks: string | null
 }
 
 interface FicomUser {
@@ -66,6 +75,15 @@ const POS_CLR: Record<string, { bg: string; color: string }> = {
   ADS: { bg: "#E0F2FE", color: "#0369A1" },
 }
 
+// PIC TAS per region — sama seperti mapping di /data-transfer
+const TAS_MAP: Record<string, string> = {
+  GMA: "JC", NOL: "Van", SOL: "Lindon", VIS: "Darren", MIN: "JC",
+}
+const TAS_OPTIONS = ["ALL", "JC", "Van", "Lindon", "Darren"]
+function tasFor(regionName: string): string {
+  return TAS_MAP[regionName] || ""
+}
+
 // Extract WF code from name like "WF1105-BARAS_RIZAL- ADM C. Roque"
 function extractLogin(name: string): string {
   const m = name.match(/^(WF\d+)/i)
@@ -84,12 +102,18 @@ export default function MasterDataPage() {
   const [statusFilter, setStatus]   = useState("ALL")
   const [remarksFilter, setRemarks] = useState("ALL")
   const [serverFilter, setServerFilter] = useState("ALL")  // values: ALL | 138 | 228 | 252
+  const [tasFilter, setTasFilter]   = useState("ALL")
   const [exporting, setExporting]   = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editId, setEditId]         = useState<string | null>(null)
   const [draft, setDraft]           = useState<Partial<DepotRow>>({})
   const [copied, setCopied]         = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // ── Referensi SCHEMA/SERVER dari file "DB SCHEMA" ──────────
+  const [schemaRef, setSchemaRef]   = useState<SchemaRef[]>([])
+  const [schemaUploading, setSchemaUploading] = useState(false)
+  const schemaFileRef = useRef<HTMLInputElement>(null)
 
   // ── Hierarki RDM → ADM → ADS ───────────────────────────────
   const [view, setView] = useState<"table" | "hierarchy">("table")
@@ -103,10 +127,11 @@ export default function MasterDataPage() {
 
   const load = async () => {
     setLoading(true); setError("")
-    const [depotRes, ficomRes, hierRes] = await Promise.all([
+    const [depotRes, ficomRes, hierRes, schemaRes] = await Promise.all([
       supabase.from("master_data_adp").select("*").order("region_name").order("adp_code").order("depot"),
       supabase.from("ficom_passwords").select("*"),
       supabase.from("master_hierarchy").select("*").order("level").order("name"),
+      supabase.from("master_data_schema_ref").select("*"),
     ])
     if (depotRes.data) setData(depotRes.data)
     if (depotRes.error) setError(depotRes.error.message)
@@ -117,9 +142,20 @@ export default function MasterDataPage() {
     }
     if (hierRes.data) setHierarchy(hierRes.data)
     if (hierRes.error) setError(hierRes.error.message)
+    if (schemaRes.data) setSchemaRef(schemaRes.data)
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  // Lookup SCHEMA/SERVER referensi per adp_code — dipakai kalau data
+  // Master Data sendiri (kolom server) belum di-update.
+  const schemaByAdp = useMemo(() => {
+    const m = new Map<number, SchemaRef>()
+    for (const r of schemaRef) {
+      if (r.adp_code != null) m.set(r.adp_code, r)
+    }
+    return m
+  }, [schemaRef])
 
   const nodeById = useMemo(() => new Map(hierarchy.map(n => [n.id, n])), [hierarchy])
   const childrenOf = useMemo(() => {
@@ -260,16 +296,20 @@ export default function MasterDataPage() {
         (regionFilter  === "ALL" || d.region_name  === regionFilter) &&
         (statusFilter  === "ALL" || d.status       === statusFilter) &&
         (remarksFilter === "ALL" || d.remarks      === remarksFilter) &&
-        (serverFilter  === "ALL" || (serverFilter === "NULL" ? (d.server === null || d.server === undefined) : String(d.server ?? "") === serverFilter))
+        (serverFilter  === "ALL" || (serverFilter === "NULL" ? (d.server === null || d.server === undefined) : String(d.server ?? "") === serverFilter)) &&
+        (tasFilter     === "ALL" || tasFor(d.region_name) === tasFilter)
     })
-  }, [data, search, regionFilter, statusFilter, remarksFilter, serverFilter])
+  }, [data, search, regionFilter, statusFilter, remarksFilter, serverFilter, tasFilter])
 
+  // Dinamis ngikutin hasil filter yang lagi tampil (bukan selalu semua data)
   const stats = useMemo(() => ({
-    total:    data.length,
-    active:   data.filter(d => d.remarks === "Active").length,
-    inactive: data.filter(d => d.remarks === "Inactive").length,
-    newDep:   data.filter(d => d.remarks === "New").length,
-  }), [data])
+    mainWh:         filtered.filter(d => d.status === "MAIN WH").length,
+    mainWhActive:   filtered.filter(d => d.status === "MAIN WH" && d.remarks === "Active").length,
+    mainWhInactive: filtered.filter(d => d.status === "MAIN WH" && d.remarks === "Inactive").length,
+    sdp:            filtered.filter(d => d.status === "SDP").length,
+    sdpActive:      filtered.filter(d => d.status === "SDP" && d.remarks === "Active").length,
+    sdpInactive:    filtered.filter(d => d.status === "SDP" && d.remarks === "Inactive").length,
+  }), [filtered])
 
   // ── Row expand/collapse ───────────────────────────────────
   const toggleExpand = (id: string) => {
@@ -277,18 +317,8 @@ export default function MasterDataPage() {
     setExpandedId(p => p === id ? null : id)
   }
 
-  // ── CRUD ──────────────────────────────────────────────────
-  const addRow = () => {
-    const tempId = `new-${Date.now()}`
-    const nu: DepotRow = {
-      id: tempId, adp_code: null, depot: "", distributor_name: "",
-      server: null, server_name: "", area: null, area_name: "", region: null, region_name: "",
-      ads_name: "", adm_name: "", rdm_name: "", status: "MAIN WH", remarks: "Active",
-    }
-    setData(p => [nu, ...p])
-    setEditId(tempId); setDraft(nu); setExpandedId(null)
-  }
-
+  // ── CRUD (edit & hapus — tambah depot manual dihilangkan, depot baru
+  // masuk lewat Import Excel) ─────────────────────────────────
   const startEdit = (d: DepotRow, e: React.MouseEvent) => {
     e.stopPropagation()
     setEditId(d.id); setDraft({ ...d }); setExpandedId(null)
@@ -314,24 +344,14 @@ export default function MasterDataPage() {
       remarks:          draft.remarks ?? "Active",
       updated_at:       new Date().toISOString(),
     }
-    const isNew = editId?.startsWith("new-")
-    if (isNew) {
-      const { data: row, error: err } = await supabase.from("master_data_adp").insert(payload).select().single()
-      if (err) { setError(err.message); setSaving(false); return }
-      setData(p => p.map(d => d.id === editId ? row : d))
-    } else {
-      const { error: err } = await supabase.from("master_data_adp").update(payload).eq("id", editId!)
-      if (err) { setError(err.message); setSaving(false); return }
-      setData(p => p.map(d => d.id === editId ? { ...d, ...payload } : d))
-    }
+    const { error: err } = await supabase.from("master_data_adp").update(payload).eq("id", editId!)
+    if (err) { setError(err.message); setSaving(false); return }
+    setData(p => p.map(d => d.id === editId ? { ...d, ...payload } : d))
     setEditId(null); setSaving(false)
     setSuccess("Tersimpan!"); setTimeout(() => setSuccess(""), 2500)
   }
 
-  const cancelEdit = () => {
-    setData(p => p.filter(d => !d.id.startsWith("new-")))
-    setEditId(null)
-  }
+  const cancelEdit = () => setEditId(null)
 
   const deleteRow = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -393,6 +413,46 @@ export default function MasterDataPage() {
       setSuccess(`✅ ${toInsert.length} depot berhasil di-import`); setTimeout(() => setSuccess(""), 3000)
       load()
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  // File "DB SCHEMA - ....xlsx": 3 sheet (nama sheet = nomor SERVER),
+  // tiap sheet kolomnya SCHEMA/KODE CABANG/KODE BRANCH/SERVER/REMARKS.
+  // Upload baru SELALU replace penuh isi tabel referensi (bukan
+  // digabung) — supaya begitu ada file baru, semua ADP otomatis pakai
+  // isi file barunya.
+  const uploadSchemaFile = async (file: File) => {
+    setSchemaUploading(true); setError("")
+    try {
+      const XLSX = await import("xlsx")
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type: "array" })
+      const toInsert: Omit<SchemaRef, "id">[] = []
+      for (const sheetName of wb.SheetNames) {
+        const ws = wb.Sheets[sheetName]
+        const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" })
+        for (const r of rows) {
+          const schemaName = String(r["SCHEMA"] ?? "").trim()
+          if (!schemaName) continue
+          toInsert.push({
+            adp_code:    Number(r["KODE CABANG"]) || null,
+            schema_name: schemaName,
+            kode_branch: String(r["KODE BRANCH"] ?? "").trim(),
+            server:      Number(r["SERVER"]) || Number(sheetName) || null,
+            remarks:     String(r["REMARKS"] ?? "").trim() || null,
+          })
+        }
+      }
+      if (toInsert.length === 0) throw new Error("Tidak ada baris valid ditemukan di file ini")
+
+      const { error: delErr } = await supabase.from("master_data_schema_ref").delete().not("id", "is", null)
+      if (delErr) throw delErr
+      const { error: insErr } = await supabase.from("master_data_schema_ref").insert(toInsert)
+      if (insErr) throw insErr
+
+      setSuccess(`✅ Referensi schema diganti: ${toInsert.length} baris dari file baru`); setTimeout(() => setSuccess(""), 3000)
+      load()
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    setSchemaUploading(false)
   }
 
   const copyText = (text: string, key: string) => {
@@ -500,13 +560,15 @@ export default function MasterDataPage() {
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
               <Upload size={13} /> Import Excel
             </button>
+            <input ref={schemaFileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) { uploadSchemaFile(f); e.target.value = "" } }} />
+            <button onClick={() => schemaFileRef.current?.click()} disabled={schemaUploading} title="Upload file DB Schema (SCHEMA/KODE CABANG/KODE BRANCH/SERVER/REMARKS) — akan mengganti seluruh referensi lama"
+              style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid #7C3AED", background: "var(--surface)", color: "#7C3AED", fontSize: "12px", fontWeight: 600, cursor: schemaUploading ? "not-allowed" : "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif", opacity: schemaUploading ? 0.6 : 1 }}>
+              <Upload size={13} /> {schemaUploading ? "Mengunggah..." : "Upload Schema Referensi"}
+            </button>
             <button onClick={exportExcel} disabled={exporting || loading}
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid #166534", background: "#166834", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
               <FileSpreadsheet size={13} /> {exporting ? "Exporting..." : `Export Excel (${filtered.length})`}
-            </button>
-            <button onClick={addRow} disabled={!!editId}
-              style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "none", background: "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif", opacity: editId ? 0.5 : 1 }}>
-              <Plus size={14} /> Tambah Depot
             </button>
           </div>
         </div>
@@ -539,12 +601,14 @@ export default function MasterDataPage() {
 
         {view === "table" && <>
         {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "14px", marginBottom: "20px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "14px", marginBottom: "20px" }}>
           {([
-            ["Total Depots", stats.total,    "#0369A1", Building2],
-            ["Active",       stats.active,   "#166534", MapPin   ],
-            ["Inactive",     stats.inactive, "#991B1B", Server   ],
-            ["New",          stats.newDep,   "#92400E", Users    ],
+            ["Main WH",          stats.mainWh,         "#7C3AED", Warehouse    ],
+            ["Main WH Active",   stats.mainWhActive,   "#166534", CheckCircle2 ],
+            ["Main WH Inactive", stats.mainWhInactive, "#991B1B", AlertCircle  ],
+            ["SDP",              stats.sdp,            "#0891B2", Truck        ],
+            ["SDP Active",       stats.sdpActive,      "#166534", CheckCircle2 ],
+            ["SDP Inactive",     stats.sdpInactive,    "#991B1B", AlertCircle  ],
           ] as const).map(([label, value, color, Icon]) => (
             <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
@@ -580,6 +644,10 @@ export default function MasterDataPage() {
             style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "13px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer" }}>
             {SERVER_OPTIONS.map(o => <option key={o} value={o}>{o === "ALL" ? "All Server" : o === "NULL" ? "Tanpa Server" : `Server ${o}`}</option>)}
           </select>
+          <select value={tasFilter} onChange={e => setTasFilter(e.target.value)}
+            style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "13px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer" }}>
+            {TAS_OPTIONS.map(o => <option key={o} value={o}>{o === "ALL" ? "All PIC TAS" : o}</option>)}
+          </select>
           <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "auto", whiteSpace: "nowrap" }}>{filtered.length}/{data.length} hasil</span>
         </div>
 
@@ -597,11 +665,13 @@ export default function MasterDataPage() {
                   <tr>
                     <th style={th}></th>
                     <th style={th}>ADP Code</th>
+                    <th style={th}>Schema</th>
                     <th style={th}>Depot</th>
                     <th style={th}>Distributor</th>
                     <th style={th}>Server</th>
                     <th style={th}>Server Name</th>
                     <th style={th}>Region</th>
+                    <th style={th}>PIC TAS</th>
                     <th style={th}>Area</th>
                     <th style={th}>Status</th>
                     <th style={th}>Remarks</th>
@@ -610,16 +680,20 @@ export default function MasterDataPage() {
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={11} style={{ ...td, textAlign: "center", padding: "48px", color: "var(--text3)" }}>Tidak ada data</td></tr>
+                    <tr><td colSpan={13} style={{ ...td, textAlign: "center", padding: "48px", color: "var(--text3)" }}>Tidak ada data</td></tr>
                   ) : filtered.map((d, i) => {
                     const isEditing  = editId === d.id
                     const isExpanded = expandedId === d.id
                     const bg = isEditing ? "var(--accent-muted)" : isExpanded ? "#F0F9FF" : i % 2 === 0 ? "transparent" : "var(--surface2)"
+                    const ref = d.adp_code != null ? schemaByAdp.get(d.adp_code) : undefined
+                    const effectiveServer = d.server ?? ref?.server ?? null
+                    const serverFromRef = d.server == null && ref?.server != null
+                    const picTas = tasFor(d.region_name)
 
                     return (
-                      <>
+                      <Fragment key={d.id}>
                         {/* Main Row */}
-                        <tr key={d.id}
+                        <tr
                           onClick={() => !isEditing && toggleExpand(d.id)}
                           style={{ background: bg, cursor: isEditing ? "default" : "pointer", transition: "background 0.15s" }}
                           onMouseEnter={e => { if (!isEditing && !isExpanded) (e.currentTarget as HTMLElement).style.background = "var(--accent-muted)" }}
@@ -642,6 +716,13 @@ export default function MasterDataPage() {
                             )}
                           </td>
 
+                          {/* Schema (dari file referensi DB Schema, dicocokkan lewat ADP Code) */}
+                          <td style={{ ...td, fontSize: "11px" }} title={ref?.kode_branch || ""}>
+                            {ref?.schema_name ? (
+                              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>{ref.schema_name}</span>
+                            ) : "—"}
+                          </td>
+
                           {/* Depot */}
                           <td style={td}>
                             {isEditing ? (
@@ -662,13 +743,16 @@ export default function MasterDataPage() {
                             )}
                           </td>
 
-                          {/* Server */}
+                          {/* Server — pakai punya Master Data kalau ada, kalau kosong fallback ke referensi Schema */}
                           <td style={{ ...td, textAlign: "center" }}>
                             {isEditing ? (
                               <input type="number" value={draft.server ?? ""} onChange={e => setDraft(p => ({ ...p, server: Number(e.target.value) || null }))}
                                 placeholder="138" style={{ ...inputSt, width: "60px", textAlign: "center" }} />
                             ) : (
-                              <span style={{ fontFamily: "monospace", fontSize: "11px" }}>{d.server ?? "—"}</span>
+                              <span style={{ fontFamily: "monospace", fontSize: "11px", fontStyle: serverFromRef ? "italic" : "normal", color: serverFromRef ? "var(--text3)" : "var(--text)" }}
+                                title={serverFromRef ? "Belum diisi di Master Data — pakai data dari file referensi Schema" : ""}>
+                                {effectiveServer ?? "—"}{serverFromRef ? "*" : ""}
+                              </span>
                             )}
                           </td>
 
@@ -692,6 +776,15 @@ export default function MasterDataPage() {
                             ) : d.region_name ? (
                               <span style={{ background: (REGION_CLR[d.region_name] || "#64748B") + "20", color: REGION_CLR[d.region_name] || "#64748B", padding: "2px 8px", borderRadius: "99px", fontSize: "11px", fontWeight: 700 }}>
                                 {d.region_name}
+                              </span>
+                            ) : "—"}
+                          </td>
+
+                          {/* PIC TAS — turunan otomatis dari Region, sama seperti mapping di /data-transfer */}
+                          <td style={td}>
+                            {picTas ? (
+                              <span style={{ background: "#F1F5F9", color: "#334155", padding: "2px 8px", borderRadius: "99px", fontSize: "11px", fontWeight: 700 }}>
+                                {picTas}
                               </span>
                             ) : "—"}
                           </td>
@@ -763,7 +856,7 @@ export default function MasterDataPage() {
                         {/* Expanded Personnel Row */}
                         {isExpanded && !isEditing && (
                           <tr key={`${d.id}-expanded`}>
-                            <td colSpan={11} style={{ padding: 0, borderBottom: "2px solid #0369A1" }}>
+                            <td colSpan={13} style={{ padding: 0, borderBottom: "2px solid #0369A1" }}>
                               <div style={{ background: "linear-gradient(135deg,#F0F9FF,#E0F2FE)", padding: "20px 20px 20px 52px" }}>
                                 {/* Header info */}
                                 <div style={{ marginBottom: "14px" }}>
@@ -771,7 +864,7 @@ export default function MasterDataPage() {
                                     📍 {d.depot} {d.distributor_name ? `— ${d.distributor_name}` : ""}
                                   </div>
                                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>
-                                    ADP: {d.adp_code ?? "—"} · Server: {d.server ?? "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
+                                    ADP: {d.adp_code ?? "—"} · Schema: {ref?.schema_name || "—"} · Server: {effectiveServer ?? "—"} · PIC TAS: {picTas || "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
                                   </div>
                                 </div>
 
@@ -808,7 +901,7 @@ export default function MasterDataPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     )
                   })}
                 </tbody>
@@ -1004,8 +1097,10 @@ function HierarchyView({
           {rootNodes.length === 0 ? (
             <div style={{ padding: "30px", textAlign: "center", color: "var(--text3)", fontSize: "13px" }}>Belum ada node RDM. Klik &quot;Tambah RDM&quot; buat mulai.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              {rootNodes.map(n => <NodeRow key={n.id} n={n} depth={0} />)}
+            <div style={{ overflowX: "auto" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: "fit-content" }}>
+                {rootNodes.map(n => <NodeRow key={n.id} n={n} depth={0} />)}
+              </div>
             </div>
           )}
 
@@ -1019,8 +1114,8 @@ function HierarchyView({
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "320px", overflowY: "auto" }}>
                 {unassignedDepots.map(d => (
-                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", background: "var(--surface2)", borderRadius: "8px" }}>
-                    <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", flex: 1 }}>{d.depot}</span>
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px 10px", background: "var(--surface2)", borderRadius: "8px", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", flex: 1, minWidth: "120px" }}>{d.depot}</span>
                     <span style={{ fontSize: "10px", color: "var(--text3)", fontFamily: "monospace" }}>ADP {d.adp_code ?? "—"}</span>
                     <select defaultValue="" onChange={e => { if (e.target.value) assignDepotToAds(d.id, e.target.value) }}
                       style={{ padding: "5px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "11px", fontFamily: "'Plus Jakarta Sans', sans-serif", cursor: "pointer", maxWidth: "260px" }}>
