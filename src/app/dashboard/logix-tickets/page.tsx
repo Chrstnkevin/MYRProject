@@ -97,8 +97,16 @@ const STAGE_COLOR: Record<string, { bg: string; color: string }> = {
   "OK+NOTE":        { bg: "#1D4ED8", color: "#FFFFFF" },
   "NOT OK":         { bg: "#DC2626", color: "#FFFFFF" },
 }
+// PENTING: pakai tanggal kalender LOKAL (bukan toISOString(), yang
+// konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
+// (WIB/WITA/WIT/Manila dst.), tengah malam lokal ke-geser MUNDUR satu
+// hari begitu dikonversi ke UTC. Ini bikin startOfWeek/addDaysIso salah
+// hitung 1 hari — gejalanya label minggu kepotong 6 hari ("11-16 Sep")
+// bukan 7 hari ("11-17 Sep"), dan tanggal yang baru diisi user bisa
+// jatuh di luar rentang minggu yang ke-generate sehingga tidak muncul
+// sebagai bar sama sekali.
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 }
 function startOfWeek(iso: string): string {
   const d = new Date(iso + "T00:00:00")
