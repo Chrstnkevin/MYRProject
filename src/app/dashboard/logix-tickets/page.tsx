@@ -289,6 +289,8 @@ export default function LogixTicketsPage() {
       open: count("OPEN"),
       appsR1: count("APPS R1"),
       openBr: count("OPEN BR"),
+      brR1: count("BR R1"),
+      appsR2: count("APPS R2"),
       solved,
       pctSolved: tickets.length > 0 ? (solved / tickets.length) * 100 : 0,
     }
@@ -530,16 +532,21 @@ Terimakasih pak`
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "14px" }}>
         {([
-          ["Total Tiket", loading ? "—" : String(summary.total), "#0369A1"],
-          ["Open", loading ? "—" : String(summary.open), "#991B1B"],
-          ["APPS R1", loading ? "—" : String(summary.appsR1), "#92400E"],
-          ["Open BR", loading ? "—" : String(summary.openBr), "#C2410C"],
-          ["Solved", loading ? "—" : String(summary.solved), "#166534"],
-          ["Percentage Solved", loading ? "—" : `${summary.pctSolved.toFixed(0)}%`, "#0891B2"],
-        ] as const).map(([label, value, color]) => (
+          ["Total Tiket", loading ? "—" : String(summary.total), "#0369A1", ""],
+          ["Open", loading ? "—" : String(summary.open), "#991B1B", ""],
+          ["APPS R1", loading ? "—" : String(summary.appsR1), "#92400E", ""],
+          ["Open BR", loading ? "—" : String(summary.openBr), "#C2410C", ""],
+          ["BR R1", loading ? "—" : String(summary.brR1), "#B45309", ""],
+          ["APPS R2", loading ? "—" : String(summary.appsR2), "#A16207", ""],
+          // Percentage jadi angka utama, jumlah tiket-nya jadi angka kecil pendamping
+          ["Solved", loading ? "—" : `${summary.pctSolved.toFixed(0)}%`, "#166534", loading ? "" : `${summary.solved} tiket`],
+        ] as const).map(([label, value, color, sub]) => (
           <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "6px" }}>{label}</div>
-            <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{value}</div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+              <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{value}</div>
+              {sub && <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text3)" }}>{sub}</div>}
+            </div>
           </div>
         ))}
       </div>
