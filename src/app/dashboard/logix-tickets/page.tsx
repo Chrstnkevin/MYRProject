@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, Fragment } from "react"
 import {
   Ticket, RefreshCw, Search, AlertCircle, KeyRound, Settings,
   ChevronUp, ChevronDown, Eye, EyeOff, Save, ExternalLink,
-  Maximize2, Minimize2, X, Copy, Check,
+  Maximize2, Minimize2, X, Copy, Check, Info,
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
@@ -202,7 +202,7 @@ export default function LogixTicketsPage() {
 
   // ── Timeline Mingguan: kelompokkan tiap entri timeline BR ke minggu (Senin-Minggu) yang dilaluinya ──
   const weeklyTimeline = useMemo(() => {
-    if (timelines.length === 0) return { weeks: [] as string[], rows: [] as { no_ticket: string; judul: string; cells: Map<string, TimelineEntry> }[] }
+    if (timelines.length === 0) return { weeks: [] as string[], rows: [] as { no_ticket: string; judul: string; cells: Map<string, TimelineEntry>; isBrOpen: boolean }[] }
 
     const todayIso = isoDate(new Date())
     let minWeek = ""
@@ -220,6 +220,7 @@ export default function LogixTicketsPage() {
     for (let c = minWeek; c <= maxWeek; c = addDaysIso(c, 7)) weeks.push(c)
 
     const ticketTitle = new Map(tickets.map(t => [t.no_ticket, t.judul_ticket]))
+    const ticketStatus = new Map(tickets.map(t => [t.no_ticket, t.nm_status]))
 
     const rows = Array.from(timelineByTicket.entries()).map(([no_ticket, entries]) => {
       const cells = new Map<string, TimelineEntry>()
@@ -229,7 +230,8 @@ export default function LogixTicketsPage() {
         const wTo = startOfWeek(e.date_to || todayIso)
         for (let c = wFrom; c <= wTo; c = addDaysIso(c, 7)) cells.set(c, e)
       }
-      return { no_ticket, judul: ticketTitle.get(no_ticket) || "", cells }
+      const isBrOpen = (ticketStatus.get(no_ticket) || "").toUpperCase() === "OPEN BR"
+      return { no_ticket, judul: ticketTitle.get(no_ticket) || "", cells, isBrOpen }
     }).sort((a, b) => {
       const aWeeks = Array.from(a.cells.keys())
       const bWeeks = Array.from(b.cells.keys())
@@ -295,6 +297,10 @@ export default function LogixTicketsPage() {
       pctSolved: tickets.length > 0 ? (solved / tickets.length) * 100 : 0,
     }
   }, [tickets])
+
+  // ── Info detail buat card "Open" — daftar nomor/nama tiket + tanggal dibuat ──
+  const [openInfoOpen, setOpenInfoOpen] = useState(false)
+  const openTickets = useMemo(() => tickets.filter(t => (t.nm_status || "").toUpperCase() === "OPEN"), [tickets])
 
   // ── Salin pesan update harian ke stakeholder ──
   const [copyOk, setCopyOk] = useState(false)
@@ -541,12 +547,44 @@ Terimakasih pak`
           // Percentage jadi angka utama, jumlah tiket-nya jadi angka kecil pendamping
           ["Solved", loading ? "—" : `${summary.pctSolved.toFixed(0)}%`, "#166534", loading ? "" : `${summary.solved} tiket`],
         ] as const).map(([label, value, color, sub]) => (
-          <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
-            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "6px" }}>{label}</div>
+          <div key={label} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "6px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+              {label === "Open" && (
+                <button onClick={() => setOpenInfoOpen(v => !v)} title="Lihat daftar tiket Open"
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "15px", height: "15px", borderRadius: "50%", border: "1px solid var(--text3)", background: "none", color: "var(--text3)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                  <Info size={10} />
+                </button>
+              )}
+            </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
               <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{value}</div>
               {sub && <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text3)" }}>{sub}</div>}
             </div>
+
+            {label === "Open" && openInfoOpen && (
+              <div onClick={e => e.stopPropagation()}
+                style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, width: "280px", maxHeight: "260px", overflowY: "auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", padding: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Tiket Status Open</span>
+                  <button onClick={() => setOpenInfoOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}><X size={13} /></button>
+                </div>
+                {openTickets.length === 0 ? (
+                  <div style={{ fontSize: "12px", color: "var(--text3)", padding: "8px 0" }}>Tidak ada tiket Open</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {openTickets.map(t => (
+                      <div key={t.no_ticket} onClick={() => { setSearch(t.no_ticket); setExpandedRow(t.no_ticket); setOpenInfoOpen(false) }}
+                        style={{ cursor: "pointer", padding: "6px 8px", borderRadius: "6px", background: "var(--surface2)" }}>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: "#0369A1", fontFamily: "monospace" }}>{t.no_ticket}</div>
+                        <div style={{ fontSize: "11px", color: "var(--text)", marginTop: "2px" }}>{t.judul_ticket}</div>
+                        <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>Dibuat: {fmtDate(t.date_created)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -701,10 +739,13 @@ Terimakasih pak`
                   </thead>
                   <tbody>
                     {weeklyTimeline.rows.map(row => (
-                      <tr key={row.no_ticket}>
+                      <tr key={row.no_ticket} style={{ opacity: row.isBrOpen ? 1 : 0.55 }}>
                         <td onClick={() => { setSearch(row.no_ticket); setExpandedRow(row.no_ticket) }}
                           style={{ position: "sticky", left: 0, background: "var(--surface)", padding: "4px 10px 4px 0", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap" }}>
                           <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0369A1" }}>{row.no_ticket}</span>
+                          {!row.isBrOpen && (
+                            <span style={{ marginLeft: "6px", fontSize: "9px", fontWeight: 700, padding: "1px 6px", borderRadius: "99px", background: "#DCFCE7", color: "#166534" }}>Solved</span>
+                          )}
                           {row.judul && (
                             <div style={{ fontSize: "10px", color: "var(--text3)", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis" }}>{row.judul}</div>
                           )}
