@@ -9,7 +9,7 @@ import {
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
+  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend,
 } from "recharts"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -34,6 +34,42 @@ interface LogixTicket {
   nm_severity: string
   date_created: string
   date_updated: string
+}
+
+// Dari /api/logix-tickets-sla (endpoint Logix /ticketing/json1) — skema
+// beda total dari LogixTicket di atas, khusus data timing/SLA respon.
+// "apps" di nama field = "TAS" di label UI Logix (beda istilah internal
+// vs tampilan, dikonfirmasi dari capture user).
+interface SlaTicket {
+  nomor_ticket: string
+  nm_user: string
+  ticket_dibuat: string       // "YYYY-MM-DD HH:mm:ss"
+  nm_tas_cover: string
+  nm_tas: string | null
+  ticket_direspon_apps: string
+  respon_apps: string         // durasi teks, mis. "1 hours 38 minutes 25 seconds"
+  nm_br: string | null
+  ticket_direspon_br: string
+  respon_br: string
+  nm_dev: string | null
+  ticket_direspon_dev: string
+  respon_dev: string
+  status: string
+  user_close_ticket: string | null
+  ticket_diselesaikan: string
+  lama_ticket: string         // total waktu dari dibuat sampai solved
+}
+
+// Parse durasi teks Logix ("X hours Y minutes Z seconds", bagian mana pun
+// boleh tidak ada) jadi total jam desimal. Return null kalau kosong/tidak
+// ada durasi (tiket belum direspon/belum solved di tahap itu).
+function parseDurationHours(s: string | null | undefined): number | null {
+  if (!s || !s.trim()) return null
+  const h = /(\d+)\s*hour/i.exec(s)
+  const m = /(\d+)\s*minute/i.exec(s)
+  const sec = /(\d+)\s*second/i.exec(s)
+  if (!h && !m && !sec) return null
+  return (h ? Number(h[1]) : 0) + (m ? Number(m[1]) : 0) / 60 + (sec ? Number(sec[1]) : 0) / 3600
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -200,6 +236,26 @@ export default function LogixTicketsPage() {
     setLoading(false)
   }
 
+  // ── Data SLA/timing respon (Response TAS, Time BR, Time Solved) ──
+  const [slaTickets, setSlaTickets] = useState<SlaTicket[]>([])
+  const [slaLoading, setSlaLoading] = useState(false)
+  const [slaError, setSlaError] = useState("")
+
+  const fetchSlaTickets = async () => {
+    setSlaLoading(true); setSlaError("")
+    try {
+      const res = await fetch("/api/logix-tickets-sla")
+      const json = await res.json()
+      if (!res.ok) setSlaError(json.error || `HTTP ${res.status}`)
+      else setSlaTickets(json.data || [])
+    } catch (e) {
+      setSlaError(e instanceof Error ? e.message : String(e))
+    }
+    setSlaLoading(false)
+  }
+
+  const refreshAll = () => { fetchTickets(); fetchSlaTickets() }
+
   const loadCredentials = async () => {
     const { data } = await supabase.from("logix_credentials").select("email,password").eq("id", 1).maybeSingle()
     if (data) { setCredEmail(data.email); setCredPassword(data.password) }
@@ -210,7 +266,7 @@ export default function LogixTicketsPage() {
     if (data) setTimelines(data as TimelineEntry[])
   }
 
-  useEffect(() => { loadCredentials(); fetchTickets(); loadTimelines() }, [])
+  useEffect(() => { loadCredentials(); fetchTickets(); fetchSlaTickets(); loadTimelines() }, [])
 
   const timelineByTicket = useMemo(() => {
     const m = new Map<string, TimelineEntry[]>()
@@ -370,22 +426,26 @@ Terimakasih pak`
   const localDateKey = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 
-  const trendData = useMemo(() => {
-    let days: { key: string; label: string; count: number }[]
-    if (periodFilter === "ALL") {
+  // Bucket harian dipakai bareng oleh chart Tren & chart SLA di bawah,
+  // biar sumbu-X-nya selalu sinkron satu sama lain.
+  const buildDayBuckets = (period: string): { key: string; label: string }[] => {
+    if (period === "ALL") {
       const today = new Date(); today.setHours(0, 0, 0, 0)
-      days = Array.from({ length: 14 }, (_, i) => {
+      return Array.from({ length: 14 }, (_, i) => {
         const d = new Date(today); d.setDate(d.getDate() - (13 - i))
-        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
-      })
-    } else {
-      const [y, m] = periodFilter.split("-").map(Number)
-      const daysInMonth = new Date(y, m, 0).getDate()
-      days = Array.from({ length: daysInMonth }, (_, i) => {
-        const d = new Date(y, m - 1, i + 1)
-        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
+        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }) }
       })
     }
+    const [y, m] = period.split("-").map(Number)
+    const daysInMonth = new Date(y, m, 0).getDate()
+    return Array.from({ length: daysInMonth }, (_, i) => {
+      const d = new Date(y, m - 1, i + 1)
+      return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }) }
+    })
+  }
+
+  const trendData = useMemo(() => {
+    const days = buildDayBuckets(periodFilter).map(d => ({ ...d, count: 0 }))
     const byKey = new Map(days.map(d => [d.key, d]))
     for (const t of periodTickets) {
       const n = Number(t.date_created)
@@ -394,7 +454,47 @@ Terimakasih pak`
       if (row) row.count++
     }
     return days
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodTickets, periodFilter])
+
+  // Parse "YYYY-MM-DD HH:mm:ss" (format datetime Logix) sebagai waktu LOKAL
+  // — bukan Date.parse biasa, yang di sebagian browser bisa nganggap string
+  // tanpa timezone itu UTC dan geser tanggalnya.
+  function parseLogixDateTime(s: string): Date | null {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || "")
+    if (!m) return null
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
+  }
+
+  // Grafik SLA: rata-rata Response TAS / Time BR / Time Solved (jam) per
+  // hari tiket DIBUAT — dibucket sinkron sama trendData di atas. Sengaja
+  // ikut periodFilter yang sama juga, supaya dua grafik ini selalu
+  // menampilkan rentang waktu yang sama pas ditaruh sebelahan.
+  const slaChartData = useMemo(() => {
+    const days = buildDayBuckets(periodFilter).map(d => ({
+      ...d, tasSum: 0, tasN: 0, brSum: 0, brN: 0, solvedSum: 0, solvedN: 0,
+    }))
+    const byKey = new Map(days.map(d => [d.key, d]))
+    for (const t of slaTickets) {
+      const created = parseLogixDateTime(t.ticket_dibuat)
+      if (!created) continue
+      const row = byKey.get(localDateKey(created))
+      if (!row) continue
+      const tas = parseDurationHours(t.respon_apps)
+      if (tas != null) { row.tasSum += tas; row.tasN++ }
+      const br = parseDurationHours(t.respon_br)
+      if (br != null) { row.brSum += br; row.brN++ }
+      const solved = parseDurationHours(t.lama_ticket)
+      if (solved != null) { row.solvedSum += solved; row.solvedN++ }
+    }
+    return days.map(d => ({
+      label: d.label,
+      responTas: d.tasN ? Number((d.tasSum / d.tasN).toFixed(1)) : null,
+      timeBr: d.brN ? Number((d.brSum / d.brN).toFixed(1)) : null,
+      timeSolved: d.solvedN ? Number((d.solvedSum / d.solvedN).toFixed(1)) : null,
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaTickets, periodFilter])
 
   // Distribusi severity, urutan tetap HIGH → MEDIUM → LOW → NEW TICKET
   const severityData = useMemo(() => {
@@ -519,7 +619,7 @@ Terimakasih pak`
             <Settings size={14} /> Kelola Kredensial
             {credOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-          <button onClick={fetchTickets} disabled={loading}
+          <button onClick={refreshAll} disabled={loading}
             style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "none", background: "#DC2626", color: "white", fontSize: "12px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
             <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
           </button>
@@ -630,24 +730,50 @@ Terimakasih pak`
       {/* Charts */}
       {!loading && periodTickets.length > 0 && (
         <>
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
-            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
-            <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — {periodFilter === "ALL" ? "14 Hari Terakhir" : periodLabel(periodFilter)}</div>
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={trendData}>
-                <defs>
-                  <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
-                <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", alignItems: "start" }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — {periodFilter === "ALL" ? "14 Hari Terakhir" : periodLabel(periodFilter)}</div>
+              <ResponsiveContainer width="100%" height={180}>
+                <AreaChart data={trendData}>
+                  <defs>
+                    <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
+                  <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "2px" }}>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>SLA</div>
+                {slaLoading && <RefreshCw size={11} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Response TAS / Time BR / Time Solved (jam)</div>
+              {slaError ? (
+                <div style={{ height: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={slaChartData}>
+                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
+                    <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
+                    <Line type="monotone" dataKey="responTas" stroke="#0369A1" strokeWidth={2} dot={false} name="Response TAS" connectNulls />
+                    <Line type="monotone" dataKey="timeBr" stroke="#7C3AED" strokeWidth={2} dot={false} name="Time BR" connectNulls />
+                    <Line type="monotone" dataKey="timeSolved" stroke="#166534" strokeWidth={2} dot={false} name="Time Solved" connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px", alignItems: "start" }}>
