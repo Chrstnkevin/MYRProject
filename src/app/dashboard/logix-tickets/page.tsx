@@ -9,7 +9,7 @@ import {
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend,
+  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line,
 } from "recharts"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -133,6 +133,17 @@ const STAGE_COLOR: Record<string, { bg: string; color: string }> = {
   "OK+NOTE":        { bg: "#1D4ED8", color: "#FFFFFF" },
   "NOT OK":         { bg: "#DC2626", color: "#FFFFFF" },
 }
+
+// Tab metrik di panel SLA — tiap tab nunjukin 1 garis aja, dan filter nama
+// yang muncul di sebelahnya nyaring berdasarkan orang yang nanganin tahap
+// itu (nm_tas buat Response TAS, nm_br buat Response BR, nm_dev buat Time
+// Solved — sejalan sama tripletnya di data SLA logix).
+const SLA_TABS = [
+  { key: "responTas", label: "Response TAS", field: "respon_apps", nameField: "nm_tas", color: "#0369A1" },
+  { key: "timeBr", label: "Response BR", field: "respon_br", nameField: "nm_br", color: "#7C3AED" },
+  { key: "timeSolved", label: "Time Solved", field: "lama_ticket", nameField: "nm_dev", color: "#166534" },
+] as const
+type SlaTabKey = typeof SLA_TABS[number]["key"]
 // PENTING: pakai tanggal kalender LOKAL (bukan toISOString(), yang
 // konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
 // (WIB/WITA/WIT/Manila dst.), tengah malam lokal ke-geser MUNDUR satu
@@ -197,6 +208,12 @@ export default function LogixTicketsPage() {
     const [y, m] = key.split("-")
     return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" })
   }
+
+  // ── Tab metrik + filter nama di panel SLA ──
+  const [slaTabKey, setSlaTabKey] = useState<SlaTabKey>("responTas")
+  const [slaNameFilter, setSlaNameFilter] = useState("ALL")
+  const activeSlaTab = SLA_TABS.find(t => t.key === slaTabKey)!
+  const handleSlaTabChange = (key: SlaTabKey) => { setSlaTabKey(key); setSlaNameFilter("ALL") }
 
   // ── Timeline internal (Open BR) — semua tahap tetap langsung ditampilkan per tiket,
   // tinggal isi rentang tanggalnya per tahap ──
@@ -476,35 +493,39 @@ Terimakasih pak`
     return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
   }
 
-  // Grafik SLA: rata-rata Response TAS / Time BR / Time Solved (jam) per
-  // hari tiket DIBUAT — dibucket sinkron sama trendData di atas. Sengaja
-  // ikut periodFilter yang sama juga, supaya dua grafik ini selalu
-  // menampilkan rentang waktu yang sama pas ditaruh sebelahan.
+  // Daftar nama unik buat filter di panel SLA — sumbernya ganti sesuai tab
+  // yang lagi aktif (nm_tas/nm_br/nm_dev).
+  const slaNameOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of slaTickets) {
+      const v = (t[activeSlaTab.nameField] || "").trim()
+      if (v) set.add(v)
+    }
+    return Array.from(set).sort()
+  }, [slaTickets, activeSlaTab.nameField])
+
+  // Grafik SLA: rata-rata durasi (jam) per hari tiket DIBUAT, buat metrik +
+  // orang yang lagi dipilih di tab/filter. Dibucket sinkron sama trendData
+  // di atas, dan tetap ikut periodFilter yang sama supaya dua grafik ini
+  // selalu menampilkan rentang waktu yang sama pas ditaruh sebelahan.
   const slaChartData = useMemo(() => {
-    const days = buildDayBuckets(periodFilter).map(d => ({
-      ...d, tasSum: 0, tasN: 0, brSum: 0, brN: 0, solvedSum: 0, solvedN: 0,
-    }))
+    const days = buildDayBuckets(periodFilter).map(d => ({ ...d, sum: 0, n: 0 }))
     const byKey = new Map(days.map(d => [d.key, d]))
     for (const t of slaTickets) {
+      if (slaNameFilter !== "ALL" && (t[activeSlaTab.nameField] || "").trim() !== slaNameFilter) continue
       const created = parseLogixDateTime(t.ticket_dibuat)
       if (!created) continue
       const row = byKey.get(localDateKey(created))
       if (!row) continue
-      const tas = parseDurationHours(t.respon_apps)
-      if (tas != null) { row.tasSum += tas; row.tasN++ }
-      const br = parseDurationHours(t.respon_br)
-      if (br != null) { row.brSum += br; row.brN++ }
-      const solved = parseDurationHours(t.lama_ticket)
-      if (solved != null) { row.solvedSum += solved; row.solvedN++ }
+      const val = parseDurationHours(t[activeSlaTab.field])
+      if (val != null) { row.sum += val; row.n++ }
     }
     return days.map(d => ({
       label: d.label,
-      responTas: d.tasN ? Number((d.tasSum / d.tasN).toFixed(1)) : null,
-      timeBr: d.brN ? Number((d.brSum / d.brN).toFixed(1)) : null,
-      timeSolved: d.solvedN ? Number((d.solvedSum / d.solvedN).toFixed(1)) : null,
+      value: d.n ? Number((d.sum / d.n).toFixed(1)) : null,
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slaTickets, periodFilter])
+  }, [slaTickets, periodFilter, slaTabKey, slaNameFilter])
 
   // Distribusi severity, urutan tetap HIGH → MEDIUM → LOW → NEW TICKET
   const severityData = useMemo(() => {
@@ -756,7 +777,7 @@ Terimakasih pak`
             </div>
 
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "2px", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
                 <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>SLA</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   {slaLoading && <RefreshCw size={11} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
@@ -767,7 +788,29 @@ Terimakasih pak`
                   </select>
                 </div>
               </div>
-              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Response TAS / Time BR / Time Solved (jam)</div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "4px", background: "var(--surface2)", padding: "3px", borderRadius: "8px" }}>
+                  {SLA_TABS.map(tab => (
+                    <button key={tab.key} onClick={() => handleSlaTabChange(tab.key)}
+                      style={{
+                        padding: "5px 10px", borderRadius: "6px", border: "none", cursor: "pointer",
+                        fontSize: "11px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaTabKey === tab.key ? tab.color : "transparent",
+                        color: slaTabKey === tab.key ? "#FFFFFF" : "var(--text3)",
+                      }}>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <select value={slaNameFilter} onChange={e => setSlaNameFilter(e.target.value)}
+                  style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer", maxWidth: "160px" }}>
+                  <option value="ALL">Semua Nama</option>
+                  {slaNameOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>{activeSlaTab.label} (jam)</div>
               {slaError ? (
                 <div style={{ height: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
               ) : (
@@ -777,10 +820,7 @@ Terimakasih pak`
                     <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
                     <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
                     <Tooltip content={<ChartTooltip />} />
-                    <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
-                    <Line type="monotone" dataKey="responTas" stroke="#0369A1" strokeWidth={2} dot={false} name="Response TAS" connectNulls />
-                    <Line type="monotone" dataKey="timeBr" stroke="#7C3AED" strokeWidth={2} dot={false} name="Time BR" connectNulls />
-                    <Line type="monotone" dataKey="timeSolved" stroke="#166534" strokeWidth={2} dot={false} name="Time Solved" connectNulls />
+                    <Line type="monotone" dataKey="value" stroke={activeSlaTab.color} strokeWidth={2} dot={false} name={activeSlaTab.label} connectNulls />
                   </LineChart>
                 </ResponsiveContainer>
               )}
