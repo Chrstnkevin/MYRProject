@@ -144,6 +144,27 @@ export default function LogixTicketsPage() {
   const [userFilter, setUserFilter] = useState("ALL")
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
+  // ── Filter Periode (bulan) — "ALL" default, tidak menyaring apapun ──
+  const [periodFilter, setPeriodFilter] = useState("ALL")
+  const monthKey = (unixSec: string) => {
+    const n = Number(unixSec)
+    if (!n) return ""
+    const d = new Date(n * 1000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+  }
+  const periodOptions = useMemo(() => {
+    const keys = Array.from(new Set(tickets.map(t => monthKey(t.date_created)).filter(Boolean)))
+    return keys.sort().reverse()
+  }, [tickets])
+  const periodLabel = (key: string) => {
+    const [y, m] = key.split("-")
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" })
+  }
+  const periodTickets = useMemo(() => {
+    if (periodFilter === "ALL") return tickets
+    return tickets.filter(t => monthKey(t.date_created) === periodFilter)
+  }, [tickets, periodFilter])
+
   // ── Timeline internal (Open BR) — semua tahap tetap langsung ditampilkan per tiket,
   // tinggal isi rentang tanggalnya per tahap ──
   const [timelines, setTimelines] = useState<TimelineEntry[]>([])
@@ -284,23 +305,23 @@ export default function LogixTicketsPage() {
   }
 
   const summary = useMemo(() => {
-    const count = (status: string) => tickets.filter(t => (t.nm_status || "").toUpperCase() === status).length
+    const count = (status: string) => periodTickets.filter(t => (t.nm_status || "").toUpperCase() === status).length
     const solved = count("SOLVED")
     return {
-      total: tickets.length,
+      total: periodTickets.length,
       open: count("OPEN"),
       appsR1: count("APPS R1"),
       openBr: count("OPEN BR"),
       brR1: count("BR R1"),
       appsR2: count("APPS R2"),
       solved,
-      pctSolved: tickets.length > 0 ? (solved / tickets.length) * 100 : 0,
+      pctSolved: periodTickets.length > 0 ? (solved / periodTickets.length) * 100 : 0,
     }
-  }, [tickets])
+  }, [periodTickets])
 
   // ── Info detail buat card "Open" — daftar nomor/nama tiket + tanggal dibuat ──
   const [openInfoOpen, setOpenInfoOpen] = useState(false)
-  const openTickets = useMemo(() => tickets.filter(t => (t.nm_status || "").toUpperCase() === "OPEN"), [tickets])
+  const openTickets = useMemo(() => periodTickets.filter(t => (t.nm_status || "").toUpperCase() === "OPEN"), [periodTickets])
 
   // ── Salin pesan update harian ke stakeholder ──
   const [copyOk, setCopyOk] = useState(false)
@@ -336,11 +357,12 @@ Terimakasih pak`
     }
   }
 
-  const statusOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_status))).sort(), [tickets])
-  const tipeOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.tipe_ticket))).sort(), [tickets])
-  const userOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_user))).sort(), [tickets])
+  const statusOptions = useMemo(() => Array.from(new Set(periodTickets.map(t => t.nm_status))).sort(), [periodTickets])
+  const tipeOptions = useMemo(() => Array.from(new Set(periodTickets.map(t => t.tipe_ticket))).sort(), [periodTickets])
+  const userOptions = useMemo(() => Array.from(new Set(periodTickets.map(t => t.nm_user))).sort(), [periodTickets])
 
-  // Tren tiket dibuat per hari, 14 hari terakhir.
+  // Tren tiket dibuat per hari — 14 hari terakhir kalau periode "ALL",
+  // atau semua hari di bulan itu kalau periode tertentu dipilih.
   // PENTING: pakai tanggal kalender LOKAL buat key-nya (bukan toISOString,
   // yang konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
   // (WIB/WITA/WIT/Manila dst.), tiket yang dibuat sore/malam bakal ke-hitung
@@ -349,38 +371,48 @@ Terimakasih pak`
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 
   const trendData = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const days = Array.from({ length: 14 }, (_, i) => {
-      const d = new Date(today); d.setDate(d.getDate() - (13 - i))
-      return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
-    })
+    let days: { key: string; label: string; count: number }[]
+    if (periodFilter === "ALL") {
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      days = Array.from({ length: 14 }, (_, i) => {
+        const d = new Date(today); d.setDate(d.getDate() - (13 - i))
+        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
+      })
+    } else {
+      const [y, m] = periodFilter.split("-").map(Number)
+      const daysInMonth = new Date(y, m, 0).getDate()
+      days = Array.from({ length: daysInMonth }, (_, i) => {
+        const d = new Date(y, m - 1, i + 1)
+        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
+      })
+    }
     const byKey = new Map(days.map(d => [d.key, d]))
-    for (const t of tickets) {
+    for (const t of periodTickets) {
       const n = Number(t.date_created)
       if (!n) continue
       const row = byKey.get(localDateKey(new Date(n * 1000)))
       if (row) row.count++
     }
     return days
-  }, [tickets])
+  }, [periodTickets, periodFilter])
 
   // Distribusi severity, urutan tetap HIGH → MEDIUM → LOW → NEW TICKET
   const severityData = useMemo(() => {
     const order = ["HIGH", "MEDIUM", "LOW", "NEW TICKET"]
     const counts = new Map<string, number>()
-    for (const t of tickets) {
+    for (const t of periodTickets) {
       const s = (t.nm_severity || "—").toUpperCase()
       counts.set(s, (counts.get(s) || 0) + 1)
     }
     const known = order.filter(s => counts.has(s))
     const rest = Array.from(counts.keys()).filter(s => !order.includes(s))
     return [...known, ...rest].map(name => ({ name, value: counts.get(name)!, fill: severityColor(name).color }))
-  }, [tickets])
+  }, [periodTickets])
 
   // Top 5 aplikasi paling banyak tiket
   const aplikasiData = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const t of tickets) {
+    for (const t of periodTickets) {
       if (!t.nm_aplikasi) continue
       counts.set(t.nm_aplikasi, (counts.get(t.nm_aplikasi) || 0) + 1)
     }
@@ -388,20 +420,20 @@ Terimakasih pak`
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 5)
-  }, [tickets])
+  }, [periodTickets])
 
   // Semua kategori issue (nm_kategori), diurut dari yang paling banyak.
   // Tiket yang masih OPEN biasanya belum dikategorikan (nm_kategori null)
   // karena itu baru diisi PIC saat memproses tiket, jadi otomatis ke-exclude.
   const ticketsByKategori = useMemo(() => {
     const m = new Map<string, LogixTicket[]>()
-    for (const t of tickets) {
+    for (const t of periodTickets) {
       if (!t.nm_kategori) continue
       if (!m.has(t.nm_kategori)) m.set(t.nm_kategori, [])
       m.get(t.nm_kategori)!.push(t)
     }
     return m
-  }, [tickets])
+  }, [periodTickets])
 
   const kategoriData = useMemo(() => {
     const total = Array.from(ticketsByKategori.values()).reduce((s, arr) => s + arr.length, 0)
@@ -432,7 +464,7 @@ Terimakasih pak`
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return tickets
+    return periodTickets
       .filter(t => {
         const matchQ = !q ||
           t.no_ticket.toLowerCase().includes(q) ||
@@ -445,7 +477,7 @@ Terimakasih pak`
         return matchQ && matchStatus && matchTipe && matchUser
       })
       .sort((a, b) => Number(b.date_created) - Number(a.date_created))
-  }, [tickets, search, statusFilter, tipeFilter, userFilter])
+  }, [periodTickets, search, statusFilter, tipeFilter, userFilter])
 
   const th: React.CSSProperties = {
     padding: "10px 12px", fontSize: "10px", fontWeight: 700, color: "var(--text3)",
@@ -468,12 +500,18 @@ Terimakasih pak`
             <h1 style={{ fontSize: "20px", fontWeight: 800, color: "var(--text)", margin: 0 }}>Monitoring Ticket Logix</h1>
             <p style={{ fontSize: "12px", color: "var(--text3)", margin: 0 }}>
               Log Support Excellent (PHI) · {loading ? "memuat..." : `${recordsTotal} tiket total`}
+              {!loading && periodFilter !== "ALL" && ` · ${periodTickets.length} tiket di ${periodLabel(periodFilter)}`}
             </p>
           </div>
         </div>
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
-          <button onClick={copyStatusMessage} disabled={loading || tickets.length === 0}
-            style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "none", background: copyOk ? "#166534" : "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: (loading || tickets.length === 0) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (loading || tickets.length === 0) ? 0.6 : 1 }}>
+          <select value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}
+            style={{ padding: "9px 12px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "12px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>
+            <option value="ALL">Semua Periode</option>
+            {periodOptions.map(k => <option key={k} value={k}>{periodLabel(k)}</option>)}
+          </select>
+          <button onClick={copyStatusMessage} disabled={loading || periodTickets.length === 0}
+            style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "none", background: copyOk ? "#166534" : "#0369A1", color: "white", fontSize: "12px", fontWeight: 700, cursor: (loading || periodTickets.length === 0) ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: (loading || periodTickets.length === 0) ? 0.6 : 1 }}>
             {copyOk ? <Check size={14} /> : <Copy size={14} />} {copyOk ? "Tersalin!" : "Salin Pesan Update"}
           </button>
           <button onClick={() => setCredOpen(v => !v)}
@@ -552,7 +590,7 @@ Terimakasih pak`
               <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
               {label === "Open" && (
                 <button onClick={() => setOpenInfoOpen(v => !v)} title="Lihat daftar tiket Open"
-                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "15px", height: "15px", borderRadius: "50%", border: "1px solid var(--text3)", background: "none", color: "var(--text3)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "15px", height: "15px", borderRadius: "50%", border: "none", background: "#991B1B", color: "white", cursor: "pointer", padding: 0, flexShrink: 0 }}>
                   <Info size={10} />
                 </button>
               )}
@@ -590,11 +628,11 @@ Terimakasih pak`
       </div>
 
       {/* Charts */}
-      {!loading && tickets.length > 0 && (
+      {!loading && periodTickets.length > 0 && (
         <>
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
             <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
-            <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — 14 Hari Terakhir</div>
+            <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — {periodFilter === "ALL" ? "14 Hari Terakhir" : periodLabel(periodFilter)}</div>
             <ResponsiveContainer width="100%" height={180}>
               <AreaChart data={trendData}>
                 <defs>
@@ -791,7 +829,7 @@ Terimakasih pak`
           <option value="ALL">Semua Dibuat Oleh</option>
           {userOptions.map(u => <option key={u} value={u}>{u}</option>)}
         </select>
-        <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "auto" }}>{filtered.length}/{tickets.length} tiket</span>
+        <span style={{ fontSize: "12px", color: "var(--text3)", marginLeft: "auto" }}>{filtered.length}/{periodTickets.length} tiket</span>
       </div>
 
       {/* Table */}
