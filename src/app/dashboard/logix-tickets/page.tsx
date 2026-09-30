@@ -448,11 +448,13 @@ export default function LogixTicketsPage() {
     return `Selamat ${greeting} pak @Head SS Pak Rudy Haryanto , pak @BR APPG Pak Yonathan , dan pak @APPG Pak Risky
 
 Berikut adalah status ticket logix cut off ${todayLabel} ${timeLabel} WIB
-- Total Issue: ${summary.total}
-- Total Done: ${summary.solved} (${summary.pctSolved.toFixed(0)}%)
-- Total Open: ${summary.open}
-- Total Open Confirm/Apps R1: ${summary.appsR1}
-- Total Open BR: ${summary.openBr}
+- Total Tiket: ${summary.total}
+- Open: ${summary.open}
+- Apps R1: ${summary.appsR1}
+- Open BR: ${summary.openBr}
+- BR R1: ${summary.brR1}
+- Apps R2: ${summary.appsR2}
+- Solved: ${summary.solved} (${summary.pctSolved.toFixed(0)}%)
 
 Terimakasih pak`
   }
