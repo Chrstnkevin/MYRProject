@@ -129,10 +129,14 @@ async function runSync() {
     }))
 
     // MPP EDI = jumlah salesman UNIK (sls_id + distributor_id, jaga-jaga
-    // 1 sls_id kepakai di >1 distributor) yang omzet != 0 bulan ini.
+    // 1 sls_id kepakai di >1 distributor) yang omzet != 0 bulan ini —
+    // EXCLUDE baris "HOUSE ACCOUNT" (bukan salesman beneran, kode generik
+    // buat omzet yang nggak diatribusikan ke salesman tertentu), dicek dari
+    // nama-nya (sls_nm), case-insensitive.
+    const activeRows = rows.filter(r => !(r.sls_nm || "").toUpperCase().includes("HOUSE ACCOUNT"))
     const uniqueSalesman = new Set<string>()
     const nsmMap = new Map<string, Set<string>>()
-    for (const r of rows) {
+    for (const r of activeRows) {
       const key = `${r.sls_id}|${r.distributor_id}`
       uniqueSalesman.add(key)
       const nsmName = r.nsm_nm || "—"
@@ -164,6 +168,7 @@ async function runSync() {
     return NextResponse.json({
       success: true, snapshotDate, tahun, periode,
       ficomLiteActive, ficomLiteTotal, ediActiveSalesman,
+      houseAccountExcluded: rows.length - activeRows.length,
       selisih: ficomLiteActive - ediActiveSalesman,
       syncedAt: now.toISOString(),
     })

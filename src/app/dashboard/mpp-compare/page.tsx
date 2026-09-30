@@ -52,7 +52,7 @@ export default function MppComparePage() {
       const res = await fetch("/api/mpp-compare-sync", { method: "POST" })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Sync gagal")
-      setSyncMsg(`✅ Sync selesai — Ficom Lite ${data.ficomLiteActive} aktif, EDI ${data.ediActiveSalesman} salesman aktif (selisih ${data.selisih})`)
+      setSyncMsg(`✅ Sync selesai — Ficom Lite ${data.ficomLiteActive} aktif, EDI ${data.ediActiveSalesman} salesman aktif (selisih ${data.selisih}) · ${data.houseAccountExcluded || 0} House Account di-exclude`)
       await loadData()
     } catch (e) {
       setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
