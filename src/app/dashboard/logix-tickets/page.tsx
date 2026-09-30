@@ -5,11 +5,11 @@ import { useState, useEffect, useMemo, Fragment } from "react"
 import {
   Ticket, RefreshCw, Search, AlertCircle, KeyRound, Settings,
   ChevronUp, ChevronDown, Eye, EyeOff, Save, ExternalLink,
-  Maximize2, Minimize2, X, Copy, Check,
+  Maximize2, Minimize2, X, Copy, Check, Info,
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer,
+  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend,
 } from "recharts"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -34,6 +34,48 @@ interface LogixTicket {
   nm_severity: string
   date_created: string
   date_updated: string
+}
+
+// Dari /api/logix-tickets-sla (endpoint Logix /ticketing/json1) — skema
+// beda total dari LogixTicket di atas, khusus data timing/SLA respon.
+// "apps" di nama field = "TAS" di label UI Logix (beda istilah internal
+// vs tampilan, dikonfirmasi dari capture user).
+interface SlaTicket {
+  nomor_ticket: string
+  nm_user: string
+  ticket_dibuat: string       // "YYYY-MM-DD HH:mm:ss"
+  nm_tas_cover: string
+  nm_tas: string | null
+  ticket_direspon_apps: string
+  respon_apps: string         // durasi teks, mis. "1 hours 38 minutes 25 seconds"
+  nm_br: string | null
+  ticket_direspon_br: string
+  respon_br: string
+  nm_dev: string | null
+  ticket_direspon_dev: string
+  respon_dev: string
+  status: string
+  user_close_ticket: string | null
+  ticket_diselesaikan: string
+  lama_ticket: string         // total waktu dari dibuat sampai solved
+}
+
+// Parse durasi teks Logix ("X hours Y minutes Z seconds", bagian mana pun
+// boleh tidak ada) jadi total jam desimal. Return null kalau kosong/tidak
+// ada durasi (tiket belum direspon/belum solved di tahap itu).
+function parseDurationHours(s: string | null | undefined): number | null {
+  if (!s || !s.trim()) return null
+  const h = /(\d+)\s*hour/i.exec(s)
+  const m = /(\d+)\s*minute/i.exec(s)
+  const sec = /(\d+)\s*second/i.exec(s)
+  if (!h && !m && !sec) return null
+  return (h ? Number(h[1]) : 0) + (m ? Number(m[1]) : 0) / 60 + (sec ? Number(sec[1]) : 0) / 3600
+}
+
+// Konversi durasi jam → hari genap (dibulatkan ke bawah) — mis. 1 jam = 0
+// hari, 30 jam = 1 hari. Dipakai di panel SLA, yang satuannya "hari" bukan "jam".
+function hoursToDays(h: number | null): number | null {
+  return h == null ? null : Math.floor(h / 24)
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -97,6 +139,39 @@ const STAGE_COLOR: Record<string, { bg: string; color: string }> = {
   "OK+NOTE":        { bg: "#1D4ED8", color: "#FFFFFF" },
   "NOT OK":         { bg: "#DC2626", color: "#FFFFFF" },
 }
+
+// Tab metrik di panel SLA — tiap tab nunjukin 1 garis aja, dan filter nama
+// yang muncul di sebelahnya nyaring berdasarkan orang yang nanganin tahap
+// itu (nm_tas buat Response TAS, nm_br buat Response BR, nm_dev buat Time
+// Solved — sejalan sama tripletnya di data SLA logix).
+const SLA_TABS = [
+  { key: "responTas", label: "Response TAS", field: "respon_apps", nameField: "nm_tas", color: "#0369A1" },
+  { key: "timeBr", label: "Response BR", field: "respon_br", nameField: "nm_br", color: "#7C3AED" },
+  { key: "timeSolved", label: "Time Solved", field: "lama_ticket", nameField: "nm_dev", color: "#166534" },
+] as const
+// Tab ke-4 "Perbandingan" nampilin ketiga garis sekaligus (nggak ada filter
+// nama sendiri, karena gabungan 3 penanggung jawab yang beda).
+const SLA_COMPARE_TAB = { key: "compare", label: "Perbandingan" } as const
+type SlaTabKey = typeof SLA_TABS[number]["key"] | typeof SLA_COMPARE_TAB.key
+
+// Bucket "per hari" (Senin—Minggu) buat panel SLA — gabungin semua tanggal
+// yang jatuh di hari itu (dalam rentang periode yang dipilih) jadi 1 titik
+// rata-rata, alternatif dari bucket per-tanggal biasa.
+const WEEKDAY_LABELS = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+function weekdayIndex(d: Date): number {
+  const js = d.getDay() // 0 = Minggu
+  return js === 0 ? 6 : js - 1 // geser jadi 0 = Senin
+}
+function isInPeriod(d: Date, period: string): boolean {
+  if (period === "ALL") {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const start = new Date(today); start.setDate(start.getDate() - 13)
+    const dd = new Date(d); dd.setHours(0, 0, 0, 0)
+    return dd >= start && dd <= today
+  }
+  const [y, m] = period.split("-").map(Number)
+  return d.getFullYear() === y && d.getMonth() === m - 1
+}
 // PENTING: pakai tanggal kalender LOKAL (bukan toISOString(), yang
 // konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
 // (WIB/WITA/WIT/Manila dst.), tengah malam lokal ke-geser MUNDUR satu
@@ -144,6 +219,31 @@ export default function LogixTicketsPage() {
   const [userFilter, setUserFilter] = useState("ALL")
   const [expandedRow, setExpandedRow] = useState<string | null>(null)
 
+  // ── Filter Periode (bulan) — KHUSUS buat grafik SLA di bawah (Response
+  // TAS/Time BR/Time Solved), tidak menyaring summary cards/tabel/chart lain.
+  const [periodFilter, setPeriodFilter] = useState("ALL")
+  const monthKey = (unixSec: string) => {
+    const n = Number(unixSec)
+    if (!n) return ""
+    const d = new Date(n * 1000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+  }
+  const periodOptions = useMemo(() => {
+    const keys = Array.from(new Set(tickets.map(t => monthKey(t.date_created)).filter(Boolean)))
+    return keys.sort().reverse()
+  }, [tickets])
+  const periodLabel = (key: string) => {
+    const [y, m] = key.split("-")
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" })
+  }
+
+  // ── Tab metrik + filter nama + mode grouping (tanggal/hari) di panel SLA ──
+  const [slaTabKey, setSlaTabKey] = useState<SlaTabKey>("responTas")
+  const [slaNameFilter, setSlaNameFilter] = useState("ALL")
+  const [slaGroupBy, setSlaGroupBy] = useState<"date" | "weekday">("date")
+  const activeSlaTab = SLA_TABS.find(t => t.key === slaTabKey) ?? null
+  const handleSlaTabChange = (key: SlaTabKey) => { setSlaTabKey(key); setSlaNameFilter("ALL") }
+
   // ── Timeline internal (Open BR) — semua tahap tetap langsung ditampilkan per tiket,
   // tinggal isi rentang tanggalnya per tahap ──
   const [timelines, setTimelines] = useState<TimelineEntry[]>([])
@@ -179,6 +279,38 @@ export default function LogixTicketsPage() {
     setLoading(false)
   }
 
+  // ── Data SLA/timing respon (Response TAS, Time BR, Time Solved) ──
+  const [slaTickets, setSlaTickets] = useState<SlaTicket[]>([])
+  const [slaLoading, setSlaLoading] = useState(false)
+  const [slaError, setSlaError] = useState("")
+
+  const fetchSlaTickets = async () => {
+    setSlaLoading(true); setSlaError("")
+    try {
+      const res = await fetch("/api/logix-tickets-sla")
+      const text = await res.text()
+      let json: { data?: SlaTicket[]; error?: string }
+      try { json = JSON.parse(text) } catch {
+        setSlaError(`Respons bukan JSON (kemungkinan server error) — HTTP ${res.status}`)
+        setSlaLoading(false)
+        return
+      }
+      if (!res.ok) setSlaError(json.error || `HTTP ${res.status}`)
+      else setSlaTickets(json.data || [])
+    } catch (e) {
+      setSlaError(e instanceof Error ? e.message : String(e))
+    }
+    setSlaLoading(false)
+  }
+
+  // WAJIB berurutan, BUKAN paralel — dua-duanya login ke Logix pakai akun
+  // yang sama (masing-masing route server-side punya cookie jar sendiri).
+  // Kalau ditembak bersamaan, dua login nyaris simultan ke server yang
+  // sama bikin sesi Logix-nya saling tabrakan — gejalanya semua field
+  // hasil JOIN (status/severity/kategori) balik null/kosong walau jumlah
+  // baris tetap benar.
+  const refreshAll = async () => { await fetchTickets(); await fetchSlaTickets() }
+
   const loadCredentials = async () => {
     const { data } = await supabase.from("logix_credentials").select("email,password").eq("id", 1).maybeSingle()
     if (data) { setCredEmail(data.email); setCredPassword(data.password) }
@@ -189,7 +321,8 @@ export default function LogixTicketsPage() {
     if (data) setTimelines(data as TimelineEntry[])
   }
 
-  useEffect(() => { loadCredentials(); fetchTickets(); loadTimelines() }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadCredentials(); loadTimelines(); refreshAll() }, [])
 
   const timelineByTicket = useMemo(() => {
     const m = new Map<string, TimelineEntry[]>()
@@ -202,7 +335,7 @@ export default function LogixTicketsPage() {
 
   // ── Timeline Mingguan: kelompokkan tiap entri timeline BR ke minggu (Senin-Minggu) yang dilaluinya ──
   const weeklyTimeline = useMemo(() => {
-    if (timelines.length === 0) return { weeks: [] as string[], rows: [] as { no_ticket: string; judul: string; cells: Map<string, TimelineEntry> }[] }
+    if (timelines.length === 0) return { weeks: [] as string[], rows: [] as { no_ticket: string; judul: string; cells: Map<string, TimelineEntry>; isBrOpen: boolean }[] }
 
     const todayIso = isoDate(new Date())
     let minWeek = ""
@@ -220,6 +353,7 @@ export default function LogixTicketsPage() {
     for (let c = minWeek; c <= maxWeek; c = addDaysIso(c, 7)) weeks.push(c)
 
     const ticketTitle = new Map(tickets.map(t => [t.no_ticket, t.judul_ticket]))
+    const ticketStatus = new Map(tickets.map(t => [t.no_ticket, t.nm_status]))
 
     const rows = Array.from(timelineByTicket.entries()).map(([no_ticket, entries]) => {
       const cells = new Map<string, TimelineEntry>()
@@ -229,7 +363,8 @@ export default function LogixTicketsPage() {
         const wTo = startOfWeek(e.date_to || todayIso)
         for (let c = wFrom; c <= wTo; c = addDaysIso(c, 7)) cells.set(c, e)
       }
-      return { no_ticket, judul: ticketTitle.get(no_ticket) || "", cells }
+      const isBrOpen = (ticketStatus.get(no_ticket) || "").toUpperCase() === "OPEN BR"
+      return { no_ticket, judul: ticketTitle.get(no_ticket) || "", cells, isBrOpen }
     }).sort((a, b) => {
       const aWeeks = Array.from(a.cells.keys())
       const bWeeks = Array.from(b.cells.keys())
@@ -296,6 +431,10 @@ export default function LogixTicketsPage() {
     }
   }, [tickets])
 
+  // ── Info detail buat card "Open" — daftar nomor/nama tiket + tanggal dibuat ──
+  const [openInfoOpen, setOpenInfoOpen] = useState(false)
+  const openTickets = useMemo(() => tickets.filter(t => (t.nm_status || "").toUpperCase() === "OPEN"), [tickets])
+
   // ── Salin pesan update harian ke stakeholder ──
   const [copyOk, setCopyOk] = useState(false)
   const [copyError, setCopyError] = useState("")
@@ -334,7 +473,8 @@ Terimakasih pak`
   const tipeOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.tipe_ticket))).sort(), [tickets])
   const userOptions = useMemo(() => Array.from(new Set(tickets.map(t => t.nm_user))).sort(), [tickets])
 
-  // Tren tiket dibuat per hari, 14 hari terakhir.
+  // Tren tiket dibuat per hari — 14 hari terakhir kalau periode "ALL",
+  // atau semua hari di bulan itu kalau periode tertentu dipilih.
   // PENTING: pakai tanggal kalender LOKAL buat key-nya (bukan toISOString,
   // yang konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
   // (WIB/WITA/WIT/Manila dst.), tiket yang dibuat sore/malam bakal ke-hitung
@@ -342,12 +482,26 @@ Terimakasih pak`
   const localDateKey = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 
-  const trendData = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const days = Array.from({ length: 14 }, (_, i) => {
-      const d = new Date(today); d.setDate(d.getDate() - (13 - i))
-      return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), count: 0 }
+  // Bucket harian dipakai bareng oleh chart Tren & chart SLA di bawah,
+  // biar sumbu-X-nya selalu sinkron satu sama lain.
+  const buildDayBuckets = (period: string): { key: string; label: string }[] => {
+    if (period === "ALL") {
+      const today = new Date(); today.setHours(0, 0, 0, 0)
+      return Array.from({ length: 14 }, (_, i) => {
+        const d = new Date(today); d.setDate(d.getDate() - (13 - i))
+        return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }) }
+      })
+    }
+    const [y, m] = period.split("-").map(Number)
+    const daysInMonth = new Date(y, m, 0).getDate()
+    return Array.from({ length: daysInMonth }, (_, i) => {
+      const d = new Date(y, m - 1, i + 1)
+      return { key: localDateKey(d), label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }) }
     })
+  }
+
+  const trendData = useMemo(() => {
+    const days = buildDayBuckets("ALL").map(d => ({ ...d, count: 0 }))
     const byKey = new Map(days.map(d => [d.key, d]))
     for (const t of tickets) {
       const n = Number(t.date_created)
@@ -356,7 +510,91 @@ Terimakasih pak`
       if (row) row.count++
     }
     return days
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickets])
+
+  // Parse "YYYY-MM-DD HH:mm:ss" (format datetime Logix) sebagai waktu LOKAL
+  // — bukan Date.parse biasa, yang di sebagian browser bisa nganggap string
+  // tanpa timezone itu UTC dan geser tanggalnya.
+  function parseLogixDateTime(s: string): Date | null {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(s || "")
+    if (!m) return null
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
+  }
+
+  // Daftar nama unik buat filter di panel SLA — sumbernya ganti sesuai tab
+  // yang lagi aktif (nm_tas/nm_br/nm_dev). Nggak ada filter nama di tab
+  // Perbandingan (gabungan 3 penanggung jawab yang beda).
+  const slaNameOptions = useMemo(() => {
+    if (!activeSlaTab) return []
+    const set = new Set<string>()
+    for (const t of slaTickets) {
+      const v = (t[activeSlaTab.nameField] || "").trim()
+      if (v) set.add(v)
+    }
+    return Array.from(set).sort()
+  }, [slaTickets, activeSlaTab])
+
+  // Bucket kosong buat chart SLA — per tanggal (sinkron sama trendData) atau
+  // per hari-dalam-minggu (Senin—Minggu), tergantung slaGroupBy.
+  const slaBuckets = useMemo(() => {
+    if (slaGroupBy === "weekday") return WEEKDAY_LABELS.map(label => ({ label }))
+    return buildDayBuckets(periodFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaGroupBy, periodFilter])
+
+  const slaBucketIndex = (created: Date): number | null => {
+    if (slaGroupBy === "weekday") {
+      if (!isInPeriod(created, periodFilter)) return null
+      return weekdayIndex(created)
+    }
+    const key = localDateKey(created)
+    return slaBuckets.findIndex(b => "key" in b && b.key === key)
+  }
+
+  // Grafik SLA (tab metrik tunggal): rata-rata durasi (hari) per bucket,
+  // buat metrik + orang yang lagi dipilih di tab/filter. Durasi per tiket
+  // dibulatkan ke hari genap dulu (hoursToDays) sebelum dirata-ratakan.
+  const slaChartData = useMemo(() => {
+    if (!activeSlaTab) return []
+    const rows = slaBuckets.map(b => ({ label: b.label, sum: 0, n: 0 }))
+    for (const t of slaTickets) {
+      if (slaNameFilter !== "ALL" && (t[activeSlaTab.nameField] || "").trim() !== slaNameFilter) continue
+      const created = parseLogixDateTime(t.ticket_dibuat)
+      if (!created) continue
+      const idx = slaBucketIndex(created)
+      if (idx == null || idx < 0) continue
+      const val = hoursToDays(parseDurationHours(t[activeSlaTab.field]))
+      if (val != null) { rows[idx].sum += val; rows[idx].n++ }
+    }
+    return rows.map(d => ({ label: d.label, value: d.n ? Number((d.sum / d.n).toFixed(1)) : null }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaTickets, slaBuckets, activeSlaTab, slaNameFilter])
+
+  // Grafik SLA (tab Perbandingan): rata-rata ketiga metrik sekaligus (hari),
+  // per bucket yang sama — tanpa filter nama karena gabungan 3 penanggung jawab.
+  const slaCompareData = useMemo(() => {
+    const rows = slaBuckets.map(b => ({ label: b.label, tasSum: 0, tasN: 0, brSum: 0, brN: 0, solvedSum: 0, solvedN: 0 }))
+    for (const t of slaTickets) {
+      const created = parseLogixDateTime(t.ticket_dibuat)
+      if (!created) continue
+      const idx = slaBucketIndex(created)
+      if (idx == null || idx < 0) continue
+      const tas = hoursToDays(parseDurationHours(t.respon_apps))
+      if (tas != null) { rows[idx].tasSum += tas; rows[idx].tasN++ }
+      const br = hoursToDays(parseDurationHours(t.respon_br))
+      if (br != null) { rows[idx].brSum += br; rows[idx].brN++ }
+      const solved = hoursToDays(parseDurationHours(t.lama_ticket))
+      if (solved != null) { rows[idx].solvedSum += solved; rows[idx].solvedN++ }
+    }
+    return rows.map(d => ({
+      label: d.label,
+      responTas: d.tasN ? Number((d.tasSum / d.tasN).toFixed(1)) : null,
+      timeBr: d.brN ? Number((d.brSum / d.brN).toFixed(1)) : null,
+      timeSolved: d.solvedN ? Number((d.solvedSum / d.solvedN).toFixed(1)) : null,
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaTickets, slaBuckets])
 
   // Distribusi severity, urutan tetap HIGH → MEDIUM → LOW → NEW TICKET
   const severityData = useMemo(() => {
@@ -475,7 +713,7 @@ Terimakasih pak`
             <Settings size={14} /> Kelola Kredensial
             {credOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-          <button onClick={fetchTickets} disabled={loading}
+          <button onClick={refreshAll} disabled={loading}
             style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 16px", borderRadius: "9px", border: "none", background: "#DC2626", color: "white", fontSize: "12px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: loading ? 0.6 : 1 }}>
             <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : undefined} /> Refresh
           </button>
@@ -541,12 +779,44 @@ Terimakasih pak`
           // Percentage jadi angka utama, jumlah tiket-nya jadi angka kecil pendamping
           ["Solved", loading ? "—" : `${summary.pctSolved.toFixed(0)}%`, "#166534", loading ? "" : `${summary.solved} tiket`],
         ] as const).map(([label, value, color, sub]) => (
-          <div key={label} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
-            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "6px" }}>{label}</div>
+          <div key={label} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: "6px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{label}</div>
+              {label === "Open" && (
+                <button onClick={() => setOpenInfoOpen(v => !v)} title="Lihat daftar tiket Open"
+                  style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "15px", height: "15px", borderRadius: "50%", border: "none", background: "#991B1B", color: "white", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                  <Info size={10} />
+                </button>
+              )}
+            </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
               <div style={{ fontSize: "26px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{value}</div>
               {sub && <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text3)" }}>{sub}</div>}
             </div>
+
+            {label === "Open" && openInfoOpen && (
+              <div onClick={e => e.stopPropagation()}
+                style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 20, width: "280px", maxHeight: "260px", overflowY: "auto", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(0,0,0,0.15)", padding: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>Tiket Status Open</span>
+                  <button onClick={() => setOpenInfoOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}><X size={13} /></button>
+                </div>
+                {openTickets.length === 0 ? (
+                  <div style={{ fontSize: "12px", color: "var(--text3)", padding: "8px 0" }}>Tidak ada tiket Open</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    {openTickets.map(t => (
+                      <div key={t.no_ticket} onClick={() => { setSearch(t.no_ticket); setExpandedRow(t.no_ticket); setOpenInfoOpen(false) }}
+                        style={{ cursor: "pointer", padding: "6px 8px", borderRadius: "6px", background: "var(--surface2)" }}>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: "#0369A1", fontFamily: "monospace" }}>{t.no_ticket}</div>
+                        <div style={{ fontSize: "11px", color: "var(--text)", marginTop: "2px" }}>{t.judul_ticket}</div>
+                        <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>Dibuat: {fmtDate(t.date_created)}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -554,24 +824,126 @@ Terimakasih pak`
       {/* Charts */}
       {!loading && tickets.length > 0 && (
         <>
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
-            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
-            <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — 14 Hari Terakhir</div>
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={trendData}>
-                <defs>
-                  <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
-                <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", alignItems: "stretch" }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", display: "flex", flexDirection: "column" }}>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — 14 Hari Terakhir</div>
+              <div style={{ flex: 1, minHeight: "180px" }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={trendData}>
+                    <defs>
+                      <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
+                    <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", display: "flex", flexDirection: "column" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>SLA</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  {slaLoading && <RefreshCw size={11} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
+                  <div style={{ display: "flex", gap: "2px", background: "var(--surface2)", padding: "2px", borderRadius: "6px" }}>
+                    <button onClick={() => setSlaGroupBy("date")}
+                      style={{
+                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaGroupBy === "date" ? "var(--surface)" : "transparent",
+                        color: slaGroupBy === "date" ? "var(--text)" : "var(--text3)",
+                      }}>
+                      Tanggal
+                    </button>
+                    <button onClick={() => setSlaGroupBy("weekday")}
+                      style={{
+                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaGroupBy === "weekday" ? "var(--surface)" : "transparent",
+                        color: slaGroupBy === "weekday" ? "var(--text)" : "var(--text3)",
+                      }}>
+                      Per Hari
+                    </button>
+                  </div>
+                  <select value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}
+                    style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>
+                    <option value="ALL">14 Hari Terakhir</option>
+                    {periodOptions.map(k => <option key={k} value={k}>{periodLabel(k)}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "4px", background: "var(--surface2)", padding: "3px", borderRadius: "8px", flexWrap: "wrap" }}>
+                  {SLA_TABS.map(tab => (
+                    <button key={tab.key} onClick={() => handleSlaTabChange(tab.key)}
+                      style={{
+                        padding: "5px 10px", borderRadius: "6px", border: "none", cursor: "pointer",
+                        fontSize: "11px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaTabKey === tab.key ? tab.color : "transparent",
+                        color: slaTabKey === tab.key ? "#FFFFFF" : "var(--text3)",
+                      }}>
+                      {tab.label}
+                    </button>
+                  ))}
+                  <button key={SLA_COMPARE_TAB.key} onClick={() => handleSlaTabChange(SLA_COMPARE_TAB.key)}
+                    style={{
+                      padding: "5px 10px", borderRadius: "6px", border: "none", cursor: "pointer",
+                      fontSize: "11px", fontWeight: 700, fontFamily: "inherit",
+                      background: slaTabKey === SLA_COMPARE_TAB.key ? "var(--text)" : "transparent",
+                      color: slaTabKey === SLA_COMPARE_TAB.key ? "var(--surface)" : "var(--text3)",
+                    }}>
+                    {SLA_COMPARE_TAB.label}
+                  </button>
+                </div>
+                {activeSlaTab && (
+                  <select value={slaNameFilter} onChange={e => setSlaNameFilter(e.target.value)}
+                    style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer", maxWidth: "160px" }}>
+                    <option value="ALL">Semua Nama</option>
+                    {slaNameOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                )}
+              </div>
+
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>
+                {activeSlaTab ? activeSlaTab.label : "Response TAS / Response BR / Time Solved"} (hari)
+              </div>
+              {slaError ? (
+                <div style={{ flex: 1, minHeight: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
+              ) : (
+                <div style={{ flex: 1, minHeight: "180px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    {activeSlaTab ? (
+                      <LineChart data={slaChartData}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Line type="monotone" dataKey="value" stroke={activeSlaTab.color} strokeWidth={2} dot={false} name={activeSlaTab.label} connectNulls />
+                      </LineChart>
+                    ) : (
+                      <LineChart data={slaCompareData}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
+                        <Line type="monotone" dataKey="responTas" stroke="#0369A1" strokeWidth={2} dot={false} name="Response TAS" connectNulls />
+                        <Line type="monotone" dataKey="timeBr" stroke="#7C3AED" strokeWidth={2} dot={false} name="Response BR" connectNulls />
+                        <Line type="monotone" dataKey="timeSolved" stroke="#166534" strokeWidth={2} dot={false} name="Time Solved" connectNulls />
+                      </LineChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px", alignItems: "start" }}>
@@ -701,10 +1073,13 @@ Terimakasih pak`
                   </thead>
                   <tbody>
                     {weeklyTimeline.rows.map(row => (
-                      <tr key={row.no_ticket}>
+                      <tr key={row.no_ticket} style={{ opacity: row.isBrOpen ? 1 : 0.55 }}>
                         <td onClick={() => { setSearch(row.no_ticket); setExpandedRow(row.no_ticket) }}
                           style={{ position: "sticky", left: 0, background: "var(--surface)", padding: "4px 10px 4px 0", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap" }}>
                           <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0369A1" }}>{row.no_ticket}</span>
+                          {!row.isBrOpen && (
+                            <span style={{ marginLeft: "6px", fontSize: "9px", fontWeight: 700, padding: "1px 6px", borderRadius: "99px", background: "#DCFCE7", color: "#166534" }}>Solved</span>
+                          )}
                           {row.judul && (
                             <div style={{ fontSize: "10px", color: "var(--text3)", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis" }}>{row.judul}</div>
                           )}
@@ -784,7 +1159,7 @@ Terimakasih pak`
                   const bc = BUCKET_COLOR[bucket]
                   const sc = severityColor(t.nm_severity)
                   const isOpen = expandedRow === t.no_ticket
-                  const isBrOpen = t.nm_status.toUpperCase() === "OPEN BR"
+                  const isBrOpen = (t.nm_status || "").toUpperCase() === "OPEN BR"
                   const ticketTimeline = timelineByTicket.get(t.no_ticket) || []
                   return (
                     <Fragment key={t.no_ticket}>
