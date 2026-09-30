@@ -989,7 +989,7 @@ Terimakasih pak`
                   const bc = BUCKET_COLOR[bucket]
                   const sc = severityColor(t.nm_severity)
                   const isOpen = expandedRow === t.no_ticket
-                  const isBrOpen = t.nm_status.toUpperCase() === "OPEN BR"
+                  const isBrOpen = (t.nm_status || "").toUpperCase() === "OPEN BR"
                   const ticketTimeline = timelineByTicket.get(t.no_ticket) || []
                   return (
                     <Fragment key={t.no_ticket}>
