@@ -72,6 +72,12 @@ function parseDurationHours(s: string | null | undefined): number | null {
   return (h ? Number(h[1]) : 0) + (m ? Number(m[1]) : 0) / 60 + (sec ? Number(sec[1]) : 0) / 3600
 }
 
+// Konversi durasi jam → hari genap (dibulatkan ke bawah) — mis. 1 jam = 0
+// hari, 30 jam = 1 hari. Dipakai di panel SLA, yang satuannya "hari" bukan "jam".
+function hoursToDays(h: number | null): number | null {
+  return h == null ? null : Math.floor(h / 24)
+}
+
 // ── Helpers ───────────────────────────────────────────────────
 type Bucket = "open" | "progress" | "solved"
 function statusBucket(status: string): Bucket {
@@ -546,8 +552,9 @@ Terimakasih pak`
     return slaBuckets.findIndex(b => "key" in b && b.key === key)
   }
 
-  // Grafik SLA (tab metrik tunggal): rata-rata durasi (jam) per bucket,
-  // buat metrik + orang yang lagi dipilih di tab/filter.
+  // Grafik SLA (tab metrik tunggal): rata-rata durasi (hari) per bucket,
+  // buat metrik + orang yang lagi dipilih di tab/filter. Durasi per tiket
+  // dibulatkan ke hari genap dulu (hoursToDays) sebelum dirata-ratakan.
   const slaChartData = useMemo(() => {
     if (!activeSlaTab) return []
     const rows = slaBuckets.map(b => ({ label: b.label, sum: 0, n: 0 }))
@@ -557,15 +564,15 @@ Terimakasih pak`
       if (!created) continue
       const idx = slaBucketIndex(created)
       if (idx == null || idx < 0) continue
-      const val = parseDurationHours(t[activeSlaTab.field])
+      const val = hoursToDays(parseDurationHours(t[activeSlaTab.field]))
       if (val != null) { rows[idx].sum += val; rows[idx].n++ }
     }
     return rows.map(d => ({ label: d.label, value: d.n ? Number((d.sum / d.n).toFixed(1)) : null }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slaTickets, slaBuckets, activeSlaTab, slaNameFilter])
 
-  // Grafik SLA (tab Perbandingan): rata-rata ketiga metrik sekaligus, per
-  // bucket yang sama — tanpa filter nama karena gabungan 3 penanggung jawab.
+  // Grafik SLA (tab Perbandingan): rata-rata ketiga metrik sekaligus (hari),
+  // per bucket yang sama — tanpa filter nama karena gabungan 3 penanggung jawab.
   const slaCompareData = useMemo(() => {
     const rows = slaBuckets.map(b => ({ label: b.label, tasSum: 0, tasN: 0, brSum: 0, brN: 0, solvedSum: 0, solvedN: 0 }))
     for (const t of slaTickets) {
@@ -573,11 +580,11 @@ Terimakasih pak`
       if (!created) continue
       const idx = slaBucketIndex(created)
       if (idx == null || idx < 0) continue
-      const tas = parseDurationHours(t.respon_apps)
+      const tas = hoursToDays(parseDurationHours(t.respon_apps))
       if (tas != null) { rows[idx].tasSum += tas; rows[idx].tasN++ }
-      const br = parseDurationHours(t.respon_br)
+      const br = hoursToDays(parseDurationHours(t.respon_br))
       if (br != null) { rows[idx].brSum += br; rows[idx].brN++ }
-      const solved = parseDurationHours(t.lama_ticket)
+      const solved = hoursToDays(parseDurationHours(t.lama_ticket))
       if (solved != null) { rows[idx].solvedSum += solved; rows[idx].solvedN++ }
     }
     return rows.map(d => ({
@@ -906,7 +913,7 @@ Terimakasih pak`
               </div>
 
               <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>
-                {activeSlaTab ? activeSlaTab.label : "Response TAS / Response BR / Time Solved"} (jam)
+                {activeSlaTab ? activeSlaTab.label : "Response TAS / Response BR / Time Solved"} (hari)
               </div>
               {slaError ? (
                 <div style={{ flex: 1, minHeight: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
