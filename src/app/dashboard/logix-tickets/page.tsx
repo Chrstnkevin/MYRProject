@@ -9,7 +9,7 @@ import {
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, Cell, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line,
+  CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend,
 } from "recharts"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
@@ -143,7 +143,29 @@ const SLA_TABS = [
   { key: "timeBr", label: "Response BR", field: "respon_br", nameField: "nm_br", color: "#7C3AED" },
   { key: "timeSolved", label: "Time Solved", field: "lama_ticket", nameField: "nm_dev", color: "#166534" },
 ] as const
-type SlaTabKey = typeof SLA_TABS[number]["key"]
+// Tab ke-4 "Perbandingan" nampilin ketiga garis sekaligus (nggak ada filter
+// nama sendiri, karena gabungan 3 penanggung jawab yang beda).
+const SLA_COMPARE_TAB = { key: "compare", label: "Perbandingan" } as const
+type SlaTabKey = typeof SLA_TABS[number]["key"] | typeof SLA_COMPARE_TAB.key
+
+// Bucket "per hari" (Senin—Minggu) buat panel SLA — gabungin semua tanggal
+// yang jatuh di hari itu (dalam rentang periode yang dipilih) jadi 1 titik
+// rata-rata, alternatif dari bucket per-tanggal biasa.
+const WEEKDAY_LABELS = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+function weekdayIndex(d: Date): number {
+  const js = d.getDay() // 0 = Minggu
+  return js === 0 ? 6 : js - 1 // geser jadi 0 = Senin
+}
+function isInPeriod(d: Date, period: string): boolean {
+  if (period === "ALL") {
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const start = new Date(today); start.setDate(start.getDate() - 13)
+    const dd = new Date(d); dd.setHours(0, 0, 0, 0)
+    return dd >= start && dd <= today
+  }
+  const [y, m] = period.split("-").map(Number)
+  return d.getFullYear() === y && d.getMonth() === m - 1
+}
 // PENTING: pakai tanggal kalender LOKAL (bukan toISOString(), yang
 // konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
 // (WIB/WITA/WIT/Manila dst.), tengah malam lokal ke-geser MUNDUR satu
@@ -209,10 +231,11 @@ export default function LogixTicketsPage() {
     return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" })
   }
 
-  // ── Tab metrik + filter nama di panel SLA ──
+  // ── Tab metrik + filter nama + mode grouping (tanggal/hari) di panel SLA ──
   const [slaTabKey, setSlaTabKey] = useState<SlaTabKey>("responTas")
   const [slaNameFilter, setSlaNameFilter] = useState("ALL")
-  const activeSlaTab = SLA_TABS.find(t => t.key === slaTabKey)!
+  const [slaGroupBy, setSlaGroupBy] = useState<"date" | "weekday">("date")
+  const activeSlaTab = SLA_TABS.find(t => t.key === slaTabKey) ?? null
   const handleSlaTabChange = (key: SlaTabKey) => { setSlaTabKey(key); setSlaNameFilter("ALL") }
 
   // ── Timeline internal (Open BR) — semua tahap tetap langsung ditampilkan per tiket,
@@ -494,38 +517,77 @@ Terimakasih pak`
   }
 
   // Daftar nama unik buat filter di panel SLA — sumbernya ganti sesuai tab
-  // yang lagi aktif (nm_tas/nm_br/nm_dev).
+  // yang lagi aktif (nm_tas/nm_br/nm_dev). Nggak ada filter nama di tab
+  // Perbandingan (gabungan 3 penanggung jawab yang beda).
   const slaNameOptions = useMemo(() => {
+    if (!activeSlaTab) return []
     const set = new Set<string>()
     for (const t of slaTickets) {
       const v = (t[activeSlaTab.nameField] || "").trim()
       if (v) set.add(v)
     }
     return Array.from(set).sort()
-  }, [slaTickets, activeSlaTab.nameField])
+  }, [slaTickets, activeSlaTab])
 
-  // Grafik SLA: rata-rata durasi (jam) per hari tiket DIBUAT, buat metrik +
-  // orang yang lagi dipilih di tab/filter. Dibucket sinkron sama trendData
-  // di atas, dan tetap ikut periodFilter yang sama supaya dua grafik ini
-  // selalu menampilkan rentang waktu yang sama pas ditaruh sebelahan.
+  // Bucket kosong buat chart SLA — per tanggal (sinkron sama trendData) atau
+  // per hari-dalam-minggu (Senin—Minggu), tergantung slaGroupBy.
+  const slaBuckets = useMemo(() => {
+    if (slaGroupBy === "weekday") return WEEKDAY_LABELS.map(label => ({ label }))
+    return buildDayBuckets(periodFilter)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaGroupBy, periodFilter])
+
+  const slaBucketIndex = (created: Date): number | null => {
+    if (slaGroupBy === "weekday") {
+      if (!isInPeriod(created, periodFilter)) return null
+      return weekdayIndex(created)
+    }
+    const key = localDateKey(created)
+    return slaBuckets.findIndex(b => "key" in b && b.key === key)
+  }
+
+  // Grafik SLA (tab metrik tunggal): rata-rata durasi (jam) per bucket,
+  // buat metrik + orang yang lagi dipilih di tab/filter.
   const slaChartData = useMemo(() => {
-    const days = buildDayBuckets(periodFilter).map(d => ({ ...d, sum: 0, n: 0 }))
-    const byKey = new Map(days.map(d => [d.key, d]))
+    if (!activeSlaTab) return []
+    const rows = slaBuckets.map(b => ({ label: b.label, sum: 0, n: 0 }))
     for (const t of slaTickets) {
       if (slaNameFilter !== "ALL" && (t[activeSlaTab.nameField] || "").trim() !== slaNameFilter) continue
       const created = parseLogixDateTime(t.ticket_dibuat)
       if (!created) continue
-      const row = byKey.get(localDateKey(created))
-      if (!row) continue
+      const idx = slaBucketIndex(created)
+      if (idx == null || idx < 0) continue
       const val = parseDurationHours(t[activeSlaTab.field])
-      if (val != null) { row.sum += val; row.n++ }
+      if (val != null) { rows[idx].sum += val; rows[idx].n++ }
     }
-    return days.map(d => ({
+    return rows.map(d => ({ label: d.label, value: d.n ? Number((d.sum / d.n).toFixed(1)) : null }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slaTickets, slaBuckets, activeSlaTab, slaNameFilter])
+
+  // Grafik SLA (tab Perbandingan): rata-rata ketiga metrik sekaligus, per
+  // bucket yang sama — tanpa filter nama karena gabungan 3 penanggung jawab.
+  const slaCompareData = useMemo(() => {
+    const rows = slaBuckets.map(b => ({ label: b.label, tasSum: 0, tasN: 0, brSum: 0, brN: 0, solvedSum: 0, solvedN: 0 }))
+    for (const t of slaTickets) {
+      const created = parseLogixDateTime(t.ticket_dibuat)
+      if (!created) continue
+      const idx = slaBucketIndex(created)
+      if (idx == null || idx < 0) continue
+      const tas = parseDurationHours(t.respon_apps)
+      if (tas != null) { rows[idx].tasSum += tas; rows[idx].tasN++ }
+      const br = parseDurationHours(t.respon_br)
+      if (br != null) { rows[idx].brSum += br; rows[idx].brN++ }
+      const solved = parseDurationHours(t.lama_ticket)
+      if (solved != null) { rows[idx].solvedSum += solved; rows[idx].solvedN++ }
+    }
+    return rows.map(d => ({
       label: d.label,
-      value: d.n ? Number((d.sum / d.n).toFixed(1)) : null,
+      responTas: d.tasN ? Number((d.tasSum / d.tasN).toFixed(1)) : null,
+      timeBr: d.brN ? Number((d.brSum / d.brN).toFixed(1)) : null,
+      timeSolved: d.solvedN ? Number((d.solvedSum / d.solvedN).toFixed(1)) : null,
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slaTickets, periodFilter, slaTabKey, slaNameFilter])
+  }, [slaTickets, slaBuckets])
 
   // Distribusi severity, urutan tetap HIGH → MEDIUM → LOW → NEW TICKET
   const severityData = useMemo(() => {
@@ -755,32 +817,54 @@ Terimakasih pak`
       {/* Charts */}
       {!loading && tickets.length > 0 && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", alignItems: "start" }}>
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", alignItems: "stretch" }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", display: "flex", flexDirection: "column" }}>
               <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
               <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — 14 Hari Terakhir</div>
-              <ResponsiveContainer width="100%" height={180}>
-                <AreaChart data={trendData}>
-                  <defs>
-                    <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
-                      <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
-                  <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
-                </AreaChart>
-              </ResponsiveContainer>
+              <div style={{ flex: 1, minHeight: "180px" }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={trendData}>
+                    <defs>
+                      <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
+                    <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
             </div>
 
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px" }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", display: "flex", flexDirection: "column" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
                 <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>SLA</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   {slaLoading && <RefreshCw size={11} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
+                  <div style={{ display: "flex", gap: "2px", background: "var(--surface2)", padding: "2px", borderRadius: "6px" }}>
+                    <button onClick={() => setSlaGroupBy("date")}
+                      style={{
+                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaGroupBy === "date" ? "var(--surface)" : "transparent",
+                        color: slaGroupBy === "date" ? "var(--text)" : "var(--text3)",
+                      }}>
+                      Tanggal
+                    </button>
+                    <button onClick={() => setSlaGroupBy("weekday")}
+                      style={{
+                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                        background: slaGroupBy === "weekday" ? "var(--surface)" : "transparent",
+                        color: slaGroupBy === "weekday" ? "var(--text)" : "var(--text3)",
+                      }}>
+                      Per Hari
+                    </button>
+                  </div>
                   <select value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}
                     style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>
                     <option value="ALL">14 Hari Terakhir</option>
@@ -790,7 +874,7 @@ Terimakasih pak`
               </div>
 
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "10px", flexWrap: "wrap" }}>
-                <div style={{ display: "flex", gap: "4px", background: "var(--surface2)", padding: "3px", borderRadius: "8px" }}>
+                <div style={{ display: "flex", gap: "4px", background: "var(--surface2)", padding: "3px", borderRadius: "8px", flexWrap: "wrap" }}>
                   {SLA_TABS.map(tab => (
                     <button key={tab.key} onClick={() => handleSlaTabChange(tab.key)}
                       style={{
@@ -802,27 +886,55 @@ Terimakasih pak`
                       {tab.label}
                     </button>
                   ))}
+                  <button key={SLA_COMPARE_TAB.key} onClick={() => handleSlaTabChange(SLA_COMPARE_TAB.key)}
+                    style={{
+                      padding: "5px 10px", borderRadius: "6px", border: "none", cursor: "pointer",
+                      fontSize: "11px", fontWeight: 700, fontFamily: "inherit",
+                      background: slaTabKey === SLA_COMPARE_TAB.key ? "var(--text)" : "transparent",
+                      color: slaTabKey === SLA_COMPARE_TAB.key ? "var(--surface)" : "var(--text3)",
+                    }}>
+                    {SLA_COMPARE_TAB.label}
+                  </button>
                 </div>
-                <select value={slaNameFilter} onChange={e => setSlaNameFilter(e.target.value)}
-                  style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer", maxWidth: "160px" }}>
-                  <option value="ALL">Semua Nama</option>
-                  {slaNameOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
+                {activeSlaTab && (
+                  <select value={slaNameFilter} onChange={e => setSlaNameFilter(e.target.value)}
+                    style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer", maxWidth: "160px" }}>
+                    <option value="ALL">Semua Nama</option>
+                    {slaNameOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                )}
               </div>
 
-              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>{activeSlaTab.label} (jam)</div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>
+                {activeSlaTab ? activeSlaTab.label : "Response TAS / Response BR / Time Solved"} (jam)
+              </div>
               {slaError ? (
-                <div style={{ height: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
+                <div style={{ flex: 1, minHeight: "180px", display: "flex", alignItems: "center", justifyContent: "center", color: "#991B1B", fontSize: "11px", textAlign: "center", padding: "0 12px" }}>{slaError}</div>
               ) : (
-                <ResponsiveContainer width="100%" height={180}>
-                  <LineChart data={slaChartData}>
-                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
-                    <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Line type="monotone" dataKey="value" stroke={activeSlaTab.color} strokeWidth={2} dot={false} name={activeSlaTab.label} connectNulls />
-                  </LineChart>
-                </ResponsiveContainer>
+                <div style={{ flex: 1, minHeight: "180px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    {activeSlaTab ? (
+                      <LineChart data={slaChartData}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Line type="monotone" dataKey="value" stroke={activeSlaTab.color} strokeWidth={2} dot={false} name={activeSlaTab.label} connectNulls />
+                      </LineChart>
+                    ) : (
+                      <LineChart data={slaCompareData}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
+                        <Line type="monotone" dataKey="responTas" stroke="#0369A1" strokeWidth={2} dot={false} name="Response TAS" connectNulls />
+                        <Line type="monotone" dataKey="timeBr" stroke="#7C3AED" strokeWidth={2} dot={false} name="Response BR" connectNulls />
+                        <Line type="monotone" dataKey="timeSolved" stroke="#166534" strokeWidth={2} dot={false} name="Time Solved" connectNulls />
+                      </LineChart>
+                    )}
+                  </ResponsiveContainer>
+                </div>
               )}
             </div>
           </div>
