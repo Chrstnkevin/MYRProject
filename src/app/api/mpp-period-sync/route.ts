@@ -91,7 +91,12 @@ async function runSync() {
     // (misal dev server Next.js reload pas lagi nunggu), bulan-bulan yang
     // UDAH kelar tetap kesimpen, bukan hilang semua gara-gara gagal di
     // satu bulan terakhir.
-    const results: { tahun: number; periode: number; edi_active_salesman: number; edi_by_rdm: { empId: string; name: string; active: number }[]; synced_at: string }[] = []
+    const results: {
+      tahun: number; periode: number; edi_active_salesman: number
+      edi_by_rdm: { empId: string; name: string; active: number }[]
+      edi_salesman_list: { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }[]
+      synced_at: string
+    }[] = []
     for (const { tahun, periode } of periods) {
       const text = await fetchPeriod(token, tpl, tahun, periode)
       const allRows = parseEdiText(text)
@@ -102,20 +107,29 @@ async function runSync() {
       )
       const uniqueSalesman = new Set<string>()
       const rdmMap = new Map<string, { name: string; set: Set<string> }>()
+      // Daftar mentah salesman (bukan cuma angka) — dipakai fitur "selisih"
+      // buat nunjukin SIAPA aja bedanya pas dibandingin ke hirarki sekarang.
+      const salesmanMap = new Map<string, { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }>()
       for (const r of rows) {
         const key = `${r.sls_id}|${r.distributor_id}`
         uniqueSalesman.add(key)
         const rdmId = r.grsm_id || "—"
-        if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: r.grsm_nm || rdmId, set: new Set() })
+        const rdmName = r.grsm_nm || rdmId
+        if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: rdmName, set: new Set() })
         rdmMap.get(rdmId)!.set.add(key)
+        if (!salesmanMap.has(key)) {
+          salesmanMap.set(key, { key, slsId: r.sls_id, distributorId: r.distributor_id, name: r.sls_nm || "", rdmId, rdmName })
+        }
       }
       const ediByRdm = Array.from(rdmMap.entries())
         .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
         .sort((a, b) => b.active - a.active)
+      const ediSalesmanList = Array.from(salesmanMap.values())
       const row = {
         tahun, periode,
         edi_active_salesman: uniqueSalesman.size,
         edi_by_rdm: ediByRdm,
+        edi_salesman_list: ediSalesmanList,
         synced_at: now.toISOString(),
       }
       const { error: upErr } = await supabase.from("mpp_period_snapshot").upsert(row, { onConflict: "tahun,periode" })

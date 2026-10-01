@@ -9,6 +9,7 @@ import {
 import { supabase } from "@/lib/supabase"
 
 interface RdmCount { empId: string; name: string; active: number; total?: number }
+interface SalesmanEntry { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }
 interface SnapshotRow {
   id: string
   snapshot_date: string
@@ -19,6 +20,7 @@ interface SnapshotRow {
   edi_active_salesman: number
   ficom_lite_by_rdm: RdmCount[]
   edi_by_rdm: RdmCount[]
+  edi_salesman_list: SalesmanEntry[]
   synced_at: string
 }
 interface PeriodRow {
@@ -27,6 +29,7 @@ interface PeriodRow {
   periode: number
   edi_active_salesman: number
   edi_by_rdm: RdmCount[]
+  edi_salesman_list: SalesmanEntry[]
   synced_at: string
 }
 
@@ -143,6 +146,19 @@ export default function MppComparePage() {
     edi: r.edi_active_salesman,
   }))
   const latestPeriod = periodRows[periodRows.length - 1] || null
+
+  // Selisih SIAPA aja (bukan cuma angka) antara salesman aktif di bulan
+  // terakhir (EDI240136) vs hirarki HARI INI (EDI260001) — di-match pakai
+  // key (sls_id+distributor_id).
+  const salesmanDiff = (latestPeriod && today) ? (() => {
+    const periodList = latestPeriod.edi_salesman_list || []
+    const todayList = today.edi_salesman_list || []
+    const todayKeys = new Set(todayList.map(s => s.key))
+    const periodKeys = new Set(periodList.map(s => s.key))
+    const onlyInPeriod = periodList.filter(s => !todayKeys.has(s.key)).sort((a, b) => a.rdmName.localeCompare(b.rdmName) || a.name.localeCompare(b.name))
+    const onlyInHirarki = todayList.filter(s => !periodKeys.has(s.key)).sort((a, b) => a.rdmName.localeCompare(b.rdmName) || a.name.localeCompare(b.name))
+    return { onlyInPeriod, onlyInHirarki }
+  })() : null
 
   if (loading && rows.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
@@ -308,6 +324,51 @@ export default function MppComparePage() {
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#16A34A" }}>{r.active}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {/* Selisih siapa aja — jawab "kenapa angkanya beda jauh" dengan
+                nunjukin daftar nama, bukan cuma angka. */}
+            {salesmanDiff && (
+              <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>
+                  Selisih {MONTH_ID[latestPeriod!.periode - 1]} {latestPeriod!.tahun} vs Hirarki Hari Ini
+                </div>
+                <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>
+                  Di-match pakai kode salesman (sls_id + distributor), bukan nama — biar nggak ketuker orang beda yang namanya mirip.
+                </p>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#DC2626", marginBottom: 6 }}>
+                      ⚠️ Ada di {MONTH_ID[latestPeriod!.periode - 1]}, sudah tidak ada di hirarki sekarang ({salesmanDiff.onlyInPeriod.length})
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" }}>
+                      {salesmanDiff.onlyInPeriod.length === 0 ? (
+                        <span style={{ fontSize: 11, color: "var(--text3)", fontStyle: "italic" }}>Tidak ada</span>
+                      ) : salesmanDiff.onlyInPeriod.map(s => (
+                        <div key={s.key} style={{ fontSize: 11, padding: "4px 8px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 6 }}>
+                          <span style={{ color: "#7F1D1D", fontWeight: 600 }}>{s.name || s.slsId}</span>
+                          <span style={{ color: "var(--text3)" }}> · {s.rdmName}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0369A1", marginBottom: 6 }}>
+                      🆕 Ada di hirarki sekarang, tidak tercatat aktif di {MONTH_ID[latestPeriod!.periode - 1]} ({salesmanDiff.onlyInHirarki.length})
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 220, overflowY: "auto" }}>
+                      {salesmanDiff.onlyInHirarki.length === 0 ? (
+                        <span style={{ fontSize: 11, color: "var(--text3)", fontStyle: "italic" }}>Tidak ada</span>
+                      ) : salesmanDiff.onlyInHirarki.map(s => (
+                        <div key={s.key} style={{ fontSize: 11, padding: "4px 8px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 6 }}>
+                          <span style={{ color: "#1E3A5F", fontWeight: 600 }}>{s.name || s.slsId}</span>
+                          <span style={{ color: "var(--text3)" }}> · {s.rdmName}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

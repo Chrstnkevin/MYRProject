@@ -144,17 +144,25 @@ async function runSync() {
     // Grup per RDM pakai grsm_id (match 1:1 ke empId RDM Ficom Lite di
     // atas) — BUKAN nama, biar matching-nya pasti, bukan tebak-tebakan nama.
     const rdmMap = new Map<string, { name: string; set: Set<string> }>()
+    // Daftar mentah salesman (bukan cuma angka) — dipakai fitur "selisih"
+    // buat nunjukin SIAPA aja bedanya pas dibandingin sama snapshot lain.
+    const salesmanMap = new Map<string, { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }>()
     for (const r of activeRows) {
       const key = `${r.sls_id}|${r.distributor_id}`
       uniqueSalesman.add(key)
       const rdmId = r.grsm_id || "—"
-      if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: r.grsm_nm || rdmId, set: new Set() })
+      const rdmName = r.grsm_nm || rdmId
+      if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: rdmName, set: new Set() })
       rdmMap.get(rdmId)!.set.add(key)
+      if (!salesmanMap.has(key)) {
+        salesmanMap.set(key, { key, slsId: r.sls_id, distributorId: r.distributor_id, name: r.sls_nm || "", rdmId, rdmName })
+      }
     }
     const ediActiveSalesman = uniqueSalesman.size
     const ediByRdm = Array.from(rdmMap.entries())
       .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
       .sort((a, b) => b.active - a.active)
+    const ediSalesmanList = Array.from(salesmanMap.values())
 
     const snapshotDate = wibDateKey(now)
     const { error: upErr } = await supabase.from("mpp_compare_snapshot").upsert({
@@ -165,6 +173,7 @@ async function runSync() {
       edi_active_salesman: ediActiveSalesman,
       ficom_lite_by_rdm: ficomLiteByRdm,
       edi_by_rdm: ediByRdm,
+      edi_salesman_list: ediSalesmanList,
       synced_at: now.toISOString(),
     }, { onConflict: "snapshot_date" })
     if (upErr) throw new Error(`Gagal simpan snapshot: ${upErr.message}`)
