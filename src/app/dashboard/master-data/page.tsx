@@ -5,9 +5,10 @@ import { useState, useEffect, useMemo, useRef, Fragment } from "react"
 import {
   Search, X, FileSpreadsheet, Building2,
   RefreshCw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  Save, Upload, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
-  List, FolderTree, Link2, Warehouse, Truck,
+  Save, Upload, Download, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
+  List, FolderTree, Link2, Warehouse, Truck, Package,
 } from "lucide-react"
+import ProductMaintenance from "./ProductMaintenance"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
 
@@ -27,6 +28,8 @@ interface DepotRow {
   rdm_name: string
   status: string
   remarks: string
+  pic_tas?: string | null
+  schema_name?: string | null
   updated_at?: string
   ads_id?: string | null
 }
@@ -77,9 +80,9 @@ const POS_CLR: Record<string, { bg: string; color: string }> = {
 
 // PIC TAS per region — sama seperti mapping di /data-transfer
 const TAS_MAP: Record<string, string> = {
-  GMA: "JC", NOL: "Van", SOL: "Lindon", VIS: "Darren", MIN: "JC",
+  GMA: "JC", NOL: "Van", SOL: "Jonathan", VIS: "Darren", MIN: "JC",
 }
-const TAS_OPTIONS = ["ALL", "JC", "Van", "Lindon", "Darren"]
+const TAS_OPTIONS = ["ALL", "JC", "Van", "Jonathan", "Darren"]
 function tasFor(regionName: string): string {
   return TAS_MAP[regionName] || ""
 }
@@ -116,7 +119,7 @@ export default function MasterDataPage() {
   const schemaFileRef = useRef<HTMLInputElement>(null)
 
   // ── Hierarki RDM → ADM → ADS ───────────────────────────────
-  const [view, setView] = useState<"table" | "hierarchy">("table")
+  const [view, setView] = useState<"table" | "hierarchy" | "produk">("table")
   const [hierarchy, setHierarchy] = useState<HierarchyNode[]>([])
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
@@ -321,7 +324,13 @@ export default function MasterDataPage() {
   // masuk lewat Import Excel) ─────────────────────────────────
   const startEdit = (d: DepotRow, e: React.MouseEvent) => {
     e.stopPropagation()
-    setEditId(d.id); setDraft({ ...d }); setExpandedId(null)
+    // Pre-fill PIC TAS & Schema draft pakai nilai EFEKTIF yang lagi
+    // ketampil (override manual kalau ada, kalau nggak turunan otomatis)
+    // biar user lihat nilai yang sama persis kayak di tabel pas mulai edit.
+    const refSchema = d.adp_code != null ? schemaByAdp.get(d.adp_code)?.schema_name : undefined
+    setEditId(d.id)
+    setDraft({ ...d, pic_tas: d.pic_tas ?? tasFor(d.region_name), schema_name: d.schema_name ?? refSchema ?? "" })
+    setExpandedId(null)
   }
 
   const saveEdit = async () => {
@@ -342,6 +351,8 @@ export default function MasterDataPage() {
       rdm_name:         draft.rdm_name?.trim() ?? "",
       status:           draft.status ?? "MAIN WH",
       remarks:          draft.remarks ?? "Active",
+      pic_tas:          draft.pic_tas?.trim() || null,
+      schema_name:      draft.schema_name?.trim() || null,
       updated_at:       new Date().toISOString(),
     }
     const { error: err } = await supabase.from("master_data_adp").update(payload).eq("id", editId!)
@@ -359,6 +370,36 @@ export default function MasterDataPage() {
     const { error: err } = await supabase.from("master_data_adp").delete().eq("id", id)
     if (err) setError(err.message)
     else { setData(p => p.filter(d => d.id !== id)); if (expandedId === id) setExpandedId(null) }
+  }
+
+  // ── Download Template (buat Import Excel) ───────────────────
+  // Header-nya HARUS sama persis kayak yang dibaca importExcel() di bawah —
+  // kalau kolomnya diubah di sana, ubah juga di sini.
+  const downloadTemplate = async () => {
+    try {
+      const XLSX = await import("xlsx")
+      const ws = XLSX.utils.json_to_sheet([{
+        "ADP Code": 100001, "Depot": "CONTOH DEPOT",
+        "Distributor Name": "CONTOH DISTRIBUTOR INC.", "Server": 138,
+        "Area": 1, "Area Name": "CONTOH AREA",
+        "Region": 1, "Region Name": "GMA",
+        "ADS Name": "", "ADM Name": "", "RDM Name": "",
+        "Status": "MAIN WH", "Remarks": "Active",
+      }])
+      ws["!cols"] = [{wch:10},{wch:30},{wch:45},{wch:8},{wch:8},{wch:14},{wch:8},{wch:10},{wch:36},{wch:36},{wch:36},{wch:10},{wch:10}]
+      const notesWs = XLSX.utils.aoa_to_sheet([
+        ["Keterangan"],
+        ["- Hapus baris contoh sebelum upload, isi dengan data asli"],
+        ["- Kolom wajib: Depot (baris tanpa Depot akan di-skip)"],
+        ["- Status harus salah satu dari: MAIN WH, SDP"],
+        ["- Remarks harus salah satu dari: Active, Inactive, New"],
+        ["- ADS Name / ADM Name / RDM Name boleh dikosongkan, diisi lewat tab \"Hierarki RDM/ADM/ADS\""],
+      ])
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Master Data ADP")
+      XLSX.utils.book_append_sheet(wb, notesWs, "Keterangan")
+      XLSX.writeFile(wb, "Template_Master_Data_ADP.xlsx")
+    } catch (e) { setError("Gagal buat template: " + String(e)) }
   }
 
   // ── Export Excel ──────────────────────────────────────────
@@ -554,6 +595,10 @@ export default function MasterDataPage() {
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
               <RefreshCw size={13} /> Refresh
             </button>
+            <button onClick={downloadTemplate} title="Download template Excel kosong buat Import Excel — isi kolomnya dulu baru upload"
+              style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <Download size={13} /> Download Template
+            </button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) { importExcel(f); e.target.value = "" } }} />
             <button onClick={() => fileRef.current?.click()}
@@ -578,6 +623,7 @@ export default function MasterDataPage() {
           {([
             ["table", "Tabel Depot", List],
             ["hierarchy", "Hierarki RDM/ADM/ADS", FolderTree],
+            ["produk", "Maintenance Produk", Package],
           ] as const).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setView(key)}
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: view === key ? "#0369A1" : "var(--surface)", color: view === key ? "white" : "var(--text3)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
@@ -688,7 +734,10 @@ export default function MasterDataPage() {
                     const ref = d.adp_code != null ? schemaByAdp.get(d.adp_code) : undefined
                     const effectiveServer = d.server ?? ref?.server ?? null
                     const serverFromRef = d.server == null && ref?.server != null
-                    const picTas = tasFor(d.region_name)
+                    // pic_tas/schema_name: override manual (diisi lewat edit) menang,
+                    // kalau belum pernah di-edit fallback ke turunan otomatis lama.
+                    const picTas = d.pic_tas || tasFor(d.region_name)
+                    const effectiveSchema = d.schema_name || ref?.schema_name || ""
 
                     return (
                       <Fragment key={d.id}>
@@ -716,10 +765,15 @@ export default function MasterDataPage() {
                             )}
                           </td>
 
-                          {/* Schema (dari file referensi DB Schema, dicocokkan lewat ADP Code) */}
+                          {/* Schema — bisa di-override manual per-depot lewat edit; kalau
+                              belum pernah di-edit, fallback ke file referensi DB Schema
+                              (dicocokkan lewat ADP Code) */}
                           <td style={{ ...td, fontSize: "11px" }} title={ref?.kode_branch || ""}>
-                            {ref?.schema_name ? (
-                              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>{ref.schema_name}</span>
+                            {isEditing ? (
+                              <input value={draft.schema_name ?? ""} onChange={e => setDraft(p => ({ ...p, schema_name: e.target.value }))}
+                                placeholder="USERMYR32" style={{ ...inputSt, width: "100px", fontFamily: "monospace" }} />
+                            ) : effectiveSchema ? (
+                              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>{effectiveSchema}</span>
                             ) : "—"}
                           </td>
 
@@ -780,9 +834,16 @@ export default function MasterDataPage() {
                             ) : "—"}
                           </td>
 
-                          {/* PIC TAS — turunan otomatis dari Region, sama seperti mapping di /data-transfer */}
+                          {/* PIC TAS — bisa di-override manual per-depot lewat edit;
+                              kalau belum pernah di-edit, fallback ke turunan otomatis
+                              dari Region (TAS_MAP, sama kayak mapping di /data-transfer) */}
                           <td style={td}>
-                            {picTas ? (
+                            {isEditing ? (
+                              <select value={draft.pic_tas ?? ""} onChange={e => setDraft(p => ({ ...p, pic_tas: e.target.value }))}
+                                style={{ ...inputSt, width: "90px", cursor: "pointer" }}>
+                                {TAS_OPTIONS.filter(o => o !== "ALL").map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            ) : picTas ? (
                               <span style={{ background: "#F1F5F9", color: "#334155", padding: "2px 8px", borderRadius: "99px", fontSize: "11px", fontWeight: 700 }}>
                                 {picTas}
                               </span>
@@ -864,7 +925,7 @@ export default function MasterDataPage() {
                                     📍 {d.depot} {d.distributor_name ? `— ${d.distributor_name}` : ""}
                                   </div>
                                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>
-                                    ADP: {d.adp_code ?? "—"} · Schema: {ref?.schema_name || "—"} · Server: {effectiveServer ?? "—"} · PIC TAS: {picTas || "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
+                                    ADP: {d.adp_code ?? "—"} · Schema: {effectiveSchema || "—"} · Server: {effectiveServer ?? "—"} · PIC TAS: {picTas || "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
                                   </div>
                                 </div>
 
@@ -937,6 +998,8 @@ export default function MasterDataPage() {
             loading={loading}
           />
         )}
+
+        {view === "produk" && <ProductMaintenance />}
       </div>
     </div>
   )

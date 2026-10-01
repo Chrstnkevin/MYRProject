@@ -19,7 +19,7 @@ const AOR:Record<string,{color:string;glow:string;bg:string}>={
   VIS:{color:"#06B6D4",glow:"rgba(6,182,212,0.4)",bg:"rgba(6,182,212,0.08)"},
   MIN:{color:"#EF4444",glow:"rgba(239,68,68,0.4)",bg:"rgba(239,68,68,0.08)"},
 }
-const TAS:Record<string,string>={GMA:"JC",NOL:"Van",SOL:"Lindon",VIS:"Darren",MIN:"JC"}
+const TAS:Record<string,string>={GMA:"JC",NOL:"Van",SOL:"Jonathan",VIS:"Darren",MIN:"JC"}
 
 export default function DataTransferLanding(){
   const [staging, setStaging] = useState<StagingRow[]>([])
@@ -68,7 +68,7 @@ export default function DataTransferLanding(){
     return{aor,ok:o,total:g.length,p:pct(o,g.length)}
   }).filter(g=>g.total>0),[active])
 
-  const tasStats = useMemo(()=>["JC","Van","Lindon","Darren"].map(tas=>{
+  const tasStats = useMemo(()=>["JC","Van","Jonathan","Darren"].map(tas=>{
     const g=active.filter(r=>r.tas===tas); const o=g.filter(r=>r.lama<=0).length
     return{tas,ok:o,total:g.length,p:pct(o,g.length)}
   }).filter(g=>g.total>0),[active])

@@ -153,7 +153,7 @@ const AOR_COLORS: Record<string,string> = {
 }
 
 const TAS_MAP: Record<string,string> = {
-  GMA:"JC", NOL:"Van", SOL:"Lindon", VIS:"Darren", MIN:"JC"
+  GMA:"JC", NOL:"Van", SOL:"Jonathan", VIS:"Darren", MIN:"JC"
 }
 
 function StatusBadge({ lama }: { lama: number }) {
@@ -382,7 +382,7 @@ export default function DataTransferPage() {
   }, [activeRows])
 
   const tasStats = useMemo(() => {
-    const tas = ["JC","Van","Lindon","Darren"]
+    const tas = ["JC","Van","Jonathan","Darren"]
     return tas.map(t => {
       const g  = activeRows.filter(r => r.tas === t)
       const ok = g.filter(r => r.lama <= 0).length
@@ -850,7 +850,7 @@ export default function DataTransferPage() {
             </select>
             <select value={filterTas} onChange={e=>setFilterTas(e.target.value)}
               style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
-              {["ALL","JC","Van","Lindon","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
+              {["ALL","JC","Van","Jonathan","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
             </select>
             <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}
               style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
@@ -939,7 +939,7 @@ export default function DataTransferPage() {
                 </select>
                 <select value={histTas} onChange={e=>setHistTas(e.target.value)}
                   style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
-                  {["ALL","JC","Van","Lindon","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
+                  {["ALL","JC","Van","Jonathan","Darren"].map(t=><option key={t} value={t}>{t==="ALL"?"All TAS":t}</option>)}
                 </select>
                 <select value={histStatus} onChange={e=>setHistStatus(e.target.value)}
                   style={{ padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface)", color:"var(--text)", fontSize:"12px", fontFamily:"inherit" }}>
