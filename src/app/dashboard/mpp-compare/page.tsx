@@ -8,7 +8,7 @@ import {
 } from "recharts"
 import { supabase } from "@/lib/supabase"
 
-interface NameCount { name: string; active: number; total?: number }
+interface RdmCount { empId: string; name: string; active: number; total?: number }
 interface SnapshotRow {
   id: string
   snapshot_date: string
@@ -17,8 +17,8 @@ interface SnapshotRow {
   ficom_lite_active: number
   ficom_lite_total: number
   edi_active_salesman: number
-  ficom_lite_by_rdm: NameCount[]
-  edi_by_nsm: NameCount[]
+  ficom_lite_by_rdm: RdmCount[]
+  edi_by_rdm: RdmCount[]
   synced_at: string
 }
 
@@ -52,7 +52,7 @@ export default function MppComparePage() {
       const res = await fetch("/api/mpp-compare-sync", { method: "POST" })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Sync gagal")
-      setSyncMsg(`✅ Sync selesai — Ficom Lite ${data.ficomLiteActive} aktif, EDI ${data.ediActiveSalesman} salesman aktif (selisih ${data.selisih}) · ${data.houseAccountExcluded || 0} House Account di-exclude`)
+      setSyncMsg(`✅ Sync selesai — Ficom Lite Total ${data.ficomLiteTotal}, EDI Hirarki ${data.ediActiveSalesman} salesman (selisih ${data.selisih}) · ${data.houseAccountExcluded || 0} House Account di-exclude`)
       await loadData()
     } catch (e) {
       setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
@@ -63,13 +63,33 @@ export default function MppComparePage() {
   const today = rows[rows.length - 1] || null
   const chartData = rows.map(r => ({
     label: new Date(r.snapshot_date + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short" }),
-    ficomLite: r.ficom_lite_active,
+    ficomLite: r.ficom_lite_total,
     edi: r.edi_active_salesman,
   }))
-  const selisih = today ? today.ficom_lite_active - today.edi_active_salesman : 0
-  const pctMatch = today && today.ficom_lite_active > 0
-    ? Math.round((Math.min(today.ficom_lite_active, today.edi_active_salesman) / Math.max(today.ficom_lite_active, today.edi_active_salesman)) * 100)
+  // Selisih dibandingkan ke Ficom Lite TOTAL (bukan Active) — EDI260001
+  // itu daftar mentah seluruh salesman di hirarki (tanpa filter aktivitas),
+  // jadi pembandingnya yang apple-to-apple itu "total MPP", bukan "MPP aktif".
+  const selisih = today ? today.ficom_lite_total - today.edi_active_salesman : 0
+  const pctMatch = today && today.ficom_lite_total > 0
+    ? Math.round((Math.min(today.ficom_lite_total, today.edi_active_salesman) / Math.max(today.ficom_lite_total, today.edi_active_salesman)) * 100)
     : 0
+
+  // Gabungin breakdown 2 sumber jadi 1 tabel, di-match pakai empId RDM
+  // (grsm_id di EDI260001 == empId RDM di Ficom Lite, dikonfirmasi 1:1 dari
+  // capture user) — bukan nama, jadi pasti nyambung walau label jabatan
+  // antar sistem beda.
+  const mergedRdm = today ? (() => {
+    const map = new Map<string, { empId: string; name: string; ficomLite: number; ficomLiteTotal: number; edi: number }>()
+    for (const r of today.ficom_lite_by_rdm) {
+      map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: r.active, ficomLiteTotal: r.total ?? 0, edi: 0 })
+    }
+    for (const r of today.edi_by_rdm) {
+      const existing = map.get(r.empId)
+      if (existing) existing.edi = r.active
+      else map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: 0, ficomLiteTotal: 0, edi: r.active })
+    }
+    return Array.from(map.values()).sort((a, b) => b.ficomLiteTotal - a.ficomLiteTotal)
+  })() : []
 
   if (loading && rows.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
@@ -90,7 +110,7 @@ export default function MppComparePage() {
             <div style={{ width: 42, height: 42, borderRadius: 12, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>⚖️</div>
             <div>
               <h1 style={{ fontSize: 17, fontWeight: 800, color: "white", marginBottom: 3 }}>Compare MPP</h1>
-              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>Ficom Lite (SFA) vs EDI Salesman Aktif — {today ? `periode ${MONTH_ID[today.periode - 1]} ${today.tahun}` : "belum ada data"}</p>
+              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>Ficom Lite (SFA) vs EDI Hirarki SD-Salesman — {today ? `periode ${MONTH_ID[today.periode - 1]} ${today.tahun}` : "belum ada data"}</p>
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -132,8 +152,8 @@ export default function MppComparePage() {
             {[
               { label: "Ficom Lite — Active", value: today.ficom_lite_active, color: "#0369A1", icon: "📱" },
               { label: "Ficom Lite — Total MPP", value: today.ficom_lite_total, color: "#1E3A5F", icon: "📋" },
-              { label: "EDI — Salesman Aktif", value: today.edi_active_salesman, color: "#16A34A", icon: "🧾" },
-              { label: "Selisih (Ficom Lite − EDI)", value: selisih, color: selisih === 0 ? "#16A34A" : "#DC2626", icon: selisih === 0 ? "✅" : "⚠️" },
+              { label: "EDI Hirarki — Jumlah Salesman", value: today.edi_active_salesman, color: "#16A34A", icon: "🧾" },
+              { label: "Selisih (Ficom Lite Total − EDI)", value: selisih, color: selisih === 0 ? "#16A34A" : "#DC2626", icon: selisih === 0 ? "✅" : "⚠️" },
             ].map((c, i) => (
               <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
                 <div style={{ height: 2, background: c.color }} />
@@ -155,7 +175,7 @@ export default function MppComparePage() {
           {/* Trend chart */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>Trend</div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Ficom Lite Active vs EDI Salesman Aktif</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Ficom Lite Total MPP vs EDI Hirarki</div>
             <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={chartData}>
                 <defs>
@@ -173,42 +193,41 @@ export default function MppComparePage() {
                 <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
                 <Tooltip />
                 <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
-                <Area type="monotone" dataKey="ficomLite" stroke="#0369A1" strokeWidth={2} fill="url(#mppFicomLite)" name="Ficom Lite Active" />
-                <Area type="monotone" dataKey="edi" stroke="#16A34A" strokeWidth={2} fill="url(#mppEdi)" name="EDI Salesman Aktif" />
+                <Area type="monotone" dataKey="ficomLite" stroke="#0369A1" strokeWidth={2} fill="url(#mppFicomLite)" name="Ficom Lite Total" />
+                <Area type="monotone" dataKey="edi" stroke="#16A34A" strokeWidth={2} fill="url(#mppEdi)" name="EDI Hirarki" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Breakdown */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14 }}>
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>Ficom Lite</div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Active MPP per RDM</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
-                {[...today.ficom_lite_by_rdm].sort((a, b) => b.active - a.active).map((r, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 11, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#0369A1" }}>{r.active}{r.total != null ? ` / ${r.total}` : ""}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>EDI Salesman Aktif</div>
-              <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 4 }}>Salesman Aktif per NSM</div>
-              <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 8 }}>
-                Nama level &quot;NSM&quot; (Ficom EDI) belum otomatis di-match ke nama &quot;RDM&quot; (Ficom Lite) — beda sistem, beda label jabatan. Bandingin manual dulu pakai nama orangnya.
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 280, overflowY: "auto" }}>
-                {today.edi_by_nsm.map((r, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 11, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: "#16A34A" }}>{r.active}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {/* Breakdown per RDM — di-match pakai empId (grsm_id EDI == empId RDM Ficom Lite) */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", overflowX: "auto" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>Breakdown</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Per RDM — Ficom Lite vs EDI Hirarki</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: "520px" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>RDM</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Ficom Lite Active</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Ficom Lite Total</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>EDI Hirarki</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Selisih</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mergedRdm.map(r => {
+                  const diff = r.ficomLiteTotal - r.edi
+                  return (
+                    <tr key={r.empId} style={{ borderBottom: "1px solid var(--border)" }}>
+                      <td style={{ padding: "6px 8px" }}>{r.name}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#0369A1" }}>{r.ficomLite}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{r.ficomLiteTotal}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#16A34A", fontWeight: 700 }}>{r.edi}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: diff === 0 ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{diff}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
 
           {/* Table harian */}
@@ -220,18 +239,18 @@ export default function MppComparePage() {
                   <th style={{ textAlign: "left", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Tanggal</th>
                   <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Ficom Lite Active</th>
                   <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Ficom Lite Total</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>EDI Aktif</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>EDI Hirarki</th>
                   <th style={{ textAlign: "right", padding: "6px 8px", color: "var(--text3)", fontWeight: 600 }}>Selisih</th>
                 </tr>
               </thead>
               <tbody>
                 {[...rows].reverse().map(r => {
-                  const diff = r.ficom_lite_active - r.edi_active_salesman
+                  const diff = r.ficom_lite_total - r.edi_active_salesman
                   return (
                     <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={{ padding: "6px 8px" }}>{new Date(r.snapshot_date + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#0369A1", fontWeight: 700 }}>{r.ficom_lite_active}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right" }}>{r.ficom_lite_total}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#0369A1" }}>{r.ficom_lite_active}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{r.ficom_lite_total}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: "#16A34A", fontWeight: 700 }}>{r.edi_active_salesman}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: diff === 0 ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{diff}</td>
                     </tr>

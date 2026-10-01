@@ -2,26 +2,34 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { parseEdiText } from "@/lib/parseEdiText"
 
-// Sync "Compare MPP" — bandingkan MPP aktif per hari antara dua sumber:
+// Sync "Compare MPP" — bandingkan jumlah salesman per hari antara dua sumber:
 //  1) Ficom Lite (api/ficom-lite-dashboard/mpp) — countMppActive/countMpp,
 //     sama persis logic-nya dengan api/mpp-health-sync (login akun posisi
 //     "SD" di Master Data → Ficom Password, tarik seluruh tree RDM→ADM→
 //     ADS→Salesman sekali call).
-//  2) Ficom EDI240136 "EDI Salesman Aktif" — salesman yang punya omzet != 0
-//     di tahun+periode (bulan) berjalan, dikonfirmasi dari capture user
-//     (query: m_epr_d where tahun=V01 and periode=V02 and omzet<>0, join
-//     naik sampai SD lewat spv→rsm→grsm→nsm→sd). MPP EDI per tanggal =
-//     COUNT DISTINCT (sls_id, distributor_id) dari hasil ekstrak hari itu.
+//  2) Ficom EDI260001 "EDI Hirarki SD - Salesman" — daftar MENTAH seluruh
+//     salesman di hirarki (TANPA filter omzet/aktivitas, params-nya kosong
+//     — beda dari EDI240136 "Salesman Aktif" yang kefilter omzet!=0, itu
+//     kepakai salah sebelumnya). Jadi ini pembanding buat "jumlah salesman
+//     versi master data Ficom (EDI)" vs "jumlah MPP versi Ficom Lite".
 //
-// PENTING: kedua sumber di-scope ke SD YANG SAMA (akun posisi "SD") biar
-// apples-to-apples — bukan SD_CODE hardcode terpisah kayak di
-// ficom-edi-sync (itu buat EDI200001 yang scope-nya beda/independen).
+// PENTING — pemetaan level hirarki EDI260001 ke Ficom Lite (dikonfirmasi
+// dari capture user, dicocokkan by WF-code, BUKAN tebakan nama):
+//   sd_id/sd_nm     = root perusahaan (mis. WF7001 "CHIEF OPERATING OFFICER")
+//   nsm_id/nsm_nm   = SD (akun posisi "SD" kita, mis. WF6001 "SD Don Lara")
+//                     ↔ ini scope yang sama dengan "user-id" di Ficom Lite
+//   grsm_id/grsm_nm = RDM di Ficom Lite (empType 3, top-level node tree)
+//   rsm_id/rsm_nm   = ADM di Ficom Lite (empType 2)
+//   ss_id/ss_nm     = ADS di Ficom Lite (empType 1)
+//   sls_id/sls_nm   = Salesman di Ficom Lite (empType 0, leaf)
+// Karena EDI260001 TIDAK ada param SD (ekstrak semua SD nasional), WAJIB
+// difilter manual di sini pakai nsm_id === sdCred.user_login, biar scope-nya
+// sama persis dengan tree Ficom Lite yang dibandingkan.
 //
-// Login buat ekstrak EDI240136 pakai akun posisi "EDI" (akun fungsional,
-// sama kayak ficom-edi-sync) — BUKAN akun SD, walau parameter V03 (SD Id)
-// tetap diisi emp_id akun SD di atas.
+// Login buat ekstrak EDI260001 pakai akun posisi "EDI" (akun fungsional,
+// sama kayak ficom-edi-sync) — BUKAN akun SD.
 const FICOM_BASE = "https://ficom-phi.mayora.co.id/web/phi"
-const EDI_ID = "EDI240136"
+const EDI_ID = "EDI260001"
 
 interface MppNodeData {
   empId: string; empNm: string; superiorId: string | null
@@ -54,24 +62,20 @@ async function fetchMppTree(token: string, sdEmpId: string): Promise<MppNode[]> 
   return res.json()
 }
 
-async function fetchEdiSalesmanAktif(token: string, sdCode: string, tahun: number, periode: number): Promise<string> {
+async function fetchEdiHirarki(token: string): Promise<string> {
   const tplRes = await fetch(`${FICOM_BASE}/api/edi/${EDI_ID}`, {
     headers: { Authorization: `F1C0m ${token}` },
   })
-  if (!tplRes.ok) throw new Error(`Gagal ambil template EDI Salesman Aktif (HTTP ${tplRes.status})`)
+  if (!tplRes.ok) throw new Error(`Gagal ambil template EDI Hirarki SD-Salesman (HTTP ${tplRes.status})`)
   const tpl = await tplRes.json() as EdiTemplate
 
-  const filledParams = tpl.params.map(p => ({
-    ...p,
-    placeholder: p.var === "V01" ? String(tahun) : p.var === "V02" ? String(periode) : p.var === "V03" ? sdCode : p.placeholder,
-  }))
-
+  // EDI260001 tidak punya param (params: []) — kirim balik apa adanya.
   const extractRes = await fetch(`${FICOM_BASE}/api/edi/ekstrak/brt`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `F1C0m ${token}` },
-    body: JSON.stringify({ ...tpl, params: filledParams }),
+    body: JSON.stringify(tpl),
   })
-  if (!extractRes.ok) throw new Error(`Gagal ekstrak EDI Salesman Aktif (HTTP ${extractRes.status})`)
+  if (!extractRes.ok) throw new Error(`Gagal ekstrak EDI Hirarki SD-Salesman (HTTP ${extractRes.status})`)
   return extractRes.text()
 }
 
@@ -113,9 +117,12 @@ async function runSync() {
 
     const [tree, ediText] = await Promise.all([
       fetchMppTree(sdToken, sdCred.user_login),
-      fetchEdiSalesmanAktif(ediToken, sdCred.user_login, tahun, periode),
+      fetchEdiHirarki(ediToken),
     ])
-    const rows = parseEdiText(ediText)
+    const allRows = parseEdiText(ediText)
+    // Scope ke SD yang sama dengan Ficom Lite — EDI260001 narik SEMUA SD
+    // nasional kalau tidak difilter.
+    const rows = allRows.filter(r => r.nsm_id === sdCred.user_login)
 
     // Top-level array dari fetchMppTree itu node RDM (empType 3) — angka
     // countMppActive/countMpp di level RDM sudah AKUMULASI seluruh
@@ -125,31 +132,28 @@ async function runSync() {
     const ficomLiteActive = tree.reduce((s, n) => s + (n.data.countMppActive ?? 0), 0)
     const ficomLiteTotal = tree.reduce((s, n) => s + (n.data.countMpp ?? 0), 0)
     const ficomLiteByRdm = tree.map(n => ({
-      name: n.data.empNm, active: n.data.countMppActive ?? 0, total: n.data.countMpp ?? 0,
+      empId: n.data.empId, name: n.data.empNm, active: n.data.countMppActive ?? 0, total: n.data.countMpp ?? 0,
     }))
 
-    // MPP EDI = jumlah salesman UNIK (sls_id + distributor_id, jaga-jaga
-    // 1 sls_id kepakai di >1 distributor) yang omzet != 0 bulan ini —
-    // EXCLUDE baris "HOUSE ACCOUNT" (bukan salesman beneran, kode generik
-    // buat omzet yang nggak diatribusikan ke salesman tertentu), dicek dari
-    // nama-nya (sls_nm), case-insensitive.
+    // Jumlah salesman versi EDI = salesman UNIK (sls_id + distributor_id,
+    // jaga-jaga 1 sls_id kepakai di >1 distributor) di hirarki — EXCLUDE
+    // baris "HOUSE ACCOUNT" (bukan salesman beneran, kode generik buat
+    // transaksi yang nggak diatribusikan ke salesman tertentu).
     const activeRows = rows.filter(r => !(r.sls_nm || "").toUpperCase().includes("HOUSE ACCOUNT"))
     const uniqueSalesman = new Set<string>()
-    const nsmMap = new Map<string, Set<string>>()
+    // Grup per RDM pakai grsm_id (match 1:1 ke empId RDM Ficom Lite di
+    // atas) — BUKAN nama, biar matching-nya pasti, bukan tebak-tebakan nama.
+    const rdmMap = new Map<string, { name: string; set: Set<string> }>()
     for (const r of activeRows) {
       const key = `${r.sls_id}|${r.distributor_id}`
       uniqueSalesman.add(key)
-      const nsmName = r.nsm_nm || "—"
-      if (!nsmMap.has(nsmName)) nsmMap.set(nsmName, new Set())
-      nsmMap.get(nsmName)!.add(key)
+      const rdmId = r.grsm_id || "—"
+      if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: r.grsm_nm || rdmId, set: new Set() })
+      rdmMap.get(rdmId)!.set.add(key)
     }
     const ediActiveSalesman = uniqueSalesman.size
-    // nsm_nm di EDI itu level "manajer nasional" di bawah SD — belum ada
-    // pemetaan otomatis yang dikonfirmasi ke nama RDM Ficom Lite (beda
-    // sistem, beda label jabatan), jadi disimpan APA ADANYA buat
-    // dibandingkan manual dulu di halaman, bukan dipaksa di-match di sini.
-    const ediByNsm = Array.from(nsmMap.entries())
-      .map(([name, set]) => ({ name, active: set.size }))
+    const ediByRdm = Array.from(rdmMap.entries())
+      .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
       .sort((a, b) => b.active - a.active)
 
     const snapshotDate = wibDateKey(now)
@@ -160,7 +164,7 @@ async function runSync() {
       ficom_lite_total: ficomLiteTotal,
       edi_active_salesman: ediActiveSalesman,
       ficom_lite_by_rdm: ficomLiteByRdm,
-      edi_by_nsm: ediByNsm,
+      edi_by_rdm: ediByRdm,
       synced_at: now.toISOString(),
     }, { onConflict: "snapshot_date" })
     if (upErr) throw new Error(`Gagal simpan snapshot: ${upErr.message}`)
@@ -169,7 +173,7 @@ async function runSync() {
       success: true, snapshotDate, tahun, periode,
       ficomLiteActive, ficomLiteTotal, ediActiveSalesman,
       houseAccountExcluded: rows.length - activeRows.length,
-      selisih: ficomLiteActive - ediActiveSalesman,
+      selisih: ficomLiteTotal - ediActiveSalesman,
       syncedAt: now.toISOString(),
     })
   } catch (e) {
