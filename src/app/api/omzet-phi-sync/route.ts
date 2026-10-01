@@ -188,13 +188,43 @@ async function runSync(backfill: boolean) {
       // sama dalam 1 periode (beda "release") — kalau dikirim apa adanya,
       // Postgres nolak upsert-nya ("ON CONFLICT DO UPDATE command cannot
       // affect row a second time", karena constraint-nya per
-      // period_month+distributor_id). Dedupe dulu di sini, ambil baris
-      // TERAKHIR per distributor_id (bukan dijumlah — nilai_omset/
-      // target_omset itu snapshot MTD, bukan transaksi, jadi menjumlah
-      // baris duplikat malah bikin dobel hitung).
+      // period_month+distributor_id). PERBAIKAN dari versi sebelumnya
+      // (yang cuma ambil baris terakhir, ternyata salah — kebukti dari
+      // user total target September keangka lebih kecil dari semestinya):
+      // "release" itu rupanya segmen/batch yang beda per distributor_id,
+      // jadi nilai_*/target_* per release harus DIJUMLAH, bukan ditimpa.
+      // perc_* dihitung ULANG dari hasil jumlah (bukan dipakai apa adanya
+      // dari salah satu baris, soalnya persentase per-release tidak valid
+      // lagi setelah nilai/target-nya digabung).
+      const pct = (nilai: number | null, target: number | null): number | null =>
+        target && target !== 0 && nilai != null ? Math.round((nilai / target) * 1000) / 10 : null
       const dedupMap = new Map<string, typeof dbRows[number]>()
-      for (const row of dbRows) dedupMap.set(row.distributor_id, row)
-      const dedupedRows = Array.from(dedupMap.values())
+      for (const row of dbRows) {
+        const existing = dedupMap.get(row.distributor_id)
+        if (!existing) { dedupMap.set(row.distributor_id, { ...row }); continue }
+        existing.nilai_omset = (existing.nilai_omset || 0) + (row.nilai_omset || 0)
+        existing.target_omset = (existing.target_omset || 0) + (row.target_omset || 0)
+        existing.nilai_cbcover = (existing.nilai_cbcover || 0) + (row.nilai_cbcover || 0)
+        existing.target_cbcover = (existing.target_cbcover || 0) + (row.target_cbcover || 0)
+        existing.nilai_hhtkpl = (existing.nilai_hhtkpl || 0) + (row.nilai_hhtkpl || 0)
+        existing.target_hhtkpl = (existing.target_hhtkpl || 0) + (row.target_hhtkpl || 0)
+        existing.nilai_hht = (existing.nilai_hht || 0) + (row.nilai_hht || 0)
+        existing.target_hht = (existing.target_hht || 0) + (row.target_hht || 0)
+        existing.nilai_ipt = (existing.nilai_ipt || 0) + (row.nilai_ipt || 0)
+        existing.target_ipt = (existing.target_ipt || 0) + (row.target_ipt || 0)
+        existing.nilai_sbpt = (existing.nilai_sbpt || 0) + (row.nilai_sbpt || 0)
+        existing.target_sbpt = (existing.target_sbpt || 0) + (row.target_sbpt || 0)
+        existing.nilai_ec_std_mtd = (existing.nilai_ec_std_mtd || 0) + (row.nilai_ec_std_mtd || 0)
+        existing.target_ec_std_mtd = (existing.target_ec_std_mtd || 0) + (row.target_ec_std_mtd || 0)
+        existing.release = existing.release && row.release && existing.release !== row.release
+          ? `${existing.release},${row.release}` : (existing.release || row.release)
+      }
+      const dedupedRows = Array.from(dedupMap.values()).map(row => ({
+        ...row,
+        perc_omset: pct(row.nilai_omset, row.target_omset),
+        perc_cbcover: pct(row.nilai_cbcover, row.target_cbcover),
+        perc_hhtkpl: pct(row.nilai_hhtkpl, row.target_hhtkpl),
+      }))
 
       if (dedupedRows.length > 0) {
         const { error: upErr } = await supabase.from("omzet_phi_snapshot").upsert(dedupedRows, { onConflict: "period_month,distributor_id" })

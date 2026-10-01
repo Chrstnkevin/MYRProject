@@ -169,10 +169,15 @@ export default function OmzetPhiPage() {
   // Ficom tidak beneran ngitung ulang berdasarkan V06 historis.
   const trendData = periods.map(pm => {
     const list = rows.filter(r => r.period_month === pm)
+    const omset = list.reduce((s, r) => s + (r.nilai_omset || 0), 0)
+    const target = list.reduce((s, r) => s + (r.target_omset || 0), 0)
     return {
+      periodMonth: pm,
       label: monthLabel(pm),
-      omset: list.reduce((s, r) => s + (r.nilai_omset || 0), 0),
-      target: list.reduce((s, r) => s + (r.target_omset || 0), 0),
+      omset,
+      target,
+      pct: target > 0 ? (omset / target) * 100 : 0,
+      adpCount: list.length,
     }
   })
 
@@ -261,7 +266,13 @@ export default function OmzetPhiPage() {
               { label: "Total Omset (EDI)", value: fmtRp(totalOmsetActive), color: "#16A34A", icon: "💰" },
               { label: "Total Target (EDI)", value: fmtRp(totalTargetActive), color: "#1E3A5F", icon: "🎯" },
               { label: "% Achievement", value: fmtPct(pctAchievement), color: pctAchievement >= 100 ? "#16A34A" : "#DC2626", icon: pctAchievement >= 100 ? "✅" : "⚠️" },
-              { label: "Ficom Lite Monthly", value: ficomRef ? `${fmtRp(ficomRef.value)} (selisih ${fmtRp(selisihFicomLite || 0)})` : "n/a", color: "#0369A1", icon: "📱" },
+              {
+                label: "Ficom Lite Monthly",
+                value: ficomRef
+                  ? `${fmtRp(ficomRef.value)} (selisih ${fmtRp(selisihFicomLite || 0)})`
+                  : (activePeriod === latestPeriod ? "n/a — belum sync" : "n/a — histori tidak tersedia"),
+                color: "#0369A1", icon: "📱",
+              },
             ].map((c, i) => (
               <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
                 <div style={{ height: 2, background: c.color }} />
@@ -278,6 +289,9 @@ export default function OmzetPhiPage() {
 
           <p style={{ fontSize: 11, color: "var(--text3)" }}>
             {activeRows.length} ADP di periode {monthLabel(activePeriod)} · terakhir sync {activeRows[0] ? new Date(activeRows[0].synced_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}
+            {!ficomRef && activePeriod !== latestPeriod && (
+              <> · <em>Ficom Lite Monthly cuma punya angka bulan berjalan (endpoint-nya memang nggak punya histori) — makanya selalu n/a kalau lihat bulan lampau, ini bukan bug.</em></>
+            )}
           </p>
 
           {/* Pareto chart nasional */}
@@ -352,6 +366,35 @@ export default function OmzetPhiPage() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Ringkasan Bulanan — semua bulan Jan s/d sekarang dalam 1 layar,
+              klik barisnya buat langsung pindah dropdown di banner ke bulan itu. */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Ringkasan Bulanan — Jan s/d {monthLabel(activePeriod)}</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ padding: "6px 8px" }}>Bulan</th>
+                  <th style={{ padding: "6px 8px" }}>ADP</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Total Omset</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>Total Target</th>
+                  <th style={{ padding: "6px 8px", textAlign: "right" }}>%</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trendData.map(t => (
+                  <tr key={t.periodMonth} onClick={() => setSelectedPeriod(t.periodMonth)}
+                    style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", background: t.periodMonth === activePeriod ? "var(--surface2)" : "transparent" }}>
+                    <td style={{ padding: "6px 8px", fontWeight: t.periodMonth === activePeriod ? 800 : 600, color: "var(--text)" }}>{t.label}</td>
+                    <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{t.adpCount}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtRp(t.omset)}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtRp(t.target)}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: t.pct >= 100 ? "#16A34A" : "#DC2626" }}>{fmtPct(t.pct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           {/* Trend bulanan */}
