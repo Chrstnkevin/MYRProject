@@ -49,6 +49,12 @@ export default function OmzetPhiPage() {
   const [backfilling, setBackfilling] = useState(false)
   const [backfillMsg, setBackfillMsg] = useState("")
 
+  // Periode yang lagi ditampilkan di Pareto/Top10/Top3 — default ke bulan
+  // terakhir, tapi user bisa pilih bulan lain (mis. bulan lalu yang udah
+  // full sebulan, bukan bulan berjalan yang baru jalan beberapa hari jadi
+  // omset-nya masih kecil/kosong).
+  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
+
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
@@ -109,25 +115,28 @@ export default function OmzetPhiPage() {
 
   const periods = Array.from(new Set(rows.map(r => r.period_month))).sort()
   const latestPeriod = periods[periods.length - 1] || null
-  const latestRows = latestPeriod ? rows.filter(r => r.period_month === latestPeriod) : []
+  // Fallback ke bulan terakhir kalau belum pilih apa-apa, atau pilihan lama
+  // sudah tidak ada lagi di data (mis. abis refresh).
+  const activePeriod = (selectedPeriod && periods.includes(selectedPeriod)) ? selectedPeriod : latestPeriod
+  const activeRows = activePeriod ? rows.filter(r => r.period_month === activePeriod) : []
 
-  const totalOmsetLatest = latestRows.reduce((s, r) => s + (r.nilai_omset || 0), 0)
-  const totalTargetLatest = latestRows.reduce((s, r) => s + (r.target_omset || 0), 0)
-  const pctAchievement = totalTargetLatest > 0 ? (totalOmsetLatest / totalTargetLatest) * 100 : 0
-  const ficomRef = latestPeriod ? (ficomLiteRefs.find(f => f.period_month === latestPeriod) || null) : null
-  const selisihFicomLite = ficomRef ? totalOmsetLatest - ficomRef.value : null
+  const totalOmsetActive = activeRows.reduce((s, r) => s + (r.nilai_omset || 0), 0)
+  const totalTargetActive = activeRows.reduce((s, r) => s + (r.target_omset || 0), 0)
+  const pctAchievement = totalTargetActive > 0 ? (totalOmsetActive / totalTargetActive) * 100 : 0
+  const ficomRef = activePeriod ? (ficomLiteRefs.find(f => f.period_month === activePeriod) || null) : null
+  const selisihFicomLite = ficomRef ? totalOmsetActive - ficomRef.value : null
 
   // Pareto nasional (ADP di-sort desc by omset) + garis kumulatif % —
-  // dihitung dari periode terakhir aja.
+  // dihitung dari periode yang lagi dipilih (dropdown), bukan rata-rata.
   const paretoData = (() => {
-    const sorted = [...latestRows].sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0))
+    const sorted = [...activeRows].sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0))
     let cum = 0
     return sorted.map(r => {
       cum += r.nilai_omset || 0
       return {
         name: r.distributor_nm || r.distributor_id,
         omset: r.nilai_omset || 0,
-        cumPct: totalOmsetLatest > 0 ? Math.round((cum / totalOmsetLatest) * 1000) / 10 : 0,
+        cumPct: totalOmsetActive > 0 ? Math.round((cum / totalOmsetActive) * 1000) / 10 : 0,
       }
     })
   })()
@@ -139,7 +148,7 @@ export default function OmzetPhiPage() {
   const masterMap = new Map(master.map(m => [String(m.adp_code), m.region_name]))
   const top3PerWilayah = (() => {
     const byWilayah = new Map<string, SnapshotRow[]>()
-    for (const r of latestRows) {
+    for (const r of activeRows) {
       const wilayah = masterMap.get(String(r.distributor_id)) || "Lainnya"
       if (!byWilayah.has(wilayah)) byWilayah.set(wilayah, [])
       byWilayah.get(wilayah)!.push(r)
@@ -153,8 +162,9 @@ export default function OmzetPhiPage() {
       .sort((a, b) => b.total - a.total)
   })()
 
-  // Trend bulanan Jan s/d bulan ini — PENTING: angka bulan lampau didapat
-  // dari V06 "Maks Date" diisi tanggal akhir bulan itu, TEKNIK INI BELUM
+  // Trend bulanan Jan s/d bulan ini (SELALU semua bulan, terlepas dari
+  // dropdown di atas) — PENTING: angka bulan lampau didapat dari V06
+  // "Maks Date" diisi tanggal akhir bulan itu, TEKNIK INI BELUM
   // TERVALIDASI. Kalau tiap bulan keliatan SAMA PERSIS (flat), berarti
   // Ficom tidak beneran ngitung ulang berdasarkan V06 historis.
   const trendData = periods.map(pm => {
@@ -185,10 +195,19 @@ export default function OmzetPhiPage() {
             <div style={{ width: 42, height: 42, borderRadius: 12, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>💰</div>
             <div>
               <h1 style={{ fontSize: 17, fontWeight: 800, color: "white", marginBottom: 3 }}>Omzet PHI</h1>
-              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>Pareto ADP: omset vs target — {latestPeriod ? `periode ${monthLabel(latestPeriod)}` : "belum ada data"}</p>
+              <p style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>Pareto ADP: omset vs target — {activePeriod ? `periode ${monthLabel(activePeriod)}` : "belum ada data"}</p>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {periods.length > 0 && (
+              <select value={activePeriod || ""} onChange={e => setSelectedPeriod(e.target.value)}
+                title="Pilih bulan buat Pareto/Top10/Top3 di bawah"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.12)", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit" }}>
+                {periods.slice().reverse().map(pm => (
+                  <option key={pm} value={pm} style={{ color: "#111" }}>{monthLabel(pm)}</option>
+                ))}
+              </select>
+            )}
             <button onClick={handleSync} disabled={syncing}
               title="Login Ficom & tarik ulang omset bulan berjalan dari EDI200001"
               style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: syncing ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.18)", cursor: syncing ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
@@ -226,7 +245,7 @@ export default function OmzetPhiPage() {
         ⚠️ Data bulan lampau (hasil &quot;Tarik Histori&quot;) didapat dengan trik set tanggal cutoff ke akhir bulan tsb — <strong>belum tervalidasi</strong> apakah Ficom beneran menghitung ulang berdasarkan tanggal itu. Kalau di grafik tren bulanan angkanya terlihat flat/sama persis tiap bulan, kemungkinan histori ini tidak akurat — cek manual dulu.
       </div>
 
-      {!latestPeriod && !loading && (
+      {!activePeriod && !loading && (
         <div style={{ textAlign: "center", padding: "48px", background: "var(--surface)", borderRadius: 16, border: "1.5px solid var(--border)" }}>
           <div style={{ fontSize: 40, marginBottom: 10 }}>💰</div>
           <p style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>Belum ada data</p>
@@ -234,13 +253,13 @@ export default function OmzetPhiPage() {
         </div>
       )}
 
-      {latestPeriod && (
+      {activePeriod && (
         <>
           {/* KPI row */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
             {[
-              { label: "Total Omset (EDI)", value: fmtRp(totalOmsetLatest), color: "#16A34A", icon: "💰" },
-              { label: "Total Target (EDI)", value: fmtRp(totalTargetLatest), color: "#1E3A5F", icon: "🎯" },
+              { label: "Total Omset (EDI)", value: fmtRp(totalOmsetActive), color: "#16A34A", icon: "💰" },
+              { label: "Total Target (EDI)", value: fmtRp(totalTargetActive), color: "#1E3A5F", icon: "🎯" },
               { label: "% Achievement", value: fmtPct(pctAchievement), color: pctAchievement >= 100 ? "#16A34A" : "#DC2626", icon: pctAchievement >= 100 ? "✅" : "⚠️" },
               { label: "Ficom Lite Monthly", value: ficomRef ? `${fmtRp(ficomRef.value)} (selisih ${fmtRp(selisihFicomLite || 0)})` : "n/a", color: "#0369A1", icon: "📱" },
             ].map((c, i) => (
@@ -258,12 +277,12 @@ export default function OmzetPhiPage() {
           </div>
 
           <p style={{ fontSize: 11, color: "var(--text3)" }}>
-            {latestRows.length} ADP di periode {monthLabel(latestPeriod)} · terakhir sync {latestRows[0] ? new Date(latestRows[0].synced_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}
+            {activeRows.length} ADP di periode {monthLabel(activePeriod)} · terakhir sync {activeRows[0] ? new Date(activeRows[0].synced_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}
           </p>
 
           {/* Pareto chart nasional */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Pareto Omset per ADP — Nasional ({monthLabel(latestPeriod)})</h3>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Pareto Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
             <ResponsiveContainer width="100%" height={280}>
               <ComposedChart data={paretoData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -280,7 +299,7 @@ export default function OmzetPhiPage() {
 
           {/* Top 10 Nasional */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Top 10 Penyumbang Omset — Nasional ({monthLabel(latestPeriod)})</h3>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Top 10 Penyumbang Omset — Nasional ({monthLabel(activePeriod)})</h3>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)" }}>
@@ -295,7 +314,7 @@ export default function OmzetPhiPage() {
               </thead>
               <tbody>
                 {top10Nasional.map((r, i) => {
-                  const full = latestRows.find(x => (x.distributor_nm || x.distributor_id) === r.name)
+                  const full = activeRows.find(x => (x.distributor_nm || x.distributor_id) === r.name)
                   return (
                     <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{i + 1}</td>
@@ -314,7 +333,7 @@ export default function OmzetPhiPage() {
 
           {/* Top 3 per Wilayah */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Top 3 Penyumbang Omset per Wilayah ({monthLabel(latestPeriod)})</h3>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Top 3 Penyumbang Omset per Wilayah ({monthLabel(activePeriod)})</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 10 }}>
               {top3PerWilayah.map((w) => (
                 <div key={w.wilayah} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--surface2)" }}>
@@ -337,7 +356,7 @@ export default function OmzetPhiPage() {
 
           {/* Trend bulanan */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Trend Bulanan — Omset vs Target (Jan s/d {monthLabel(latestPeriod)})</h3>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Trend Bulanan — Omset vs Target (Jan s/d {monthLabel(activePeriod)})</h3>
             <ResponsiveContainer width="100%" height={240}>
               <AreaChart data={trendData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
