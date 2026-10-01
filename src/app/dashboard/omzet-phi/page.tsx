@@ -36,6 +36,17 @@ function fmtRp(n: number): string {
 function fmtPct(n: number): string {
   return `${n.toFixed(1)}%`
 }
+// Format ringkas buat label sumbu chart — pilih satuan (rb/jt/M) sesuai
+// besar angkanya sendiri, soalnya omset per ADP vs total nasional bisa
+// beda jauh ordernya (sebelumnya dipaksa /1 juta semua, jadi kebaca "0jt"
+// kalau angkanya di bawah situ).
+function fmtCompact(n: number): string {
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}M`
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}jt`
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(0)}rb`
+  return String(Math.round(n))
+}
 
 export default function OmzetPhiPage() {
   const [rows, setRows] = useState<SnapshotRow[]>([])
@@ -294,18 +305,23 @@ export default function OmzetPhiPage() {
             )}
           </p>
 
-          {/* Pareto chart nasional */}
+          {/* Pareto chart nasional — nama ADP di sumbu-X SENGAJA disembunyikan
+              (85 ADP kalau ditulis semua numpuk nggak kebaca, lihat screenshot
+              yg dikomplain user), diganti arahkan kursor ke bar buat lihat
+              nama+angkanya lewat Tooltip. Urutan/ranking tetap kebaca dari
+              tinggi bar yang menurun + garis kumulatif %. */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Pareto Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
-            <ResponsiveContainer width="100%" height={280}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>Pareto Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>{paretoData.length} ADP, diurut dari omset tertinggi — arahkan kursor ke bar buat lihat nama & angkanya</p>
+            <ResponsiveContainer width="100%" height={260}>
               <ComposedChart data={paretoData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                <XAxis dataKey="name" tick={{ fontSize: 9 }} interval={0} angle={-35} textAnchor="end" height={70} />
-                <YAxis yAxisId="left" tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1_000_000).toFixed(0)}jt`} />
+                <XAxis dataKey="name" tick={false} tickLine={false} axisLine={{ stroke: "var(--border)" }} height={10} />
+                <YAxis yAxisId="left" tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
                 <Tooltip formatter={(value: number, name: string) => name === "cumPct" ? [`${value}%`, "Kumulatif %"] : [fmtRp(value), "Omset"]} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Bar yAxisId="left" dataKey="omset" name="Omset" fill="#16A34A" radius={[4, 4, 0, 0]} />
+                <Bar yAxisId="left" dataKey="omset" name="Omset" fill="#16A34A" radius={[2, 2, 0, 0]} />
                 <Line yAxisId="right" type="monotone" dataKey="cumPct" name="Kumulatif %" stroke="#DC2626" strokeWidth={2} dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
@@ -404,7 +420,7 @@ export default function OmzetPhiPage() {
               <AreaChart data={trendData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1_000_000).toFixed(0)}jt`} />
+                <YAxis tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
                 <Tooltip formatter={(value: number) => fmtRp(value)} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Area type="monotone" dataKey="omset" name="Omset" stroke="#16A34A" fill="#16A34A" fillOpacity={0.15} strokeWidth={2} />
