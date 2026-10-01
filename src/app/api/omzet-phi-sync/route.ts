@@ -184,11 +184,23 @@ async function runSync(backfill: boolean) {
         }
       })
 
-      if (dbRows.length > 0) {
-        const { error: upErr } = await supabase.from("omzet_phi_snapshot").upsert(dbRows, { onConflict: "period_month,distributor_id" })
+      // EDI200001 ternyata bisa balikin >1 baris utk distributor_id yang
+      // sama dalam 1 periode (beda "release") — kalau dikirim apa adanya,
+      // Postgres nolak upsert-nya ("ON CONFLICT DO UPDATE command cannot
+      // affect row a second time", karena constraint-nya per
+      // period_month+distributor_id). Dedupe dulu di sini, ambil baris
+      // TERAKHIR per distributor_id (bukan dijumlah — nilai_omset/
+      // target_omset itu snapshot MTD, bukan transaksi, jadi menjumlah
+      // baris duplikat malah bikin dobel hitung).
+      const dedupMap = new Map<string, typeof dbRows[number]>()
+      for (const row of dbRows) dedupMap.set(row.distributor_id, row)
+      const dedupedRows = Array.from(dedupMap.values())
+
+      if (dedupedRows.length > 0) {
+        const { error: upErr } = await supabase.from("omzet_phi_snapshot").upsert(dedupedRows, { onConflict: "period_month,distributor_id" })
         if (upErr) throw new Error(`Gagal simpan periode ${periodMonth}: ${upErr.message}`)
       }
-      results.push({ periodMonth, rows: dbRows.length })
+      results.push({ periodMonth, rows: dedupedRows.length })
 
       // Ficom Lite Monthly cuma punya angka bulan berjalan (endpoint ini
       // tidak punya histori) — jadi cuma ditarik/disimpan sekali, pas
