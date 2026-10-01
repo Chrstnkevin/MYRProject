@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react"
 import {
-  ComposedChart, Bar, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid,
+  ComposedChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
 } from "recharts"
 import { supabase } from "@/lib/supabase"
@@ -187,17 +187,24 @@ export default function OmzetPhiPage() {
   // dihitung dari periode yang lagi dipilih (dropdown), bukan rata-rata.
   const paretoData = (() => {
     const sorted = [...activeRows].sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0))
-    let cum = 0
-    return sorted.map(r => {
-      cum += r.nilai_omset || 0
-      return {
-        name: r.distributor_nm || r.distributor_id,
-        omset: r.nilai_omset || 0,
-        cumPct: totalOmsetActive > 0 ? Math.round((cum / totalOmsetActive) * 1000) / 10 : 0,
-      }
-    })
+    return sorted.map(r => ({
+      name: r.distributor_nm || r.distributor_id,
+      omset: r.nilai_omset || 0,
+    }))
   })()
   const top10Nasional = paretoData.slice(0, 10)
+  // Insight Pareto versi kalimat (bukan grafik) — jumlah ADP teratas yang
+  // kumulatif omset-nya udah nembus 80%, ini jauh lebih gampang dipahami
+  // daripada baca garis kumulatif di chart (user masih bingung itu garis
+  // "kumulatif" dikira "rata-rata").
+  const pareto80Count = (() => {
+    let cum = 0
+    for (let i = 0; i < paretoData.length; i++) {
+      cum += paretoData[i].omset
+      if (totalOmsetActive > 0 && cum / totalOmsetActive >= 0.8) return i + 1
+    }
+    return paretoData.length
+  })()
 
   // Breakdown per wilayah — join distributor_id ke master_data_adp.adp_code
   // (dikonfirmasi pola yang sama kayak Data Transfer: dibandingkan sebagai
@@ -373,31 +380,30 @@ export default function OmzetPhiPage() {
             </div>
           )}
 
-          {/* Pareto chart nasional — nama ADP di sumbu-X SENGAJA disembunyikan
-              (85 ADP kalau ditulis semua numpuk nggak kebaca, lihat screenshot
-              yg dikomplain user), diganti arahkan kursor ke bar buat lihat
-              nama+angkanya lewat Tooltip. Urutan/ranking tetap kebaca dari
-              tinggi bar yang menurun + garis kumulatif %. */}
+          {/* Pareto chart nasional — DISEDERHANAKAN: sebelumnya ada garis merah
+              "kumulatif %" di sumbu kanan, tapi user tetap bingung ngiranya
+              itu "rata-rata" (padahal kumulatif, konsep beda) walau sudah
+              dikasih caption penjelasan. Daripada terus dijelasin ulang,
+              garisnya dibuang — insight Pareto-nya (berapa ADP nyumbang 80%
+              omset) langsung ditulis sebagai kalimat di bawah, jauh lebih
+              gampang dipahami daripada baca kurva. Nama ADP di sumbu-X tetap
+              disembunyikan (85 ADP ditulis semua numpuk nggak kebaca),
+              diganti arahkan kursor ke bar buat lihat nama & angkanya. */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>Pareto Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
-            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>
-              {paretoData.length} ADP, diurut dari omset tertinggi — arahkan kursor ke bar buat lihat nama & angkanya · <span style={{ color: "#16A34A", fontWeight: 700 }}>■ Hijau</span> = omset tiap ADP (sumbu kiri) · <span style={{ color: "#DC2626", fontWeight: 700 }}>— Merah</span> = persentase kumulatif terhadap total nasional (sumbu kanan) — makin landai garisnya di sebelah kanan, makin kecil kontribusi ADP-ADP di situ ke total omset
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 4 }}>
+              {paretoData.length} ADP, diurut dari omset tertinggi ke terkecil — arahkan kursor ke bar buat lihat nama & angkanya
             </p>
-            <ResponsiveContainer width="100%" height={260}>
+            <p style={{ fontSize: 12, color: "var(--text)", marginBottom: 10, background: "var(--surface2)", borderRadius: 6, padding: "6px 10px", display: "inline-block" }}>
+              📌 <strong>{pareto80Count} dari {paretoData.length} ADP teratas</strong> ({fmtPct((pareto80Count / Math.max(paretoData.length, 1)) * 100)} dari semua ADP) udah nyumbang <strong>80%</strong> dari total omset nasional ({fmtPeso(totalOmsetActive)}) — sisanya ({paretoData.length - pareto80Count} ADP) cuma nyumbang 20%.
+            </p>
+            <ResponsiveContainer width="100%" height={240}>
               <ComposedChart data={paretoData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="name" tick={false} tickLine={false} axisLine={{ stroke: "var(--border)" }} height={10} />
-                <YAxis yAxisId="left" tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                {/* BUG lama: formatter ngecek name==="cumPct" (dataKey), padahal
-                    Recharts ngirim ke formatter itu prop `name` yang kita set
-                    di <Line>/<Bar> ("Kumulatif %"), bukan dataKey-nya — jadi
-                    kondisinya nggak pernah match dan garis merah ketampil
-                    salah label "Omset: ₱9" (angka cumPct diformat kayak duit). */}
-                <Tooltip formatter={(value: number, name: string) => name === "Kumulatif %" ? [`${value}%`, "Kumulatif %"] : [fmtPeso(value), "Omset"]} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Bar yAxisId="left" dataKey="omset" name="Omset" fill="#16A34A" radius={[2, 2, 0, 0]} />
-                <Line yAxisId="right" type="monotone" dataKey="cumPct" name="Kumulatif %" stroke="#DC2626" strokeWidth={2} dot={false} />
+                <YAxis tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
+                <Tooltip formatter={(value: number) => [fmtPeso(value), "Omset"]} />
+                <Bar dataKey="omset" name="Omset" fill="#16A34A" radius={[2, 2, 0, 0]} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
