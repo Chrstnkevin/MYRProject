@@ -134,6 +134,13 @@ async function runSync() {
     const ficomLiteByRdm = tree.map(n => ({
       empId: n.data.empId, name: n.data.empNm, active: n.data.countMppActive ?? 0, total: n.data.countMpp ?? 0,
     }))
+    // 1 level ke bawah RDM — children langsung tiap node RDM itu ADM
+    // (empType 2), angkanya juga udah akumulasi descendant-nya sendiri.
+    const ficomLiteByAdm = tree.flatMap(rdm => (rdm.children || []).map(adm => ({
+      empId: adm.data.empId, name: adm.data.empNm,
+      active: adm.data.countMppActive ?? 0, total: adm.data.countMpp ?? 0,
+      rdmId: rdm.data.empId, rdmName: rdm.data.empNm,
+    })))
 
     // Jumlah salesman versi EDI = salesman UNIK (sls_id + distributor_id,
     // jaga-jaga 1 sls_id kepakai di >1 distributor) di hirarki — EXCLUDE
@@ -143,7 +150,10 @@ async function runSync() {
     const uniqueSalesman = new Set<string>()
     // Grup per RDM pakai grsm_id (match 1:1 ke empId RDM Ficom Lite di
     // atas) — BUKAN nama, biar matching-nya pasti, bukan tebak-tebakan nama.
+    // rsm_id/rsm_nm itu 1 level di bawah RDM = ADM (dikonfirmasi sama
+    // urutan join EDI260001: nsm>grsm>rsm>ss>sls = SD>RDM>ADM>ADS>Salesman).
     const rdmMap = new Map<string, { name: string; set: Set<string> }>()
+    const admMap = new Map<string, { name: string; rdmId: string; rdmName: string; set: Set<string> }>()
     // Daftar mentah salesman (bukan cuma angka) — dipakai fitur "selisih"
     // buat nunjukin SIAPA aja bedanya pas dibandingin sama snapshot lain.
     const salesmanMap = new Map<string, { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }>()
@@ -152,8 +162,12 @@ async function runSync() {
       uniqueSalesman.add(key)
       const rdmId = r.grsm_id || "—"
       const rdmName = r.grsm_nm || rdmId
+      const admId = r.rsm_id || "—"
+      const admName = r.rsm_nm || admId
       if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: rdmName, set: new Set() })
       rdmMap.get(rdmId)!.set.add(key)
+      if (!admMap.has(admId)) admMap.set(admId, { name: admName, rdmId, rdmName, set: new Set() })
+      admMap.get(admId)!.set.add(key)
       if (!salesmanMap.has(key)) {
         salesmanMap.set(key, { key, slsId: r.sls_id, distributorId: r.distributor_id, name: r.sls_nm || "", rdmId, rdmName })
       }
@@ -161,6 +175,9 @@ async function runSync() {
     const ediActiveSalesman = uniqueSalesman.size
     const ediByRdm = Array.from(rdmMap.entries())
       .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
+      .sort((a, b) => b.active - a.active)
+    const ediByAdm = Array.from(admMap.entries())
+      .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size, rdmId: v.rdmId, rdmName: v.rdmName }))
       .sort((a, b) => b.active - a.active)
     const ediSalesmanList = Array.from(salesmanMap.values())
 
@@ -209,7 +226,9 @@ async function runSync() {
       ficom_lite_total: ficomLiteTotal,
       edi_active_salesman: ediActiveSalesman,
       ficom_lite_by_rdm: ficomLiteByRdm,
+      ficom_lite_by_adm: ficomLiteByAdm,
       edi_by_rdm: ediByRdm,
+      edi_by_adm: ediByAdm,
       edi_salesman_list: ediSalesmanList,
       synced_at: now.toISOString(),
     }, { onConflict: "snapshot_date" })

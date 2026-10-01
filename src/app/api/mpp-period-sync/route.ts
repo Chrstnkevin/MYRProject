@@ -94,6 +94,7 @@ async function runSync() {
     const results: {
       tahun: number; periode: number; edi_active_salesman: number
       edi_by_rdm: { empId: string; name: string; active: number }[]
+      edi_by_adm: { empId: string; name: string; active: number; rdmId: string; rdmName: string }[]
       edi_salesman_list: { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }[]
       synced_at: string
     }[] = []
@@ -107,6 +108,9 @@ async function runSync() {
       )
       const uniqueSalesman = new Set<string>()
       const rdmMap = new Map<string, { name: string; set: Set<string> }>()
+      // rsm_id/rsm_nm = 1 level di bawah RDM (grsm) = ADM, sama persis
+      // pemetaan kayak di mpp-compare-sync.
+      const admMap = new Map<string, { name: string; rdmId: string; rdmName: string; set: Set<string> }>()
       // Daftar mentah salesman (bukan cuma angka) — dipakai fitur "selisih"
       // buat nunjukin SIAPA aja bedanya pas dibandingin ke hirarki sekarang.
       const salesmanMap = new Map<string, { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }>()
@@ -115,8 +119,12 @@ async function runSync() {
         uniqueSalesman.add(key)
         const rdmId = r.grsm_id || "—"
         const rdmName = r.grsm_nm || rdmId
+        const admId = r.rsm_id || "—"
+        const admName = r.rsm_nm || admId
         if (!rdmMap.has(rdmId)) rdmMap.set(rdmId, { name: rdmName, set: new Set() })
         rdmMap.get(rdmId)!.set.add(key)
+        if (!admMap.has(admId)) admMap.set(admId, { name: admName, rdmId, rdmName, set: new Set() })
+        admMap.get(admId)!.set.add(key)
         if (!salesmanMap.has(key)) {
           salesmanMap.set(key, { key, slsId: r.sls_id, distributorId: r.distributor_id, name: r.sls_nm || "", rdmId, rdmName })
         }
@@ -124,11 +132,15 @@ async function runSync() {
       const ediByRdm = Array.from(rdmMap.entries())
         .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
         .sort((a, b) => b.active - a.active)
+      const ediByAdm = Array.from(admMap.entries())
+        .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size, rdmId: v.rdmId, rdmName: v.rdmName }))
+        .sort((a, b) => b.active - a.active)
       const ediSalesmanList = Array.from(salesmanMap.values())
       const row = {
         tahun, periode,
         edi_active_salesman: uniqueSalesman.size,
         edi_by_rdm: ediByRdm,
+        edi_by_adm: ediByAdm,
         edi_salesman_list: ediSalesmanList,
         synced_at: now.toISOString(),
       }

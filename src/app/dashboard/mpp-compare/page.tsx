@@ -1,7 +1,7 @@
 "use client"
 // PATH: src/app/dashboard/mpp-compare/page.tsx
 
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend, ReferenceLine,
@@ -9,6 +9,7 @@ import {
 import { supabase } from "@/lib/supabase"
 
 interface RdmCount { empId: string; name: string; active: number; total?: number }
+interface AdmCount { empId: string; name: string; active: number; total?: number; rdmId: string; rdmName: string }
 interface SalesmanEntry { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }
 interface SnapshotRow {
   id: string
@@ -19,7 +20,9 @@ interface SnapshotRow {
   ficom_lite_total: number
   edi_active_salesman: number
   ficom_lite_by_rdm: RdmCount[]
+  ficom_lite_by_adm: AdmCount[]
   edi_by_rdm: RdmCount[]
+  edi_by_adm: AdmCount[]
   edi_salesman_list: SalesmanEntry[]
   synced_at: string
 }
@@ -29,6 +32,7 @@ interface PeriodRow {
   periode: number
   edi_active_salesman: number
   edi_by_rdm: RdmCount[]
+  edi_by_adm: AdmCount[]
   edi_salesman_list: SalesmanEntry[]
   synced_at: string
 }
@@ -59,6 +63,19 @@ export default function MppComparePage() {
   const [periodSyncMsg, setPeriodSyncMsg] = useState("")
 
   const [changeLog, setChangeLog] = useState<ChangeLogEntry[]>([])
+
+  const [expandedRdmDaily, setExpandedRdmDaily] = useState<Set<string>>(new Set())
+  const [expandedRdmPeriod, setExpandedRdmPeriod] = useState<Set<string>>(new Set())
+  const toggleRdmDaily = (empId: string) => setExpandedRdmDaily(prev => {
+    const n = new Set(prev)
+    if (n.has(empId)) n.delete(empId); else n.add(empId)
+    return n
+  })
+  const toggleRdmPeriod = (empId: string) => setExpandedRdmPeriod(prev => {
+    const n = new Set(prev)
+    if (n.has(empId)) n.delete(empId); else n.add(empId)
+    return n
+  })
 
   useEffect(() => { loadData(); loadPeriodData(); loadChangeLog() }, [])
 
@@ -165,6 +182,22 @@ export default function MppComparePage() {
     }
     return Array.from(map.values()).sort((a, b) => b.ficomLiteTotal - a.ficomLiteTotal)
   })() : []
+
+  // ADM di bawah 1 RDM tertentu (daily) — di-match pakai empId ADM
+  // (rsm_id EDI260001 == empId ADM Ficom Lite), sama logic kayak mergedRdm.
+  function mergedAdmForRdmDaily(rdmEmpId: string) {
+    if (!today) return []
+    const map = new Map<string, { empId: string; name: string; ficomLite: number; ficomLiteTotal: number; edi: number }>()
+    for (const r of (today.ficom_lite_by_adm || []).filter(a => a.rdmId === rdmEmpId)) {
+      map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: r.active, ficomLiteTotal: r.total ?? 0, edi: 0 })
+    }
+    for (const r of (today.edi_by_adm || []).filter(a => a.rdmId === rdmEmpId)) {
+      const existing = map.get(r.empId)
+      if (existing) existing.edi = r.active
+      else map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: 0, ficomLiteTotal: 0, edi: r.active })
+    }
+    return Array.from(map.values()).sort((a, b) => b.ficomLiteTotal - a.ficomLiteTotal)
+  }
 
   const periodChartData = periodRows.map(r => ({
     label: `${MONTH_ID[r.periode - 1]} ${r.tahun}`,
@@ -339,16 +372,30 @@ export default function MppComparePage() {
 
             {latestPeriod && (latestPeriod.edi_by_rdm || []).length > 0 && (
               <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>
                   Breakdown {MONTH_ID[latestPeriod.periode - 1]} {latestPeriod.tahun} per RDM
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
-                  {(latestPeriod.edi_by_rdm || []).map((r, i) => (
-                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 11, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: "#16A34A" }}>{r.active}</span>
-                    </div>
-                  ))}
+                <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 6 }}>Klik buat lihat sampai ADM.</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 260, overflowY: "auto" }}>
+                  {(latestPeriod.edi_by_rdm || []).map((r, i) => {
+                    const isExpanded = expandedRdmPeriod.has(r.empId)
+                    const adms = (latestPeriod.edi_by_adm || []).filter(a => a.rdmId === r.empId)
+                    return (
+                      <div key={i}>
+                        <div onClick={() => toggleRdmPeriod(r.empId)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "3px 0" }}>
+                          <span style={{ display: "inline-block", width: 12, color: "var(--text3)", fontSize: 10, transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
+                          <span style={{ fontSize: 11, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#16A34A" }}>{r.active}</span>
+                        </div>
+                        {isExpanded && adms.map(a => (
+                          <div key={a.empId} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0 2px 20px" }}>
+                            <span style={{ fontSize: 10, color: "var(--text3)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: "#16A34A" }}>{a.active}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -399,10 +446,12 @@ export default function MppComparePage() {
             )}
           </div>
 
-          {/* Breakdown per RDM — di-match pakai empId (grsm_id EDI == empId RDM Ficom Lite) */}
+          {/* Breakdown per RDM — di-match pakai empId (grsm_id EDI == empId RDM Ficom Lite).
+              Klik baris buat expand sampai level ADM (rsm_id EDI == empId ADM Ficom Lite). */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", overflowX: "auto" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>Breakdown</div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Per RDM — Ficom Lite vs EDI Hirarki</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 4 }}>Per RDM — Ficom Lite vs EDI Hirarki</div>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 12 }}>Klik baris buat lihat breakdown sampai ADM.</p>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: "520px" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border)" }}>
@@ -416,14 +465,33 @@ export default function MppComparePage() {
               <tbody>
                 {mergedRdm.map(r => {
                   const diff = r.ficomLiteTotal - r.edi
+                  const isExpanded = expandedRdmDaily.has(r.empId)
+                  const adms = isExpanded ? mergedAdmForRdmDaily(r.empId) : []
                   return (
-                    <tr key={r.empId} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={{ padding: "6px 8px" }}>{r.name}</td>
+                    <Fragment key={r.empId}>
+                    <tr onClick={() => toggleRdmDaily(r.empId)} style={{ borderBottom: "1px solid var(--border)", cursor: "pointer" }}>
+                      <td style={{ padding: "6px 8px" }}>
+                        <span style={{ display: "inline-block", width: 12, color: "var(--text3)", transform: isExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
+                        {" "}{r.name}
+                      </td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: "#0369A1" }}>{r.ficomLite}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{r.ficomLiteTotal}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: "#16A34A", fontWeight: 700 }}>{r.edi}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: diff === 0 ? "#16A34A" : "#DC2626", fontWeight: 700 }}>{diff}</td>
                     </tr>
+                    {isExpanded && adms.map(a => {
+                      const adiff = a.ficomLiteTotal - a.edi
+                      return (
+                        <tr key={a.empId} style={{ borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
+                          <td style={{ padding: "5px 8px 5px 28px", color: "var(--text2)", fontSize: 11 }}>{a.name}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", color: "#0369A1", fontSize: 11 }}>{a.ficomLite}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, fontSize: 11 }}>{a.ficomLiteTotal}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", color: "#16A34A", fontWeight: 600, fontSize: 11 }}>{a.edi}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", color: adiff === 0 ? "#16A34A" : "#DC2626", fontWeight: 600, fontSize: 11 }}>{adiff}</td>
+                        </tr>
+                      )
+                    })}
+                    </Fragment>
                   )
                 })}
               </tbody>
