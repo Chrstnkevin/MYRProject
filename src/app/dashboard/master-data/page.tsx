@@ -5,9 +5,10 @@ import { useState, useEffect, useMemo, useRef, Fragment } from "react"
 import {
   Search, X, FileSpreadsheet, Building2,
   RefreshCw, AlertCircle, CheckCircle2, Plus, Trash2, Pencil,
-  Save, Upload, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
-  List, FolderTree, Link2, Warehouse, Truck,
+  Save, Upload, Download, ChevronDown, ChevronUp, ChevronRight, KeyRound, Copy, Check,
+  List, FolderTree, Link2, Warehouse, Truck, Package,
 } from "lucide-react"
+import ProductMaintenance from "./ProductMaintenance"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { supabase } from "@/lib/supabase"
 
@@ -116,7 +117,7 @@ export default function MasterDataPage() {
   const schemaFileRef = useRef<HTMLInputElement>(null)
 
   // ── Hierarki RDM → ADM → ADS ───────────────────────────────
-  const [view, setView] = useState<"table" | "hierarchy">("table")
+  const [view, setView] = useState<"table" | "hierarchy" | "produk">("table")
   const [hierarchy, setHierarchy] = useState<HierarchyNode[]>([])
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
@@ -361,6 +362,36 @@ export default function MasterDataPage() {
     else { setData(p => p.filter(d => d.id !== id)); if (expandedId === id) setExpandedId(null) }
   }
 
+  // ── Download Template (buat Import Excel) ───────────────────
+  // Header-nya HARUS sama persis kayak yang dibaca importExcel() di bawah —
+  // kalau kolomnya diubah di sana, ubah juga di sini.
+  const downloadTemplate = async () => {
+    try {
+      const XLSX = await import("xlsx")
+      const ws = XLSX.utils.json_to_sheet([{
+        "ADP Code": 100001, "Depot": "CONTOH DEPOT",
+        "Distributor Name": "CONTOH DISTRIBUTOR INC.", "Server": 138,
+        "Area": 1, "Area Name": "CONTOH AREA",
+        "Region": 1, "Region Name": "GMA",
+        "ADS Name": "", "ADM Name": "", "RDM Name": "",
+        "Status": "MAIN WH", "Remarks": "Active",
+      }])
+      ws["!cols"] = [{wch:10},{wch:30},{wch:45},{wch:8},{wch:8},{wch:14},{wch:8},{wch:10},{wch:36},{wch:36},{wch:36},{wch:10},{wch:10}]
+      const notesWs = XLSX.utils.aoa_to_sheet([
+        ["Keterangan"],
+        ["- Hapus baris contoh sebelum upload, isi dengan data asli"],
+        ["- Kolom wajib: Depot (baris tanpa Depot akan di-skip)"],
+        ["- Status harus salah satu dari: MAIN WH, SDP"],
+        ["- Remarks harus salah satu dari: Active, Inactive, New"],
+        ["- ADS Name / ADM Name / RDM Name boleh dikosongkan, diisi lewat tab \"Hierarki RDM/ADM/ADS\""],
+      ])
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Master Data ADP")
+      XLSX.utils.book_append_sheet(wb, notesWs, "Keterangan")
+      XLSX.writeFile(wb, "Template_Master_Data_ADP.xlsx")
+    } catch (e) { setError("Gagal buat template: " + String(e)) }
+  }
+
   // ── Export Excel ──────────────────────────────────────────
   const exportExcel = async () => {
     setExporting(true)
@@ -554,6 +585,10 @@ export default function MasterDataPage() {
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
               <RefreshCw size={13} /> Refresh
             </button>
+            <button onClick={downloadTemplate} title="Download template Excel kosong buat Import Excel — isi kolomnya dulu baru upload"
+              style={{ display: "flex", alignItems: "center", gap: "6px", padding: "9px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", fontSize: "12px", fontWeight: 600, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <Download size={13} /> Download Template
+            </button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) { importExcel(f); e.target.value = "" } }} />
             <button onClick={() => fileRef.current?.click()}
@@ -578,6 +613,7 @@ export default function MasterDataPage() {
           {([
             ["table", "Tabel Depot", List],
             ["hierarchy", "Hierarki RDM/ADM/ADS", FolderTree],
+            ["produk", "Maintenance Produk", Package],
           ] as const).map(([key, label, Icon]) => (
             <button key={key} onClick={() => setView(key)}
               style={{ display: "flex", alignItems: "center", gap: "6px", padding: "8px 14px", borderRadius: "9px", border: "1px solid var(--border)", background: view === key ? "#0369A1" : "var(--surface)", color: view === key ? "white" : "var(--text3)", fontSize: "12px", fontWeight: 700, cursor: "pointer", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
@@ -937,6 +973,8 @@ export default function MasterDataPage() {
             loading={loading}
           />
         )}
+
+        {view === "produk" && <ProductMaintenance />}
       </div>
     </div>
   )
