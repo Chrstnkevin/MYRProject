@@ -32,6 +32,18 @@ interface PeriodRow {
   edi_salesman_list: SalesmanEntry[]
   synced_at: string
 }
+interface ChangeLogEntry {
+  id: string
+  changed_at: string
+  change_type: "added" | "removed"
+  sls_id: string
+  distributor_id: string | null
+  name: string | null
+  rdm_id: string | null
+  rdm_name: string | null
+  prev_total: number | null
+  new_total: number | null
+}
 
 const MONTH_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
@@ -46,7 +58,9 @@ export default function MppComparePage() {
   const [periodSyncing, setPeriodSyncing] = useState(false)
   const [periodSyncMsg, setPeriodSyncMsg] = useState("")
 
-  useEffect(() => { loadData(); loadPeriodData() }, [])
+  const [changeLog, setChangeLog] = useState<ChangeLogEntry[]>([])
+
+  useEffect(() => { loadData(); loadPeriodData(); loadChangeLog() }, [])
 
   async function loadData() {
     setLoading(true)
@@ -70,14 +84,25 @@ export default function MppComparePage() {
     if (!error) setPeriodRows((data || []) as PeriodRow[])
   }
 
+  async function loadChangeLog() {
+    const { data, error } = await supabase
+      .from("mpp_salesman_change_log")
+      .select("*")
+      .order("changed_at", { ascending: false })
+      .limit(100)
+    if (!error) setChangeLog((data || []) as ChangeLogEntry[])
+  }
+
   async function handleSync() {
     setSyncing(true); setSyncMsg("")
     try {
       const res = await fetch("/api/mpp-compare-sync", { method: "POST" })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Sync gagal")
-      setSyncMsg(`✅ Sync selesai — Ficom Lite Total ${data.ficomLiteTotal}, EDI Hirarki ${data.ediActiveSalesman} salesman (selisih ${data.selisih}) · ${data.houseAccountExcluded || 0} House Account di-exclude`)
+      const changeNote = (data.addedCount || data.removedCount) ? ` · ${data.addedCount || 0} nambah, ${data.removedCount || 0} ilang vs sync sebelumnya` : ""
+      setSyncMsg(`✅ Sync selesai — Ficom Lite Total ${data.ficomLiteTotal}, EDI Hirarki ${data.ediActiveSalesman} salesman (selisih ${data.selisih}) · ${data.houseAccountExcluded || 0} House Account di-exclude${changeNote}`)
       await loadData()
+      await loadChangeLog()
     } catch (e) {
       setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
     }
@@ -433,6 +458,40 @@ export default function MppComparePage() {
                 })}
               </tbody>
             </table>
+          </div>
+
+          {/* Log perubahan — dibandingin ke sync SEBELUMNYA (bukan cuma
+              per-hari), jadi perubahan DALAM hari yang sama (mis. pagi 985,
+              siang 989) ikut kecatat siapa yang nambah/ilang. Cuma kecatat
+              kalau sync-nya beneran dijalanin — belum ada cron otomatis. */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px", overflowX: "auto" }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 4 }}>Log Perubahan Salesman</div>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 12 }}>
+              Dicatat tiap kali &quot;Sync dari Ficom&quot; dijalankan, dibandingkan ke sync sebelumnya — belum otomatis sepanjang hari, cuma kecatat pas tombol diklik.
+            </p>
+            {changeLog.length === 0 ? (
+              <div style={{ padding: "12px 0", color: "var(--text3)", fontSize: 12, textAlign: "center" }}>Belum ada perubahan tercatat</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 320, overflowY: "auto" }}>
+                {changeLog.map(c => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, padding: "5px 8px", background: c.change_type === "added" ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${c.change_type === "added" ? "#BBF7D0" : "#FECACA"}`, borderRadius: 6 }}>
+                    <span style={{ fontWeight: 700, color: c.change_type === "added" ? "#16A34A" : "#DC2626", flexShrink: 0 }}>
+                      {c.change_type === "added" ? "➕ Nambah" : "➖ Ilang"}
+                    </span>
+                    <span style={{ color: "var(--text)", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.name || c.sls_id}
+                    </span>
+                    <span style={{ color: "var(--text3)", flexShrink: 0 }}>{c.rdm_name || ""}</span>
+                    <span style={{ color: "var(--text3)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                      {c.prev_total ?? "—"}→{c.new_total ?? "—"}
+                    </span>
+                    <span style={{ color: "var(--text3)", flexShrink: 0 }}>
+                      {new Date(c.changed_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </>
       )}

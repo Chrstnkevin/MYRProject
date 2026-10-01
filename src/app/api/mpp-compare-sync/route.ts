@@ -164,6 +164,43 @@ async function runSync() {
       .sort((a, b) => b.active - a.active)
     const ediSalesmanList = Array.from(salesmanMap.values())
 
+    // Log perubahan — bandingin ke sync SEBELUMNYA (apapun tanggalnya, bukan
+    // cuma hari ini), biar perubahan DALAM hari yang sama (mis. pagi 985,
+    // siang 989) ikut kecatat siapa aja yang nambah/ilang, bukan cuma angka
+    // akhir hari doang yang nimpa baris snapshot_date yang sama.
+    const { data: prevSnapshot } = await supabase
+      .from("mpp_compare_snapshot")
+      .select("edi_salesman_list")
+      .order("synced_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    const prevList = (prevSnapshot?.edi_salesman_list || []) as { key: string; slsId: string; distributorId: string; name: string; rdmId: string; rdmName: string }[]
+    let addedCount = 0
+    let removedCount = 0
+
+    if (prevList.length > 0) {
+      const prevKeys = new Set(prevList.map(s => s.key))
+      const newKeys = new Set(ediSalesmanList.map(s => s.key))
+      const added = ediSalesmanList.filter(s => !prevKeys.has(s.key))
+      const removed = prevList.filter(s => !newKeys.has(s.key))
+      addedCount = added.length
+      removedCount = removed.length
+      if (added.length > 0 || removed.length > 0) {
+        const changeRows = [
+          ...added.map(s => ({
+            changed_at: now.toISOString(), change_type: "added", sls_id: s.slsId, distributor_id: s.distributorId,
+            name: s.name, rdm_id: s.rdmId, rdm_name: s.rdmName, prev_total: prevList.length, new_total: ediSalesmanList.length,
+          })),
+          ...removed.map(s => ({
+            changed_at: now.toISOString(), change_type: "removed", sls_id: s.slsId, distributor_id: s.distributorId,
+            name: s.name, rdm_id: s.rdmId, rdm_name: s.rdmName, prev_total: prevList.length, new_total: ediSalesmanList.length,
+          })),
+        ]
+        const { error: logErr } = await supabase.from("mpp_salesman_change_log").insert(changeRows)
+        if (logErr) throw new Error(`Gagal simpan log perubahan: ${logErr.message}`)
+      }
+    }
+
     const snapshotDate = wibDateKey(now)
     const { error: upErr } = await supabase.from("mpp_compare_snapshot").upsert({
       snapshot_date: snapshotDate,
@@ -183,6 +220,7 @@ async function runSync() {
       ficomLiteActive, ficomLiteTotal, ediActiveSalesman,
       houseAccountExcluded: rows.length - activeRows.length,
       selisih: ficomLiteTotal - ediActiveSalesman,
+      addedCount, removedCount,
       syncedAt: now.toISOString(),
     })
   } catch (e) {
