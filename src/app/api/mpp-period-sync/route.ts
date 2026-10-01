@@ -78,10 +78,15 @@ async function runSync() {
     if (!tplRes.ok) throw new Error(`Gagal ambil template EDI Salesman Aktif (HTTP ${tplRes.status})`)
     const tpl = await tplRes.json() as EdiTemplate
 
-    // Backfill Januari tahun berjalan s/d bulan ini.
+    // Backfill Januari tahun berjalan s/d bulan ini — WAJIB sekuensial,
+    // BUKAN Promise.all. Ekstrak paralel pakai token yang sama ke endpoint
+    // ekstrak/brt bikin konflik di server Ficom (HTTP 409), persis kayak
+    // kasus parallel-session Logix — server-nya kayaknya kunci per-token,
+    // nggak terima >1 ekstrak jalan bersamaan.
     const periods = Array.from({ length: curMonth }, (_, i) => ({ tahun: curYear, periode: i + 1 }))
 
-    const results = await Promise.all(periods.map(async ({ tahun, periode }) => {
+    const results: { tahun: number; periode: number; edi_active_salesman: number; edi_by_rdm: { empId: string; name: string; active: number }[]; synced_at: string }[] = []
+    for (const { tahun, periode } of periods) {
       const text = await fetchPeriod(token, tpl, tahun, periode)
       const allRows = parseEdiText(text)
       // Scope ke SD yang sama dengan Ficom Lite (level "nsm" di hirarki EDI)
@@ -101,13 +106,13 @@ async function runSync() {
       const ediByRdm = Array.from(rdmMap.entries())
         .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
         .sort((a, b) => b.active - a.active)
-      return {
+      results.push({
         tahun, periode,
         edi_active_salesman: uniqueSalesman.size,
         edi_by_rdm: ediByRdm,
         synced_at: now.toISOString(),
-      }
-    }))
+      })
+    }
 
     const { error: upErr } = await supabase.from("mpp_period_snapshot").upsert(results, { onConflict: "tahun,periode" })
     if (upErr) throw new Error(`Gagal simpan trend bulanan: ${upErr.message}`)
