@@ -3,8 +3,8 @@
 
 import { useEffect, useState } from "react"
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend,
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend, ReferenceLine,
 } from "recharts"
 import { supabase } from "@/lib/supabase"
 
@@ -21,6 +21,14 @@ interface SnapshotRow {
   edi_by_rdm: RdmCount[]
   synced_at: string
 }
+interface PeriodRow {
+  id: string
+  tahun: number
+  periode: number
+  edi_active_salesman: number
+  edi_by_rdm: RdmCount[]
+  synced_at: string
+}
 
 const MONTH_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
@@ -31,7 +39,11 @@ export default function MppComparePage() {
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState("")
 
-  useEffect(() => { loadData() }, [])
+  const [periodRows, setPeriodRows] = useState<PeriodRow[]>([])
+  const [periodSyncing, setPeriodSyncing] = useState(false)
+  const [periodSyncMsg, setPeriodSyncMsg] = useState("")
+
+  useEffect(() => { loadData(); loadPeriodData() }, [])
 
   async function loadData() {
     setLoading(true)
@@ -46,6 +58,15 @@ export default function MppComparePage() {
     setLoading(false)
   }
 
+  async function loadPeriodData() {
+    const { data, error } = await supabase
+      .from("mpp_period_snapshot")
+      .select("*")
+      .order("tahun", { ascending: true })
+      .order("periode", { ascending: true })
+    if (!error) setPeriodRows((data || []) as PeriodRow[])
+  }
+
   async function handleSync() {
     setSyncing(true); setSyncMsg("")
     try {
@@ -58,6 +79,20 @@ export default function MppComparePage() {
       setSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
     }
     setSyncing(false)
+  }
+
+  async function handlePeriodSync() {
+    setPeriodSyncing(true); setPeriodSyncMsg("")
+    try {
+      const res = await fetch("/api/mpp-period-sync", { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Sync gagal")
+      setPeriodSyncMsg(`✅ Tarik histori selesai — ${data.periods?.length || 0} bulan ter-update`)
+      await loadPeriodData()
+    } catch (e) {
+      setPeriodSyncMsg("❌ " + (e instanceof Error ? e.message : String(e)))
+    }
+    setPeriodSyncing(false)
   }
 
   const today = rows[rows.length - 1] || null
@@ -92,6 +127,12 @@ export default function MppComparePage() {
     }
     return Array.from(map.values()).sort((a, b) => b.ficomLiteTotal - a.ficomLiteTotal)
   })() : []
+
+  const periodChartData = periodRows.map(r => ({
+    label: `${MONTH_ID[r.periode - 1]} ${r.tahun}`,
+    edi: r.edi_active_salesman,
+  }))
+  const latestPeriod = periodRows[periodRows.length - 1] || null
 
   if (loading && rows.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
@@ -199,6 +240,67 @@ export default function MppComparePage() {
                 <Area type="monotone" dataKey="edi" stroke="#16A34A" strokeWidth={2} fill="url(#mppEdi)" name="EDI Hirarki" />
               </AreaChart>
             </ResponsiveContainer>
+          </div>
+
+          {/* Trend bulanan — EDI Salesman Aktif (omzet≠0), dari Januari. Beda
+              sumber & konsep dari trend harian di atas: ini pakai EDI240136
+              yang punya param tahun/periode jadi bisa histori mundur, Ficom
+              Lite & EDI260001 (hirarki) TIDAK bisa — makanya cuma garis EDI
+              di sini, Ficom Lite cuma ada sebagai garis referensi "hari ini". */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 2 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Trend Bulanan</div>
+              <button onClick={handlePeriodSync} disabled={periodSyncing}
+                title="Tarik ulang EDI Salesman Aktif (omzet≠0) dari Januari s/d bulan ini"
+                style={{ padding: "5px 10px", borderRadius: 8, border: "1px solid var(--border)", background: periodSyncing ? "var(--surface2)" : "var(--surface2)", cursor: periodSyncing ? "not-allowed" : "pointer", fontSize: 10, fontWeight: 700, color: "var(--text)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ animation: periodSyncing ? "spin 0.8s linear infinite" : "none", display: "inline-block" }}>⚡</span> {periodSyncing ? "Menarik histori..." : "Tarik Histori dari Ficom"}
+              </button>
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: "var(--text)", marginBottom: 4 }}>EDI Salesman Aktif (Omzet ≠ 0) — Januari s/d Sekarang</div>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 12 }}>
+              Ficom Lite &amp; EDI Hirarki nggak punya histori (selalu kondisi hari ini) — garis putus-putus di bawah cuma referensi angka Ficom Lite Total HARI INI, bukan trend bulanan beneran.
+            </p>
+            {periodSyncMsg && (
+              <div style={{ background: periodSyncMsg.startsWith("✅") ? "#DCFCE7" : "#FEE2E2", border: `1px solid ${periodSyncMsg.startsWith("✅") ? "#BBF7D0" : "#FECACA"}`, borderRadius: 8, padding: "8px 12px", fontSize: 11, color: periodSyncMsg.startsWith("✅") ? "#166534" : "#991B1B", marginBottom: 10 }}>
+                {periodSyncMsg}
+              </div>
+            )}
+            {periodChartData.length === 0 ? (
+              <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: 12 }}>
+                Belum ada data — klik &quot;Tarik Histori dari Ficom&quot;
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={periodChartData}>
+                  <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={32} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />
+                  <Bar dataKey="edi" fill="#16A34A" radius={[4, 4, 0, 0]} name="EDI Salesman Aktif" />
+                  {today && (
+                    <ReferenceLine y={today.ficom_lite_total} stroke="#0369A1" strokeDasharray="4 4"
+                      label={{ value: `Ficom Lite Total hari ini: ${today.ficom_lite_total}`, position: "insideTopRight", fill: "#0369A1", fontSize: 10 }} />
+                  )}
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+
+            {latestPeriod && (latestPeriod.edi_by_rdm || []).length > 0 && (
+              <div style={{ marginTop: 14, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 8 }}>
+                  Breakdown {MONTH_ID[latestPeriod.periode - 1]} {latestPeriod.tahun} per RDM
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+                  {(latestPeriod.edi_by_rdm || []).map((r, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11, color: "var(--text2)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#16A34A" }}>{r.active}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Breakdown per RDM — di-match pakai empId (grsm_id EDI == empId RDM Ficom Lite) */}
