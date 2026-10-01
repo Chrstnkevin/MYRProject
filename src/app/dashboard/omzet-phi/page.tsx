@@ -30,8 +30,11 @@ function monthLabel(periodMonth: string): string {
   const [y, m] = periodMonth.split("-")
   return `${MONTH_ID[Number(m) - 1]} ${y}`
 }
-function fmtRp(n: number): string {
-  return "Rp " + Math.round(n).toLocaleString("id-ID")
+// Data ini Filipina (ADP/EDI PHI), satuannya Peso bukan Rupiah — walau
+// kodenya masih nyebut "Rp" di beberapa nama variabel lama, simbol yang
+// ditampilkan ke user di sini sudah Peso (₱).
+function fmtPeso(n: number): string {
+  return "₱" + Math.round(n).toLocaleString("en-PH")
 }
 function fmtPct(n: number): string {
   return `${n.toFixed(1)}%`
@@ -46,6 +49,29 @@ function fmtCompact(n: number): string {
   if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}jt`
   if (abs >= 1_000) return `${(n / 1_000).toFixed(0)}rb`
   return String(Math.round(n))
+}
+
+// Export CSV — dibuka langsung di Excel (koma pemisah kolom standar,
+// dikasih BOM ﻿ di depan biar Excel baca karakter ₱/non-ASCII
+// dengan benar, nggak perlu library tambahan).
+function toCSV(headers: string[], rows: (string | number)[][]): string {
+  const esc = (v: string | number) => {
+    const s = String(v)
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const lines = [headers.map(esc).join(","), ...rows.map(r => r.map(esc).join(","))]
+  return "﻿" + lines.join("\n")
+}
+function downloadCSV(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 export default function OmzetPhiPage() {
@@ -122,6 +148,25 @@ export default function OmzetPhiPage() {
       setBackfillMsg("❌ " + (e instanceof Error ? e.message : String(e)))
     }
     setBackfilling(false)
+  }
+
+  function handleExport() {
+    if (!activePeriod) return
+    const headers = ["ADP", "Kota", "Wilayah", "RDM", "ADM", "Omset", "Target", "% Achievement"]
+    const rowsData = activeRows
+      .slice()
+      .sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0))
+      .map(r => [
+        r.distributor_nm || r.distributor_id,
+        r.kota || "",
+        masterMap.get(String(r.distributor_id)) || "Lainnya",
+        r.grsm_name || "",
+        r.rsm_name || "",
+        r.nilai_omset || 0,
+        r.target_omset || 0,
+        r.perc_omset != null ? r.perc_omset : "",
+      ])
+    downloadCSV(`omzet-phi-${activePeriod}.csv`, toCSV(headers, rowsData))
   }
 
   const periods = Array.from(new Set(rows.map(r => r.period_month))).sort()
@@ -237,6 +282,11 @@ export default function OmzetPhiPage() {
               style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: backfilling ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.18)", cursor: backfilling ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ animation: backfilling ? "spin 0.8s linear infinite" : "none", display: "inline-block" }}>📜</span> {backfilling ? "Tarik histori..." : "Tarik Histori dari Ficom"}
             </button>
+            <button onClick={handleExport} disabled={!activePeriod}
+              title="Download data ADP periode yang lagi ditampilkan sebagai CSV (buka langsung di Excel)"
+              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: "rgba(255,255,255,0.18)", cursor: activePeriod ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+              📊 Export Excel
+            </button>
             <button onClick={loadData} disabled={loading} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.1)", cursor: "pointer", fontSize: 11, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ animation: loading ? "spin 0.8s linear infinite" : "none", display: "inline-block" }}>↻</span> Refresh
             </button>
@@ -277,13 +327,13 @@ export default function OmzetPhiPage() {
           {/* KPI row */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
             {[
-              { label: "Total Omset (EDI)", value: fmtRp(totalOmsetActive), color: "#16A34A", icon: "💰" },
-              { label: "Total Target (EDI)", value: fmtRp(totalTargetActive), color: "#1E3A5F", icon: "🎯" },
+              { label: "Total Omset (EDI)", value: fmtPeso(totalOmsetActive), color: "#16A34A", icon: "💰" },
+              { label: "Total Target (EDI)", value: fmtPeso(totalTargetActive), color: "#1E3A5F", icon: "🎯" },
               { label: "% Achievement", value: fmtPct(pctAchievement), color: pctAchievement >= 100 ? "#16A34A" : "#DC2626", icon: pctAchievement >= 100 ? "✅" : "⚠️" },
               {
                 label: "Ficom Lite Monthly",
                 value: ficomRef
-                  ? `${fmtRp(ficomRef.value)} (selisih ${fmtRp(selisihFicomLite || 0)})`
+                  ? `${fmtPeso(ficomRef.value)} (selisih ${fmtPeso(selisihFicomLite || 0)})`
                   : (activePeriod === latestPeriod ? "n/a — belum sync" : "n/a — histori tidak tersedia"),
                 color: "#0369A1", icon: "📱",
               },
@@ -324,7 +374,12 @@ export default function OmzetPhiPage() {
                 <XAxis dataKey="name" tick={false} tickLine={false} axisLine={{ stroke: "var(--border)" }} height={10} />
                 <YAxis yAxisId="left" tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9 }} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                <Tooltip formatter={(value: number, name: string) => name === "cumPct" ? [`${value}%`, "Kumulatif %"] : [fmtRp(value), "Omset"]} />
+                {/* BUG lama: formatter ngecek name==="cumPct" (dataKey), padahal
+                    Recharts ngirim ke formatter itu prop `name` yang kita set
+                    di <Line>/<Bar> ("Kumulatif %"), bukan dataKey-nya — jadi
+                    kondisinya nggak pernah match dan garis merah ketampil
+                    salah label "Omset: ₱9" (angka cumPct diformat kayak duit). */}
+                <Tooltip formatter={(value: number, name: string) => name === "Kumulatif %" ? [`${value}%`, "Kumulatif %"] : [fmtPeso(value), "Omset"]} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Bar yAxisId="left" dataKey="omset" name="Omset" fill="#16A34A" radius={[2, 2, 0, 0]} />
                 <Line yAxisId="right" type="monotone" dataKey="cumPct" name="Kumulatif %" stroke="#DC2626" strokeWidth={2} dot={false} />
@@ -356,8 +411,8 @@ export default function OmzetPhiPage() {
                       <td style={{ padding: "6px 8px", fontWeight: 600, color: "var(--text)" }}>{r.name}</td>
                       <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{full?.grsm_name || "-"}</td>
                       <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{full?.rsm_name || "-"}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtRp(r.omset)}</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtRp(full?.target_omset || 0)}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtPeso(r.omset)}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtPeso(full?.target_omset || 0)}</td>
                       <td style={{ padding: "6px 8px", textAlign: "right", color: (full?.perc_omset || 0) >= 100 ? "#16A34A" : "#DC2626" }}>{full?.perc_omset != null ? fmtPct(full.perc_omset) : "-"}</td>
                     </tr>
                   )
@@ -379,7 +434,7 @@ export default function OmzetPhiPage() {
                 <div key={w.wilayah} style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface2)", overflow: "hidden" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
                     <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{w.wilayah}</span>
-                    <span style={{ fontSize: 9, color: "var(--text3)" }}>{w.all.length} ADP · {fmtRp(w.total)}</span>
+                    <span style={{ fontSize: 9, color: "var(--text3)" }}>{w.all.length} ADP · {fmtPeso(w.total)}</span>
                   </div>
                   <div style={{ maxHeight: 220, overflowY: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
@@ -388,7 +443,7 @@ export default function OmzetPhiPage() {
                           <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                             <td style={{ padding: "4px 8px", color: "var(--text3)", width: 18 }}>{i + 1}</td>
                             <td style={{ padding: "4px 8px", color: "var(--text2)" }}>{r.distributor_nm || r.distributor_id}</td>
-                            <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A", whiteSpace: "nowrap" }}>{fmtRp(r.nilai_omset || 0)}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A", whiteSpace: "nowrap" }}>{fmtPeso(r.nilai_omset || 0)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -419,8 +474,8 @@ export default function OmzetPhiPage() {
                     style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", background: t.periodMonth === activePeriod ? "var(--surface2)" : "transparent" }}>
                     <td style={{ padding: "6px 8px", fontWeight: t.periodMonth === activePeriod ? 800 : 600, color: "var(--text)" }}>{t.label}</td>
                     <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{t.adpCount}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtRp(t.omset)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtRp(t.target)}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtPeso(t.omset)}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtPeso(t.target)}</td>
                     <td style={{ padding: "6px 8px", textAlign: "right", color: t.pct >= 100 ? "#16A34A" : "#DC2626" }}>{fmtPct(t.pct)}</td>
                   </tr>
                 ))}
@@ -436,7 +491,7 @@ export default function OmzetPhiPage() {
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 9 }} tickFormatter={fmtCompact} />
-                <Tooltip formatter={(value: number) => fmtRp(value)} />
+                <Tooltip formatter={(value: number) => fmtPeso(value)} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
                 <Area type="monotone" dataKey="omset" name="Omset" stroke="#16A34A" fill="#16A34A" fillOpacity={0.15} strokeWidth={2} />
                 <Area type="monotone" dataKey="target" name="Target" stroke="#1E3A5F" fill="#1E3A5F" fillOpacity={0.08} strokeWidth={2} strokeDasharray="4 4" />
