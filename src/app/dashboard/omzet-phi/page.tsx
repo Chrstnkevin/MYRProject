@@ -332,9 +332,7 @@ export default function OmzetPhiPage() {
               { label: "% Achievement", value: fmtPct(pctAchievement), color: pctAchievement >= 100 ? "#16A34A" : "#DC2626", icon: pctAchievement >= 100 ? "✅" : "⚠️" },
               {
                 label: "Ficom Lite Monthly",
-                value: ficomRef
-                  ? `${fmtPeso(ficomRef.value)} (selisih ${fmtPeso(selisihFicomLite || 0)})`
-                  : (activePeriod === latestPeriod ? "n/a — belum sync" : "n/a — histori tidak tersedia"),
+                value: ficomRef ? `${fmtPeso(ficomRef.value)} (selisih ${fmtPeso(selisihFicomLite || 0)})` : "n/a — belum sync",
                 color: "#0369A1", icon: "📱",
               },
             ].map((c, i) => (
@@ -353,9 +351,6 @@ export default function OmzetPhiPage() {
 
           <p style={{ fontSize: 11, color: "var(--text3)" }}>
             {activeRows.length} ADP di periode {monthLabel(activePeriod)} · terakhir sync {activeRows[0] ? new Date(activeRows[0].synced_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}
-            {!ficomRef && activePeriod !== latestPeriod && (
-              <> · <em>Ficom Lite Monthly cuma punya angka bulan berjalan (endpoint-nya memang nggak punya histori) — makanya selalu n/a kalau lihat bulan lampau, ini bukan bug.</em></>
-            )}
           </p>
 
           {/* Pareto chart nasional — nama ADP di sumbu-X SENGAJA disembunyikan

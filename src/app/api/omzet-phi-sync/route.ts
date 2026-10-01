@@ -68,6 +68,18 @@ function toMaksDate(d: Date): string {
 function endOfMonth(tahun: number, periode1to12: number): Date {
   return new Date(tahun, periode1to12, 0) // hari ke-0 bulan depan = akhir bulan ini
 }
+// "YYYY-MM-DD" — format tanggal buat query param ?date= di endpoint Ficom
+// Lite missions, BEDA dari toMaksDate() yang formatnya "DD MON YYYY" buat
+// V06 EDI200001. Dikonfirmasi dari capture user langsung (request URL
+// ".../missions?user-id=WF6001&date=2026-07-31" beneran balikin angka
+// Monthly STT punya bulan Juli, BUKAN bulan berjalan) — jadi beda dari
+// asumsi awal yang nganggep endpoint ini nggak punya histori sama sekali.
+function toIsoDate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
 
 // Ficom Lite Monthly (componentId "C12") — angka nasional pembanding,
 // pola sama persis kayak fetchFicomLiteMissions/pickSttCard di
@@ -75,21 +87,31 @@ function endOfMonth(tahun: number, periode1to12: number): Date {
 // balikin angka milik SD itu sendiri (bukan hasil jumlah turunannya).
 // Token-nya LOGIN TERPISAH pakai akun posisi "SD" (ediCred yang dipakai
 // buat ekstrak EDI200001 itu akun posisi "EDI", beda akun/beda scope).
+//
+// SOAL SKALA (×1000): target-compare/page.tsx make ASUMSI nilai di Ficom
+// Lite itu dalam ribuan (makanya dikali 1000 di sana, lihat
+// FICOM_LITE_SCALE/pickSttCard di file itu) — TAPI itu buat konteks STT
+// (jumlah unit/produktivitas). Buat Monthly STT versi OMSET (uang) di
+// sini, capture user nunjukin target mentah dari API = 2.213.551, yang
+// ORDERNYA SAMA kayak target_omset EDI200001 (~2,3-2,4 juta Peso) —
+// BUKAN 1000x lebih besar. Jadi di sini SENGAJA TIDAK dikali 1000 (beda
+// dari target-compare). Kalau nanti kebukti salah (angkanya ternyata
+// emang harus ×1000), cukup ganti FICOM_LITE_OMSET_SCALE di bawah.
 const FICOM_LITE_STT_COMPONENT = "C12"
-const FICOM_LITE_SCALE = 1000 // komponen STT/omset di Ficom Lite satuannya ribuan
+const FICOM_LITE_OMSET_SCALE = 1
 
 interface FicomLiteCard { componentId: string; target: number | null; value: number | null }
 interface FicomLiteMissions { monthly: { missions: FicomLiteCard[] } }
 
-async function fetchFicomLiteMonthlyStt(token: string, userId: string): Promise<{ target: number; value: number } | undefined> {
-  const res = await fetch(`${FICOM_BASE}/api/ficom-lite-dashboard/missions?user-id=${userId}`, {
+async function fetchFicomLiteMonthlyStt(token: string, userId: string, isoDate: string): Promise<{ target: number; value: number } | undefined> {
+  const res = await fetch(`${FICOM_BASE}/api/ficom-lite-dashboard/missions?user-id=${userId}&date=${isoDate}`, {
     headers: { Authorization: `F1C0m ${token}` },
   })
   if (!res.ok) throw new Error(`Gagal ambil Ficom Lite Monthly (HTTP ${res.status})`)
   const data = await res.json() as FicomLiteMissions
   const c = (data.monthly?.missions || []).find(c => c.componentId === FICOM_LITE_STT_COMPONENT)
   if (!c || c.value == null || c.target == null) return undefined
-  return { target: c.target * FICOM_LITE_SCALE, value: c.value * FICOM_LITE_SCALE }
+  return { target: c.target * FICOM_LITE_OMSET_SCALE, value: c.value * FICOM_LITE_OMSET_SCALE }
 }
 
 async function fetchOmzet(token: string, tpl: EdiTemplate, maksDate: string): Promise<string> {
@@ -133,6 +155,9 @@ async function runSync(backfill: boolean) {
     const tplRes = await fetch(`${FICOM_BASE}/api/edi/${EDI_ID}`, { headers: { Authorization: `F1C0m ${token}` } })
     if (!tplRes.ok) throw new Error(`Gagal ambil template EDI OMSET DASHBOARD (HTTP ${tplRes.status})`)
     const tpl = await tplRes.json() as EdiTemplate
+    // Login SD sekali di luar loop — dipakai ulang tiap bulan buat Ficom
+    // Lite Monthly, bukan akun yang sama dengan token EDI di atas.
+    const sdToken = await ficomLogin(sdCred.user_login, sdCred.password)
 
     // backfill=false (tombol "Sync Hari Ini") → cuma bulan berjalan.
     // backfill=true (tombol "Tarik Histori") → Januari s/d bulan ini,
@@ -232,18 +257,17 @@ async function runSync(backfill: boolean) {
       }
       results.push({ periodMonth, rows: dedupedRows.length })
 
-      // Ficom Lite Monthly cuma punya angka bulan berjalan (endpoint ini
-      // tidak punya histori) — jadi cuma ditarik/disimpan sekali, pas
-      // iterasi sampai di bulan sekarang.
-      if (isCurrentMonth) {
-        const sdToken = await ficomLogin(sdCred.user_login, sdCred.password)
-        const stt = await fetchFicomLiteMonthlyStt(sdToken, sdCred.user_login)
-        if (stt) {
-          const { error: refErr } = await supabase
-            .from("omzet_phi_ficomlite_ref")
-            .upsert({ period_month: periodMonth, target: stt.target, value: stt.value, synced_at: now.toISOString() }, { onConflict: "period_month" })
-          if (refErr) throw new Error(`Gagal simpan Ficom Lite Monthly: ${refErr.message}`)
-        }
+      // Ficom Lite Monthly TERNYATA punya histori juga lewat param ?date=
+      // (dikonfirmasi user, lihat komentar di fetchFicomLiteMonthlyStt) —
+      // jadi ditarik tiap bulan dalam loop ini, bukan cuma bulan berjalan
+      // lagi. Login SEKALI aja di luar loop biar nggak login ulang2 ke
+      // Ficom tiap bulan pas backfill (9-10x).
+      const stt = await fetchFicomLiteMonthlyStt(sdToken, sdCred.user_login, toIsoDate(cutoff))
+      if (stt) {
+        const { error: refErr } = await supabase
+          .from("omzet_phi_ficomlite_ref")
+          .upsert({ period_month: periodMonth, target: stt.target, value: stt.value, synced_at: now.toISOString() }, { onConflict: "period_month" })
+        if (refErr) throw new Error(`Gagal simpan Ficom Lite Monthly: ${refErr.message}`)
       }
     }
 
