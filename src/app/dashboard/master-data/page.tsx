@@ -28,6 +28,8 @@ interface DepotRow {
   rdm_name: string
   status: string
   remarks: string
+  pic_tas?: string | null
+  schema_name?: string | null
   updated_at?: string
   ads_id?: string | null
 }
@@ -78,9 +80,9 @@ const POS_CLR: Record<string, { bg: string; color: string }> = {
 
 // PIC TAS per region — sama seperti mapping di /data-transfer
 const TAS_MAP: Record<string, string> = {
-  GMA: "JC", NOL: "Van", SOL: "Lindon", VIS: "Darren", MIN: "JC",
+  GMA: "JC", NOL: "Van", SOL: "Jonathan", VIS: "Darren", MIN: "JC",
 }
-const TAS_OPTIONS = ["ALL", "JC", "Van", "Lindon", "Darren"]
+const TAS_OPTIONS = ["ALL", "JC", "Van", "Jonathan", "Darren"]
 function tasFor(regionName: string): string {
   return TAS_MAP[regionName] || ""
 }
@@ -322,7 +324,13 @@ export default function MasterDataPage() {
   // masuk lewat Import Excel) ─────────────────────────────────
   const startEdit = (d: DepotRow, e: React.MouseEvent) => {
     e.stopPropagation()
-    setEditId(d.id); setDraft({ ...d }); setExpandedId(null)
+    // Pre-fill PIC TAS & Schema draft pakai nilai EFEKTIF yang lagi
+    // ketampil (override manual kalau ada, kalau nggak turunan otomatis)
+    // biar user lihat nilai yang sama persis kayak di tabel pas mulai edit.
+    const refSchema = d.adp_code != null ? schemaByAdp.get(d.adp_code)?.schema_name : undefined
+    setEditId(d.id)
+    setDraft({ ...d, pic_tas: d.pic_tas ?? tasFor(d.region_name), schema_name: d.schema_name ?? refSchema ?? "" })
+    setExpandedId(null)
   }
 
   const saveEdit = async () => {
@@ -343,6 +351,8 @@ export default function MasterDataPage() {
       rdm_name:         draft.rdm_name?.trim() ?? "",
       status:           draft.status ?? "MAIN WH",
       remarks:          draft.remarks ?? "Active",
+      pic_tas:          draft.pic_tas?.trim() || null,
+      schema_name:      draft.schema_name?.trim() || null,
       updated_at:       new Date().toISOString(),
     }
     const { error: err } = await supabase.from("master_data_adp").update(payload).eq("id", editId!)
@@ -724,7 +734,10 @@ export default function MasterDataPage() {
                     const ref = d.adp_code != null ? schemaByAdp.get(d.adp_code) : undefined
                     const effectiveServer = d.server ?? ref?.server ?? null
                     const serverFromRef = d.server == null && ref?.server != null
-                    const picTas = tasFor(d.region_name)
+                    // pic_tas/schema_name: override manual (diisi lewat edit) menang,
+                    // kalau belum pernah di-edit fallback ke turunan otomatis lama.
+                    const picTas = d.pic_tas || tasFor(d.region_name)
+                    const effectiveSchema = d.schema_name || ref?.schema_name || ""
 
                     return (
                       <Fragment key={d.id}>
@@ -752,10 +765,15 @@ export default function MasterDataPage() {
                             )}
                           </td>
 
-                          {/* Schema (dari file referensi DB Schema, dicocokkan lewat ADP Code) */}
+                          {/* Schema — bisa di-override manual per-depot lewat edit; kalau
+                              belum pernah di-edit, fallback ke file referensi DB Schema
+                              (dicocokkan lewat ADP Code) */}
                           <td style={{ ...td, fontSize: "11px" }} title={ref?.kode_branch || ""}>
-                            {ref?.schema_name ? (
-                              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>{ref.schema_name}</span>
+                            {isEditing ? (
+                              <input value={draft.schema_name ?? ""} onChange={e => setDraft(p => ({ ...p, schema_name: e.target.value }))}
+                                placeholder="USERMYR32" style={{ ...inputSt, width: "100px", fontFamily: "monospace" }} />
+                            ) : effectiveSchema ? (
+                              <span style={{ fontFamily: "monospace", fontWeight: 600, color: "#7C3AED" }}>{effectiveSchema}</span>
                             ) : "—"}
                           </td>
 
@@ -816,9 +834,16 @@ export default function MasterDataPage() {
                             ) : "—"}
                           </td>
 
-                          {/* PIC TAS — turunan otomatis dari Region, sama seperti mapping di /data-transfer */}
+                          {/* PIC TAS — bisa di-override manual per-depot lewat edit;
+                              kalau belum pernah di-edit, fallback ke turunan otomatis
+                              dari Region (TAS_MAP, sama kayak mapping di /data-transfer) */}
                           <td style={td}>
-                            {picTas ? (
+                            {isEditing ? (
+                              <select value={draft.pic_tas ?? ""} onChange={e => setDraft(p => ({ ...p, pic_tas: e.target.value }))}
+                                style={{ ...inputSt, width: "90px", cursor: "pointer" }}>
+                                {TAS_OPTIONS.filter(o => o !== "ALL").map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            ) : picTas ? (
                               <span style={{ background: "#F1F5F9", color: "#334155", padding: "2px 8px", borderRadius: "99px", fontSize: "11px", fontWeight: 700 }}>
                                 {picTas}
                               </span>
@@ -900,7 +925,7 @@ export default function MasterDataPage() {
                                     📍 {d.depot} {d.distributor_name ? `— ${d.distributor_name}` : ""}
                                   </div>
                                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>
-                                    ADP: {d.adp_code ?? "—"} · Schema: {ref?.schema_name || "—"} · Server: {effectiveServer ?? "—"} · PIC TAS: {picTas || "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
+                                    ADP: {d.adp_code ?? "—"} · Schema: {effectiveSchema || "—"} · Server: {effectiveServer ?? "—"} · PIC TAS: {picTas || "—"} · Area: {d.area_name || "—"} · Region: {d.region_name || "—"}
                                   </div>
                                 </div>
 
