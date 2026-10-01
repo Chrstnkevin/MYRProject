@@ -85,6 +85,12 @@ async function runSync() {
     // nggak terima >1 ekstrak jalan bersamaan.
     const periods = Array.from({ length: curMonth }, (_, i) => ({ tahun: curYear, periode: i + 1 }))
 
+    // Upsert LANGSUNG per bulan di dalam loop (bukan dikumpulin dulu baru
+    // disimpan sekali di akhir) — 9 request berurutan ke Ficom itu lumayan
+    // lama, kalau koneksi putus/request ke-interrupt di tengah jalan
+    // (misal dev server Next.js reload pas lagi nunggu), bulan-bulan yang
+    // UDAH kelar tetap kesimpen, bukan hilang semua gara-gara gagal di
+    // satu bulan terakhir.
     const results: { tahun: number; periode: number; edi_active_salesman: number; edi_by_rdm: { empId: string; name: string; active: number }[]; synced_at: string }[] = []
     for (const { tahun, periode } of periods) {
       const text = await fetchPeriod(token, tpl, tahun, periode)
@@ -106,16 +112,16 @@ async function runSync() {
       const ediByRdm = Array.from(rdmMap.entries())
         .map(([empId, v]) => ({ empId, name: v.name, active: v.set.size }))
         .sort((a, b) => b.active - a.active)
-      results.push({
+      const row = {
         tahun, periode,
         edi_active_salesman: uniqueSalesman.size,
         edi_by_rdm: ediByRdm,
         synced_at: now.toISOString(),
-      })
+      }
+      const { error: upErr } = await supabase.from("mpp_period_snapshot").upsert(row, { onConflict: "tahun,periode" })
+      if (upErr) throw new Error(`Gagal simpan periode ${tahun}-${periode}: ${upErr.message}`)
+      results.push(row)
     }
-
-    const { error: upErr } = await supabase.from("mpp_period_snapshot").upsert(results, { onConflict: "tahun,periode" })
-    if (upErr) throw new Error(`Gagal simpan trend bulanan: ${upErr.message}`)
 
     return NextResponse.json({
       success: true,

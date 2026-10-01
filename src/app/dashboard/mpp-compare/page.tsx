@@ -85,7 +85,17 @@ export default function MppComparePage() {
     setPeriodSyncing(true); setPeriodSyncMsg("")
     try {
       const res = await fetch("/api/mpp-period-sync", { method: "POST" })
-      const data = await res.json()
+      // 9 bulan ditarik sekuensial ke Ficom bisa makan waktu lumayan lama —
+      // kalau request ke-interrupt di tengah jalan (mis. dev server reload),
+      // responsnya bisa jadi halaman HTML bukan JSON. Baca sebagai teks dulu
+      // baru coba parse, biar errornya jelas (bukan crash parse mentah) —
+      // dan bulan yang udah kepross tetap kesimpen di DB (diupsert per bulan
+      // di server), jadi tinggal klik lagi buat lanjutin yang belum.
+      const text = await res.text()
+      let data: { error?: string; periods?: unknown[] }
+      try { data = JSON.parse(text) } catch {
+        throw new Error(`Respons bukan JSON (kemungkinan koneksi putus di tengah tarik data) — HTTP ${res.status}. Bulan yang sudah berhasil tetap kesimpen, coba klik lagi buat lanjutin.`)
+      }
       if (!res.ok) throw new Error(data.error || "Sync gagal")
       setPeriodSyncMsg(`✅ Tarik histori selesai — ${data.periods?.length || 0} bulan ter-update`)
       await loadPeriodData()
