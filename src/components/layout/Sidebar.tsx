@@ -7,7 +7,7 @@ import {
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
-    Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket, GitCompare
+    Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket, GitCompare, DollarSign
 } from "lucide-react"
 
 const NAV_TOP = [
@@ -34,6 +34,7 @@ const NAV_SUPPORT_PHI = [
   { icon: Radio,         label: "Data Transfer Ficom", path: "/dashboard/data-transfer",  desc: "Monitor EDI & transfer",      badge: "EDI",    badgeColor: "#0891B2" },
   { icon: Activity,      label: "MPP Health",          path: "/dashboard/mpp-health",     desc: "SFA Hierarchy Monitoring",    badge: "MPP",    badgeColor: "#1E3A5F" },
   { icon: GitCompare,    label: "Compare MPP",         path: "/dashboard/mpp-compare",    desc: "Ficom Lite vs EDI Salesman Aktif", badge: "MPP", badgeColor: "#0369A1" },
+  { icon: DollarSign,    label: "Omzet PHI",           path: "/dashboard/omzet-phi",      desc: "Pareto ADP: omset vs target per bulan", badge: "Omset", badgeColor: "#16A34A" },
 ]
 
 const NAV_BACKUP_RESTORE = [
