@@ -80,10 +80,12 @@ export default function MppComparePage() {
   // antar sistem beda.
   const mergedRdm = today ? (() => {
     const map = new Map<string, { empId: string; name: string; ficomLite: number; ficomLiteTotal: number; edi: number }>()
-    for (const r of today.ficom_lite_by_rdm) {
+    // Guard array kosong — snapshot lama (sebelum kolom edi_by_rdm ada/keisi)
+    // bisa nyimpen null, bukan [], dan bikin for...of meledak kalau nggak dijaga.
+    for (const r of today.ficom_lite_by_rdm || []) {
       map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: r.active, ficomLiteTotal: r.total ?? 0, edi: 0 })
     }
-    for (const r of today.edi_by_rdm) {
+    for (const r of today.edi_by_rdm || []) {
       const existing = map.get(r.empId)
       if (existing) existing.edi = r.active
       else map.set(r.empId, { empId: r.empId, name: r.name, ficomLite: 0, ficomLiteTotal: 0, edi: r.active })
