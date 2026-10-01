@@ -180,7 +180,8 @@ export default function OmzetPhiPage() {
   const totalTargetActive = activeRows.reduce((s, r) => s + (r.target_omset || 0), 0)
   const pctAchievement = totalTargetActive > 0 ? (totalOmsetActive / totalTargetActive) * 100 : 0
   const ficomRef = activePeriod ? (ficomLiteRefs.find(f => f.period_month === activePeriod) || null) : null
-  const selisihFicomLite = ficomRef ? totalOmsetActive - ficomRef.value : null
+  const selisihOmsetFicomLite = ficomRef ? totalOmsetActive - ficomRef.value : null
+  const selisihTargetFicomLite = ficomRef ? totalTargetActive - ficomRef.target : null
 
   // Pareto nasional (ADP di-sort desc by omset) + garis kumulatif % —
   // dihitung dari periode yang lagi dipilih (dropdown), bukan rata-rata.
@@ -325,15 +326,26 @@ export default function OmzetPhiPage() {
       {activePeriod && (
         <>
           {/* KPI row */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 8 }}>
             {[
               { label: "Total Omset (EDI)", value: fmtPeso(totalOmsetActive), color: "#16A34A", icon: "💰" },
               { label: "Total Target (EDI)", value: fmtPeso(totalTargetActive), color: "#1E3A5F", icon: "🎯" },
               { label: "% Achievement", value: fmtPct(pctAchievement), color: pctAchievement >= 100 ? "#16A34A" : "#DC2626", icon: pctAchievement >= 100 ? "✅" : "⚠️" },
               {
-                label: "Ficom Lite Monthly",
-                value: ficomRef ? `${fmtPeso(ficomRef.value)} (selisih ${fmtPeso(selisihFicomLite || 0)})` : "n/a — belum sync",
+                label: "Ficom Lite — Omset",
+                value: ficomRef ? fmtPeso(ficomRef.value) : "n/a — belum sync",
                 color: "#0369A1", icon: "📱",
+              },
+              {
+                label: "Ficom Lite — Target",
+                value: ficomRef ? fmtPeso(ficomRef.target) : "n/a — belum sync",
+                color: "#0369A1", icon: "📱",
+              },
+              {
+                label: "Selisih Omset (EDI − Ficom Lite)",
+                value: ficomRef ? fmtPeso(selisihOmsetFicomLite || 0) : "n/a",
+                color: selisihOmsetFicomLite != null && Math.abs(selisihOmsetFicomLite) < 1 ? "#16A34A" : "#DC2626",
+                icon: "⚖️",
               },
             ].map((c, i) => (
               <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
@@ -351,7 +363,15 @@ export default function OmzetPhiPage() {
 
           <p style={{ fontSize: 11, color: "var(--text3)" }}>
             {activeRows.length} ADP di periode {monthLabel(activePeriod)} · terakhir sync {activeRows[0] ? new Date(activeRows[0].synced_at).toLocaleString("id-ID", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "-"}
+            {ficomRef && (
+              <> · selisih target {fmtPeso(selisihTargetFicomLite || 0)}</>
+            )}
           </p>
+          {ficomRef && (selisihOmsetFicomLite || 0) !== 0 && (
+            <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", fontSize: 11, color: "#1E3A5F" }}>
+              ℹ️ EDI (nilai_omset dari EDI200001) vs Ficom Lite (&quot;Monthly STT&quot;, komponen C12) itu <strong>dua sumber/metrik yang beda</strong> di sistem Ficom — bukan hasil hitung yang sama, jadi selisih sedikit itu wajar (mirip kasus Ficom Lite vs EDI di halaman Compare MPP). Kemungkinan penyebabnya: (1) &quot;STT&quot; mungkin definisinya nggak 100% sama dengan &quot;nilai_omset&quot; (beda kategori transaksi yang dihitung), (2) histori EDI (trik V06) masih belum tervalidasi penuh — meski sudah dicek lebih akurat dari sebelumnya. Kalau selisihnya konsisten kecil (di bawah ~5-10%) tiap bulan, wajar dianggap &quot;cocok&quot;; kalau melebar jauh di bulan tertentu, baru perlu dicurigai ada masalah data.
+            </div>
+          )}
 
           {/* Pareto chart nasional — nama ADP di sumbu-X SENGAJA disembunyikan
               (85 ADP kalau ditulis semua numpuk nggak kebaca, lihat screenshot
