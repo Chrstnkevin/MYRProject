@@ -153,11 +153,14 @@ export default function OmzetPhiPage() {
   })()
   const top10Nasional = paretoData.slice(0, 10)
 
-  // Top 3 per wilayah — join distributor_id ke master_data_adp.adp_code
+  // Breakdown per wilayah — join distributor_id ke master_data_adp.adp_code
   // (dikonfirmasi pola yang sama kayak Data Transfer: dibandingkan sebagai
-  // string, adp_code numeric tapi distributor_id di EDI string).
+  // string, adp_code numeric tapi distributor_id di EDI string). "Lainnya"
+  // = ADP yang distributor_id-nya TIDAK ketemu di master_data_adp (belum
+  // ke-maintain region_name-nya di Master Data) — bukan wilayah asli,
+  // melainkan bucket "nggak ke-mapping".
   const masterMap = new Map(master.map(m => [String(m.adp_code), m.region_name]))
-  const top3PerWilayah = (() => {
+  const wilayahBreakdown = (() => {
     const byWilayah = new Map<string, SnapshotRow[]>()
     for (const r of activeRows) {
       const wilayah = masterMap.get(String(r.distributor_id)) || "Lainnya"
@@ -168,7 +171,7 @@ export default function OmzetPhiPage() {
       .map(([wilayah, list]) => ({
         wilayah,
         total: list.reduce((s, r) => s + (r.nilai_omset || 0), 0),
-        top3: [...list].sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0)).slice(0, 3),
+        all: [...list].sort((a, b) => (b.nilai_omset || 0) - (a.nilai_omset || 0)),
       }))
       .sort((a, b) => b.total - a.total)
   })()
@@ -312,7 +315,9 @@ export default function OmzetPhiPage() {
               tinggi bar yang menurun + garis kumulatif %. */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
             <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>Pareto Omset per ADP — Nasional ({monthLabel(activePeriod)})</h3>
-            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>{paretoData.length} ADP, diurut dari omset tertinggi — arahkan kursor ke bar buat lihat nama & angkanya</p>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>
+              {paretoData.length} ADP, diurut dari omset tertinggi — arahkan kursor ke bar buat lihat nama & angkanya · <span style={{ color: "#16A34A", fontWeight: 700 }}>■ Hijau</span> = omset tiap ADP (sumbu kiri) · <span style={{ color: "#DC2626", fontWeight: 700 }}>— Merah</span> = persentase kumulatif terhadap total nasional (sumbu kanan) — makin landai garisnya di sebelah kanan, makin kecil kontribusi ADP-ADP di situ ke total omset
+            </p>
             <ResponsiveContainer width="100%" height={260}>
               <ComposedChart data={paretoData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -361,23 +366,33 @@ export default function OmzetPhiPage() {
             </table>
           </div>
 
-          {/* Top 3 per Wilayah */}
+          {/* Breakdown per Wilayah — SEMUA ADP (bukan cuma top 3 lagi), tiap
+              kartu wilayah scroll sendiri (max-height) biar halaman nggak
+              kepanjangan tapi datanya tetap lengkap bisa di-scroll. */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 10 }}>Top 3 Penyumbang Omset per Wilayah ({monthLabel(activePeriod)})</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 10 }}>
-              {top3PerWilayah.map((w) => (
-                <div key={w.wilayah} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", background: "var(--surface2)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <h3 style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", marginBottom: 2 }}>Breakdown Omset per Wilayah ({monthLabel(activePeriod)})</h3>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginBottom: 10 }}>
+              Semua ADP per wilayah, diurut dari omset tertinggi (scroll di tiap kotak buat lihat semua) · <strong>&quot;Lainnya&quot;</strong> = ADP yang distributor_id-nya belum ke-mapping ke wilayah manapun di Master Data ADP (region_name-nya kosong/nggak ketemu di tabel master_data_adp) — bukan wilayah asli
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(260px,1fr))", gap: 10 }}>
+              {wilayahBreakdown.map((w) => (
+                <div key={w.wilayah} style={{ border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface2)", overflow: "hidden" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
                     <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{w.wilayah}</span>
-                    <span style={{ fontSize: 10, color: "var(--text3)" }}>{fmtRp(w.total)}</span>
+                    <span style={{ fontSize: 9, color: "var(--text3)" }}>{w.all.length} ADP · {fmtRp(w.total)}</span>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    {w.top3.map((r, i) => (
-                      <div key={r.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
-                        <span style={{ color: "var(--text2)" }}>{i + 1}. {r.distributor_nm || r.distributor_id}</span>
-                        <span style={{ fontWeight: 700, color: "#16A34A" }}>{fmtRp(r.nilai_omset || 0)}</span>
-                      </div>
-                    ))}
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                      <tbody>
+                        {w.all.map((r, i) => (
+                          <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                            <td style={{ padding: "4px 8px", color: "var(--text3)", width: 18 }}>{i + 1}</td>
+                            <td style={{ padding: "4px 8px", color: "var(--text2)" }}>{r.distributor_nm || r.distributor_id}</td>
+                            <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A", whiteSpace: "nowrap" }}>{fmtRp(r.nilai_omset || 0)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               ))}
