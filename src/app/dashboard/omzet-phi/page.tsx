@@ -86,6 +86,7 @@ export default function OmzetPhiPage() {
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState("")
   const [backfilling, setBackfilling] = useState(false)
+  const [resyncingMonth, setResyncingMonth] = useState<string | null>(null)
   const [backfillMsg, setBackfillMsg] = useState("")
 
   // Periode yang lagi ditampilkan di Pareto/Top10/Top3 — default ke bulan
@@ -149,6 +150,33 @@ export default function OmzetPhiPage() {
       setBackfillMsg("❌ " + (e instanceof Error ? e.message : String(e)))
     }
     setBackfilling(false)
+  }
+
+  // Sync ulang SATU bulan tertentu — dipakai tombol kecil di tabel
+  // Ringkasan Bulanan, buat kasus kayak Sep yang sebagian wilayahnya
+  // ilang pas backfill panjang (retry 1 bulan doang, nggak perlu ulang
+  // backfill 10 bulan).
+  async function handleResyncMonth(periodMonth: string) {
+    setResyncingMonth(periodMonth); setBackfillMsg("")
+    try {
+      const res = await fetch("/api/omzet-phi-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: periodMonth }),
+      })
+      const text = await res.text()
+      let data: { error?: string; results?: { periodMonth: string; rows: number }[] }
+      try { data = JSON.parse(text) } catch {
+        throw new Error(`Respons bukan JSON — HTTP ${res.status}. Coba klik lagi.`)
+      }
+      if (!res.ok) throw new Error(data.error || "Sync ulang gagal")
+      const rowsCount = data.results?.[0]?.rows ?? 0
+      setBackfillMsg(`✅ ${monthLabel(periodMonth)} di-sync ulang — ${rowsCount} ADS`)
+      await loadData()
+    } catch (e) {
+      setBackfillMsg(`❌ Gagal sync ulang ${monthLabel(periodMonth)} — ` + (e instanceof Error ? e.message : String(e)))
+    }
+    setResyncingMonth(null)
   }
 
   function handleExport() {
@@ -470,17 +498,25 @@ export default function OmzetPhiPage() {
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Total Omset</th>
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>Total Target</th>
                   <th style={{ padding: "6px 8px", textAlign: "right" }}>%</th>
+                  <th style={{ padding: "6px 8px" }}></th>
                 </tr>
               </thead>
               <tbody>
                 {trendData.map(t => (
-                  <tr key={t.periodMonth} onClick={() => setSelectedPeriod(t.periodMonth)}
-                    style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", background: t.periodMonth === activePeriod ? "var(--surface2)" : "transparent" }}>
-                    <td style={{ padding: "6px 8px", fontWeight: t.periodMonth === activePeriod ? 800 : 600, color: "var(--text)" }}>{t.label}</td>
-                    <td style={{ padding: "6px 8px", color: "var(--text3)" }}>{t.adsCount}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A" }}>{fmtPeso(t.omset)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)" }}>{fmtPeso(t.target)}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", color: t.pct >= 100 ? "#16A34A" : "#DC2626" }}>{fmtPct(t.pct)}</td>
+                  <tr key={t.periodMonth}
+                    style={{ borderBottom: "1px solid var(--border)", background: t.periodMonth === activePeriod ? "var(--surface2)" : "transparent" }}>
+                    <td onClick={() => setSelectedPeriod(t.periodMonth)} style={{ padding: "6px 8px", fontWeight: t.periodMonth === activePeriod ? 800 : 600, color: "var(--text)", cursor: "pointer" }}>{t.label}</td>
+                    <td onClick={() => setSelectedPeriod(t.periodMonth)} style={{ padding: "6px 8px", color: "var(--text3)", cursor: "pointer" }}>{t.adsCount}</td>
+                    <td onClick={() => setSelectedPeriod(t.periodMonth)} style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#16A34A", cursor: "pointer" }}>{fmtPeso(t.omset)}</td>
+                    <td onClick={() => setSelectedPeriod(t.periodMonth)} style={{ padding: "6px 8px", textAlign: "right", color: "var(--text3)", cursor: "pointer" }}>{fmtPeso(t.target)}</td>
+                    <td onClick={() => setSelectedPeriod(t.periodMonth)} style={{ padding: "6px 8px", textAlign: "right", color: t.pct >= 100 ? "#16A34A" : "#DC2626", cursor: "pointer" }}>{fmtPct(t.pct)}</td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <button onClick={e => { e.stopPropagation(); handleResyncMonth(t.periodMonth) }} disabled={resyncingMonth === t.periodMonth}
+                        title="Sync ulang bulan ini aja dari Ficom (buat kasus ada wilayah/ADS yang keliatan ilang/janggal)"
+                        style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text3)", fontSize: 10, fontWeight: 700, cursor: resyncingMonth === t.periodMonth ? "not-allowed" : "pointer" }}>
+                        {resyncingMonth === t.periodMonth ? "..." : "🔄 Sync ulang"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

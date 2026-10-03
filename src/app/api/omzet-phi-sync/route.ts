@@ -40,9 +40,22 @@ async function ficomLogin(username: string, password: string): Promise<string> {
   return data.token as string
 }
 
-async function ficomGet<T>(path: string, token: string): Promise<T> {
+// Retry 2x (jeda singkat) buat tiap GET — backfill nge-crawl ratusan
+// request per bulan, dan ada indikasi (dari sync user: 2 dari 5 wilayah
+// ilang total di 1 bulan backfill 10-bulan, tapi normal pas bulan lain)
+// sebagian request kadang diam-diam gagal/kosong pas Ficom lagi dihajar
+// terus-terusan dalam crawl yang panjang. Retry nggak nolong kalau
+// Ficom balikin 200 OK tapi isinya kosong (bukan error) — tapi minimal
+// nutup kasus HTTP error transien/timeout.
+async function ficomGet<T>(path: string, token: string, attempt = 1): Promise<T> {
   const res = await fetch(`${FICOM_BASE}${path}`, { headers: { Authorization: `F1C0m ${token}` } })
-  if (!res.ok) throw new Error(`GET ${path} gagal (HTTP ${res.status})`)
+  if (!res.ok) {
+    if (attempt < 3) {
+      await new Promise(r => setTimeout(r, 400 * attempt))
+      return ficomGet<T>(path, token, attempt + 1)
+    }
+    throw new Error(`GET ${path} gagal (HTTP ${res.status}) setelah ${attempt}x percobaan`)
+  }
   return res.json() as Promise<T>
 }
 
@@ -171,7 +184,11 @@ async function crawlAdsTree(token: string, rootEmpId: string, periodDate: string
   return nodes
 }
 
-async function runSync(backfill: boolean) {
+// onlyMonth: "YYYY-MM" → re-sync SATU bulan tertentu aja (dipakai tombol
+// "Sync ulang" per baris di "Ringkasan Bulanan"), buat kasus kayak
+// September kemarin yang sebagian wilayahnya ilang pas backfill panjang
+// — user bisa retry 1 bulan itu doang tanpa ngulang backfill 10 bulan.
+async function runSync(backfill: boolean, onlyMonth?: string) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   const supabase = createClient(supabaseUrl, supabaseAnonKey)
@@ -189,21 +206,25 @@ async function runSync(backfill: boolean) {
     const curMonth = now.getMonth() + 1
     const token = await ficomLogin(sdCred.user_login, sdCred.password)
 
-    // backfill=false (tombol "Sync Hari Ini") → cuma bulan berjalan.
-    // backfill=true (tombol "Tarik Histori") → Januari s/d bulan ini,
-    // SEKUENSIAL antar-bulan (pelajaran dari EDI200001 dulu — walau
-    // detilChange sendiri toleran dipanggil paralel pakai limiter(6)
-    // DALAM 1 bulan, antar-bulan tetap sekuensial buat jaga-jaga).
-    const months = backfill
+    // onlyMonth diisi → cuma 1 bulan itu (re-sync manual). backfill=false
+    // (tombol "Sync Hari Ini") → cuma bulan berjalan. backfill=true
+    // (tombol "Tarik Histori") → Januari s/d bulan ini, SEKUENSIAL
+    // antar-bulan (pelajaran dari EDI200001 dulu — walau detilChange
+    // sendiri toleran dipanggil paralel pakai limiter(6) DALAM 1 bulan,
+    // antar-bulan tetap sekuensial buat jaga-jaga).
+    const months = onlyMonth
+      ? [Number(onlyMonth.split("-")[1])]
+      : backfill
       ? Array.from({ length: curMonth }, (_, i) => i + 1)
       : [curMonth]
+    const onlyYear = onlyMonth ? Number(onlyMonth.split("-")[0]) : curYear
 
     const results: { periodMonth: string; rows: number }[] = []
     for (const m of months) {
-      const isCurrentMonth = m === curMonth
-      const cutoff = isCurrentMonth ? now : endOfMonth(curYear, m)
+      const isCurrentMonth = !onlyMonth && m === curMonth
+      const cutoff = isCurrentMonth ? now : endOfMonth(onlyYear, m)
       const periodDate = toIsoDate(cutoff)
-      const periodMonth = `${curYear}-${String(m).padStart(2, "0")}`
+      const periodMonth = `${onlyYear}-${String(m).padStart(2, "0")}`
 
       const nodes = await crawlAdsTree(token, sdCred.user_login, periodDate)
       const rdmByEmpId = new Map(nodes.filter(n => n.level === "RDM").map(n => [n.emp_id, n]))
@@ -261,14 +282,18 @@ export async function GET(req: NextRequest) {
 }
 
 // body { backfill: true } → tombol "Tarik Histori dari Ficom" (Jan s/d
-// bulan ini). Tanpa body / backfill:false → tombol "Sync Hari Ini".
+// bulan ini). body { month: "YYYY-MM" } → tombol "Sync ulang" 1 bulan
+// tertentu di tabel Ringkasan Bulanan. Tanpa body / backfill:false →
+// tombol "Sync Hari Ini".
 export async function POST(req: NextRequest) {
   let backfill = false
+  let month: string | undefined
   try {
     const body = await req.json()
     backfill = !!body?.backfill
+    month = typeof body?.month === "string" && /^\d{4}-\d{2}$/.test(body.month) ? body.month : undefined
   } catch {
     // body kosong — default backfill=false
   }
-  return runSync(backfill)
+  return runSync(backfill, month)
 }
