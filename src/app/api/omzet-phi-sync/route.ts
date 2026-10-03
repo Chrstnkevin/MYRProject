@@ -1,32 +1,50 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { parseEdiText } from "@/lib/parseEdiText"
 
-// Sync "Omzet PHI" — REWRITE TOTAL (sebelumnya pakai EDI200001, dibuang
-// sepenuhnya atas permintaan user: EDI200001 butuh trik V06 "Maks Date"
-// yang nggak pernah tervalidasi penuh buat histori, plus ada bug dedupe
-// duplikat "release" yang baru kebukti kemarin). Sekarang pakai endpoint
-// "Main" Ficom yang SAMA dipakai Target Compare (detilChange) —
-// dikonfirmasi user via capture:
-//   GET /api/dashboard/detilChange/{empId}/OMSET/{YYYY-MM-DD}
-// balikin breakdown turunan 1 level di bawah empId, dengan target/nilai/
-// persen yang SUDAH dihitung Ficom sendiri per tanggal itu (updDate genuin,
-// bukan trik) — hirarki: SD -> RDM -> ADS -> Salesman (leaf).
+// Sync "Omzet PHI" — tarik nilai_omset/target_omset per ADP (distributor)
+// dari Ficom EDI200001 "EDI OMSET DASHBOARD". BEDA dari ficom-edi-sync.ts
+// (yang nyimpen ke edi_transfer_staging, cuma dipakai buat tgl_gudang/
+// hka_hke/release di halaman Data Transfer) — field nilai_omset/
+// target_omset itu TERNYATA sudah ada di response EDI ini juga, cuma
+// belum pernah disimpan/dipakai sebelumnya (dikonfirmasi dari capture
+// user langsung). Jadi sync ini pakai EDI yang SAMA tapi nyimpen semua
+// field (termasuk cbcover/hhtkpl/hht/ipt/sbpt/ec_std_mtd) ke tabel
+// terpisah (omzet_phi_snapshot), per bulan.
 //
-// User minta Pareto/Top10/Top3-wilayah tetap per "ADP", tapi endpoint ini
-// CUMA sampai level Salesman (orang), nggak ada kode ADP/distributor sama
-// sekali di response-nya. Solusi yang disepakati: pakai level ADS sebagai
-// proxy "ADP" (1 ADS = 1 supervisor yang biasanya mengepalai 1 wilayah
-// kerja/depot) — lihat jawaban user "pareto nya tetap pakai ADP, bisa
-// kamu jadikan level ADS itu".
+// Field spv/rsm/grsm/nsm/sd itu formatnya "WFCODE-Nama" 1 string gabungan
+// — di-split code/name di sini. Pemetaan level (pola sama kayak
+// EDI260001/EDI240136 yang sudah dikonfirmasi): spv=ADS, rsm=ADM,
+// grsm=RDM, nsm=SD (scope akun posisi "SD" kita), sd=akar perusahaan
+// (WF7001, di ATAS level SD kita — BUKAN scope kita).
 //
-// Wilayah (buat Top3 per wilayah) sekarang diturunkan LANGSUNG dari nama
-// RDM (mis. "SGMA - RDM E. Bongosia" -> sub-AOR "SGMA" -> wilayah "GMA",
-// ambil 3 huruf terakhir) — dikonfirmasi dari capture user, kode sub-AOR
-// ini PERSIS sama kayak kolom "Sub AOR" di file "2026 ADP List - Baji"
-// yang pernah dibandingkan. Jadi TIDAK PERLU lagi join ke master_data_adp
-// (yang sebelumnya punya masalah ADP ke-skip jadi "Lainnya").
+// PENTING soal histori bulan lalu: param V06 "Maks Date" itu awalnya cuma
+// dipakai buat TANGGAL HARI INI (lihat ficom-edi-sync.ts, todayMaksDate()).
+// Di sini saya COBA isi V06 pakai tanggal AKHIR BULAN lalu (mis. "31 JAN
+// 2026") buat dapet angka omset MTD per akhir bulan itu — TAPI INI BELUM
+// TERVALIDASI apakah Ficom beneran ngitung ulang berdasarkan tanggal itu,
+// atau diam-diam selalu balikin data HARI INI apapun V06-nya. Cek manual
+// dulu di halaman: kalau angka tiap bulan keliatan SAMA PERSIS (flat),
+// berarti V06 historis nggak kepake beneran.
 const FICOM_BASE = "https://ficom-phi.mayora.co.id/web/phi"
-const METRIC = "OMSET"
+const EDI_ID = "EDI200001"
+const SD_CODE_TOP = "WF7001" // sama kode yang dipakai ficom-edi-sync.ts
+
+interface EdiParam { var: string; label: string; placeholder: string; maxLength: number }
+interface EdiTemplate { ediId: string; ediNm: string; query: string; params: EdiParam[] }
+
+function splitCodeName(s: string | undefined): { code: string; name: string } {
+  const v = (s || "").trim()
+  const idx = v.indexOf("-")
+  if (idx === -1) return { code: v, name: v }
+  return { code: v.slice(0, idx).trim(), name: v.slice(idx + 1).trim() }
+}
+
+function num(v: string | undefined): number | null {
+  if (v == null || v === "") return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
 
 async function ficomLogin(username: string, password: string): Promise<string> {
   const res = await fetch(`${FICOM_BASE}/auth`, {
@@ -40,29 +58,22 @@ async function ficomLogin(username: string, password: string): Promise<string> {
   return data.token as string
 }
 
-// Retry 2x (jeda singkat) buat tiap GET — backfill nge-crawl ratusan
-// request per bulan, dan ada indikasi (dari sync user: 2 dari 5 wilayah
-// ilang total di 1 bulan backfill 10-bulan, tapi normal pas bulan lain)
-// sebagian request kadang diam-diam gagal/kosong pas Ficom lagi dihajar
-// terus-terusan dalam crawl yang panjang. Retry nggak nolong kalau
-// Ficom balikin 200 OK tapi isinya kosong (bukan error) — tapi minimal
-// nutup kasus HTTP error transien/timeout.
-async function ficomGet<T>(path: string, token: string, attempt = 1): Promise<T> {
-  const res = await fetch(`${FICOM_BASE}${path}`, { headers: { Authorization: `F1C0m ${token}` } })
-  if (!res.ok) {
-    if (attempt < 3) {
-      await new Promise(r => setTimeout(r, 400 * attempt))
-      return ficomGet<T>(path, token, attempt + 1)
-    }
-    throw new Error(`GET ${path} gagal (HTTP ${res.status}) setelah ${attempt}x percobaan`)
-  }
-  return res.json() as Promise<T>
+// "DD MON YYYY" zero-padded, format persis sama kayak todayMaksDate() di
+// ficom-edi-sync.ts.
+function toMaksDate(d: Date): string {
+  const day = String(d.getDate()).padStart(2, "0")
+  const month = d.toLocaleDateString("en-US", { month: "short" }).toUpperCase()
+  return `${day} ${month} ${d.getFullYear()}`
 }
-
 function endOfMonth(tahun: number, periode1to12: number): Date {
   return new Date(tahun, periode1to12, 0) // hari ke-0 bulan depan = akhir bulan ini
 }
-// "YYYY-MM-DD" — format updDate di detilChange & Ficom Lite missions.
+// "YYYY-MM-DD" — format tanggal buat query param ?date= di endpoint Ficom
+// Lite missions, BEDA dari toMaksDate() yang formatnya "DD MON YYYY" buat
+// V06 EDI200001. Dikonfirmasi dari capture user langsung (request URL
+// ".../missions?user-id=WF6001&date=2026-07-31" beneran balikin angka
+// Monthly STT punya bulan Juli, BUKAN bulan berjalan) — jadi beda dari
+// asumsi awal yang nganggep endpoint ini nggak punya histori sama sekali.
 function toIsoDate(d: Date): string {
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, "0")
@@ -71,191 +82,187 @@ function toIsoDate(d: Date): string {
 }
 
 // Ficom Lite Monthly (componentId "C12") — angka nasional pembanding,
-// endpoint TERPISAH dari detilChange (beda sistem di Ficom), dikonfirmasi
-// user support param ?date= buat histori juga. Target mentahnya seorder
-// sama target_omset EDI200001 dulu (~2,3-2,4jt Peso), jadi TIDAK dikali
-// 1000 di sini (beda dari asumsi SCALE=1000 punya target-compare.tsx yang
-// buat konteks metrik STT, bukan OMSET).
+// pola sama persis kayak fetchFicomLiteMissions/pickSttCard di
+// target-compare/page.tsx: cuma endpoint "missions" level SD yang
+// balikin angka milik SD itu sendiri (bukan hasil jumlah turunannya).
+// Token-nya LOGIN TERPISAH pakai akun posisi "SD" (ediCred yang dipakai
+// buat ekstrak EDI200001 itu akun posisi "EDI", beda akun/beda scope).
+//
+// SOAL SKALA (×1000): target-compare/page.tsx make ASUMSI nilai di Ficom
+// Lite itu dalam ribuan (makanya dikali 1000 di sana, lihat
+// FICOM_LITE_SCALE/pickSttCard di file itu) — TAPI itu buat konteks STT
+// (jumlah unit/produktivitas). Buat Monthly STT versi OMSET (uang) di
+// sini, capture user nunjukin target mentah dari API = 2.213.551, yang
+// ORDERNYA SAMA kayak target_omset EDI200001 (~2,3-2,4 juta Peso) —
+// BUKAN 1000x lebih besar. Jadi di sini SENGAJA TIDAK dikali 1000 (beda
+// dari target-compare). Kalau nanti kebukti salah (angkanya ternyata
+// emang harus ×1000), cukup ganti FICOM_LITE_OMSET_SCALE di bawah.
 const FICOM_LITE_STT_COMPONENT = "C12"
+const FICOM_LITE_OMSET_SCALE = 1
+
 interface FicomLiteCard { componentId: string; target: number | null; value: number | null }
 interface FicomLiteMissions { monthly: { missions: FicomLiteCard[] } }
 
 async function fetchFicomLiteMonthlyStt(token: string, userId: string, isoDate: string): Promise<{ target: number; value: number } | undefined> {
-  const data = await ficomGet<FicomLiteMissions>(`/api/ficom-lite-dashboard/missions?user-id=${userId}&date=${isoDate}`, token)
+  const res = await fetch(`${FICOM_BASE}/api/ficom-lite-dashboard/missions?user-id=${userId}&date=${isoDate}`, {
+    headers: { Authorization: `F1C0m ${token}` },
+  })
+  if (!res.ok) throw new Error(`Gagal ambil Ficom Lite Monthly (HTTP ${res.status})`)
+  const data = await res.json() as FicomLiteMissions
   const c = (data.monthly?.missions || []).find(c => c.componentId === FICOM_LITE_STT_COMPONENT)
   if (!c || c.value == null || c.target == null) return undefined
-  return { target: c.target, value: c.value }
+  return { target: c.target * FICOM_LITE_OMSET_SCALE, value: c.value * FICOM_LITE_OMSET_SCALE }
 }
 
-// ── Crawl detilChange: SD -> RDM -> ADS -> Salesman ─────────────────
-interface DetilNodeData { empId: string | null; empName: string; keterangan: string; target: number; nilai: number; persen: number; empType: number }
-interface DetilChild { data: DetilNodeData; children: unknown[]; leaf: boolean }
-
-type CrawlLevel = "RDM" | "ADS" | "SALESMAN"
-interface CrawlNode {
-  level: CrawlLevel
-  emp_id: string
-  emp_name: string
-  parent_emp_id: string | null
-  target: number
-  actual: number
+async function fetchOmzet(token: string, tpl: EdiTemplate, maksDate: string): Promise<string> {
+  const filledParams = tpl.params.map(p => ({
+    ...p,
+    placeholder: p.var === "V01" ? SD_CODE_TOP : p.var === "V06" ? maksDate : p.placeholder,
+  }))
+  const res = await fetch(`${FICOM_BASE}/api/edi/ekstrak/brt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `F1C0m ${token}` },
+    body: JSON.stringify({ ...tpl, params: filledParams }),
+  })
+  if (!res.ok) throw new Error(`Gagal ekstrak EDI OMSET DASHBOARD (HTTP ${res.status})`)
+  return res.text()
 }
 
-const CRAWL_CONCURRENCY = 6
-function createLimiter(limit: number) {
-  let active = 0
-  const queue: (() => void)[] = []
-  return function run<T>(fn: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const attempt = () => {
-        active++
-        fn().then(resolve, reject).finally(() => {
-          active--
-          const next = queue.shift()
-          if (next) next()
-        })
-      }
-      if (active < limit) attempt()
-      else queue.push(attempt)
-    })
-  }
-}
-
-// Sub-AOR dari nama RDM, mis. "SGMA - RDM E. Bongosia" -> "SGMA". Pola &
-// konfirmasi SAMA kayak crawlOrgTree di target-compare/page.tsx.
-function subAorOf(rdmName: string): string {
-  const m = rdmName.match(/^([A-Z]+)\s*-/)
-  return m ? m[1] : ""
-}
-// Wilayah makro (GMA/NOL/SOL/VIS/MIN) = 3 huruf terakhir sub-AOR — semua
-// kode sub-AOR yang dicapture user (SGMA/EGMA/NGMA/CNOL/ENOL/WNOL/USOL/
-// MSOL/LSOL/NMIN/SMIN/WMIN/CVIS/EVIS/WVIS) selalu diawali 1 huruf arah
-// mata angin + 3 huruf wilayah, jadi aman diambil dari belakang.
-function wilayahOf(subAor: string): string {
-  return subAor.slice(-3)
-}
-
-async function crawlAdsTree(token: string, rootEmpId: string, periodDate: string): Promise<CrawlNode[]> {
-  const nodes: CrawlNode[] = []
-  const limiter = createLimiter(CRAWL_CONCURRENCY)
-  const levelForDepth = (d: number): CrawlLevel => d === 1 ? "RDM" : d === 2 ? "ADS" : "SALESMAN"
-
-  async function crawl(empId: string, depth: number) {
-    if (depth > 3) return
-    const children = await limiter(() => ficomGet<DetilChild[]>(`/api/dashboard/detilChange/${empId}/${METRIC}/${periodDate}`, token))
-    const level = levelForDepth(depth)
-    for (const c of children) {
-      const d = c.data
-      if (!d.empId) continue
-      nodes.push({ level, emp_id: d.empId, emp_name: d.empName, parent_emp_id: empId, target: Number(d.target) || 0, actual: Number(d.nilai) || 0 })
-    }
-    const toRecurse = children.filter(c => !c.leaf && c.data.empId)
-    await Promise.all(toRecurse.map(c => crawl(c.data.empId!, depth + 1)))
-  }
-  await crawl(rootEmpId, 1)
-
-  // Ficom cuma isi target/nilai yang akurat di level Salesman (leaf) —
-  // level RDM/ADS di atasnya sering 0 di response asli (pelajaran yang
-  // sama persis kayak crawlOrgTree di target-compare/page.tsx). Dihitung
-  // ulang bottom-up dari jumlah descendant Salesman-nya, bukan percaya
-  // field target/nilai bawaan di level non-leaf.
-  const childrenOf = new Map<string, CrawlNode[]>()
-  for (const n of nodes) {
-    if (!n.parent_emp_id) continue
-    if (!childrenOf.has(n.parent_emp_id)) childrenOf.set(n.parent_emp_id, [])
-    childrenOf.get(n.parent_emp_id)!.push(n)
-  }
-  function sumLeaves(empId: string): { target: number; actual: number } {
-    const kids = childrenOf.get(empId) || []
-    let target = 0, actual = 0
-    for (const k of kids) {
-      if (k.level === "SALESMAN") { target += k.target; actual += k.actual }
-      else { const s = sumLeaves(k.emp_id); target += s.target; actual += s.actual }
-    }
-    return { target, actual }
-  }
-  for (const n of nodes) {
-    if (n.level === "RDM" || n.level === "ADS") {
-      const s = sumLeaves(n.emp_id)
-      n.target = s.target
-      n.actual = s.actual
-    }
-  }
-  return nodes
-}
-
-// onlyMonth: "YYYY-MM" → re-sync SATU bulan tertentu aja (dipakai tombol
-// "Sync ulang" per baris di "Ringkasan Bulanan"), buat kasus kayak
-// September kemarin yang sebagian wilayahnya ilang pas backfill panjang
-// — user bisa retry 1 bulan itu doang tanpa ngulang backfill 10 bulan.
-async function runSync(backfill: boolean, onlyMonth?: string) {
+async function runSync(backfill: boolean) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-  const { data: sdCred, error: sdErr } = await supabase
-    .from("ficom_passwords").select("user_login,password").eq("position", "SD").limit(1).maybeSingle()
+  const [{ data: sdCred, error: sdErr }, { data: ediCred, error: ediErr }] = await Promise.all([
+    supabase.from("ficom_passwords").select("user_login,password").eq("position", "SD").limit(1).maybeSingle(),
+    supabase.from("ficom_passwords").select("user_login,password").eq("position", "EDI").limit(1).maybeSingle(),
+  ])
   if (sdErr) return NextResponse.json({ error: `Gagal ambil kredensial SD: ${sdErr.message}` }, { status: 500 })
   if (!sdCred?.user_login || !sdCred?.password) {
     return NextResponse.json({ error: 'Belum ada akun posisi "SD" di Master Data → Ficom Password' }, { status: 400 })
+  }
+  if (ediErr) return NextResponse.json({ error: `Gagal ambil kredensial EDI: ${ediErr.message}` }, { status: 500 })
+  if (!ediCred?.user_login || !ediCred?.password) {
+    return NextResponse.json({ error: 'Belum ada akun posisi "EDI" di Master Data → Ficom Password' }, { status: 400 })
   }
 
   try {
     const now = new Date()
     const curYear = now.getFullYear()
     const curMonth = now.getMonth() + 1
-    const token = await ficomLogin(sdCred.user_login, sdCred.password)
 
-    // onlyMonth diisi → cuma 1 bulan itu (re-sync manual). backfill=false
-    // (tombol "Sync Hari Ini") → cuma bulan berjalan. backfill=true
-    // (tombol "Tarik Histori") → Januari s/d bulan ini, SEKUENSIAL
-    // antar-bulan (pelajaran dari EDI200001 dulu — walau detilChange
-    // sendiri toleran dipanggil paralel pakai limiter(6) DALAM 1 bulan,
-    // antar-bulan tetap sekuensial buat jaga-jaga).
-    const months = onlyMonth
-      ? [Number(onlyMonth.split("-")[1])]
-      : backfill
+    const token = await ficomLogin(ediCred.user_login, ediCred.password)
+    const tplRes = await fetch(`${FICOM_BASE}/api/edi/${EDI_ID}`, { headers: { Authorization: `F1C0m ${token}` } })
+    if (!tplRes.ok) throw new Error(`Gagal ambil template EDI OMSET DASHBOARD (HTTP ${tplRes.status})`)
+    const tpl = await tplRes.json() as EdiTemplate
+    // Login SD sekali di luar loop — dipakai ulang tiap bulan buat Ficom
+    // Lite Monthly, bukan akun yang sama dengan token EDI di atas.
+    const sdToken = await ficomLogin(sdCred.user_login, sdCred.password)
+
+    // backfill=false (tombol "Sync Hari Ini") → cuma bulan berjalan.
+    // backfill=true (tombol "Tarik Histori") → Januari s/d bulan ini,
+    // SEKUENSIAL (bukan Promise.all — pelajaran dari Compare MPP, ekstrak
+    // paralel pakai token sama bikin HTTP 409 di server Ficom).
+    const months = backfill
       ? Array.from({ length: curMonth }, (_, i) => i + 1)
       : [curMonth]
-    const onlyYear = onlyMonth ? Number(onlyMonth.split("-")[0]) : curYear
 
     const results: { periodMonth: string; rows: number }[] = []
     for (const m of months) {
-      const isCurrentMonth = !onlyMonth && m === curMonth
-      const cutoff = isCurrentMonth ? now : endOfMonth(onlyYear, m)
-      const periodDate = toIsoDate(cutoff)
-      const periodMonth = `${onlyYear}-${String(m).padStart(2, "0")}`
+      const isCurrentMonth = m === curMonth
+      const cutoff = isCurrentMonth ? now : endOfMonth(curYear, m)
+      const maksDate = toMaksDate(cutoff)
+      const periodMonth = `${curYear}-${String(m).padStart(2, "0")}`
 
-      const nodes = await crawlAdsTree(token, sdCred.user_login, periodDate)
-      const rdmByEmpId = new Map(nodes.filter(n => n.level === "RDM").map(n => [n.emp_id, n]))
-      const adsNodes = nodes.filter(n => n.level === "ADS")
+      const text = await fetchOmzet(token, tpl, maksDate)
+      const parsed = parseEdiText(text)
+      // Scope ke SD yang sama dengan Ficom Lite — EDI200001 narik semua
+      // nsm (SD) di bawah SD_CODE_TOP kalau tidak difilter.
+      const rows = parsed.filter(r => splitCodeName(r.nsm).code === sdCred.user_login)
 
-      const dbRows = adsNodes.map(n => {
-        const rdm = n.parent_emp_id ? rdmByEmpId.get(n.parent_emp_id) : undefined
-        const subAor = subAorOf(rdm?.emp_name || "")
+      const dbRows = rows.map(r => {
+        const spv = splitCodeName(r.spv)
+        const rsm = splitCodeName(r.rsm)
+        const grsm = splitCodeName(r.grsm)
+        const nsm = splitCodeName(r.nsm)
+        const sd = splitCodeName(r.sd)
         return {
           period_month: periodMonth,
-          emp_id: n.emp_id,
-          emp_name: n.emp_name,
-          rdm_emp_id: n.parent_emp_id,
-          rdm_name: rdm?.emp_name || null,
-          sub_aor: subAor || null,
-          wilayah: subAor ? wilayahOf(subAor) : null,
-          target: n.target,
-          nilai: n.actual,
-          persen: n.target > 0 ? Math.round((n.actual / n.target) * 1000) / 10 : 0,
-          period_date: periodDate,
+          distributor_id: r.distributor_id,
+          distributor_nm: r.distributor_nm || null,
+          kota: r.kota || null,
+          spv_code: spv.code || null, spv_name: spv.name || null,
+          rsm_code: rsm.code || null, rsm_name: rsm.name || null,
+          grsm_code: grsm.code || null, grsm_name: grsm.name || null,
+          nsm_code: nsm.code || null, nsm_name: nsm.name || null,
+          sd_code: sd.code || null, sd_name: sd.name || null,
+          nilai_omset: num(r.nilai_omset), target_omset: num(r.target_omset), perc_omset: num(r.perc),
+          nilai_cbcover: num(r.nilai_cbcover), target_cbcover: num(r.target_cbcover), perc_cbcover: num(r.perc_cbcover),
+          nilai_hhtkpl: num(r.nilai_hhtkpl), target_hhtkpl: num(r.target_hhtkpl), perc_hhtkpl: num(r.perc_hhtkpl),
+          nilai_hht: num(r.nilai_hht), target_hht: num(r.target_hht),
+          nilai_ipt: num(r.nilai_ipt), target_ipt: num(r.target_ipt),
+          nilai_sbpt: num(r.nilai_sbpt), target_sbpt: num(r.target_sbpt),
+          nilai_ec_std_mtd: num(r.nilai_ec_std_mtd), target_ec_std_mtd: num(r.target_ec_std_mtd),
+          release: r.release || null,
+          cutoff_date: maksDate,
           synced_at: now.toISOString(),
         }
       })
 
-      if (dbRows.length > 0) {
-        const { error: upErr } = await supabase.from("omzet_phi_snapshot").upsert(dbRows, { onConflict: "period_month,emp_id" })
+      // EDI200001 ternyata bisa balikin >1 baris utk distributor_id yang
+      // sama dalam 1 periode (beda "release") — kalau dikirim apa adanya,
+      // Postgres nolak upsert-nya ("ON CONFLICT DO UPDATE command cannot
+      // affect row a second time", karena constraint-nya per
+      // period_month+distributor_id). PERBAIKAN dari versi sebelumnya
+      // (yang cuma ambil baris terakhir, ternyata salah — kebukti dari
+      // user total target September keangka lebih kecil dari semestinya):
+      // "release" itu rupanya segmen/batch yang beda per distributor_id,
+      // jadi nilai_*/target_* per release harus DIJUMLAH, bukan ditimpa.
+      // perc_* dihitung ULANG dari hasil jumlah (bukan dipakai apa adanya
+      // dari salah satu baris, soalnya persentase per-release tidak valid
+      // lagi setelah nilai/target-nya digabung).
+      const pct = (nilai: number | null, target: number | null): number | null =>
+        target && target !== 0 && nilai != null ? Math.round((nilai / target) * 1000) / 10 : null
+      const dedupMap = new Map<string, typeof dbRows[number]>()
+      for (const row of dbRows) {
+        const existing = dedupMap.get(row.distributor_id)
+        if (!existing) { dedupMap.set(row.distributor_id, { ...row }); continue }
+        existing.nilai_omset = (existing.nilai_omset || 0) + (row.nilai_omset || 0)
+        existing.target_omset = (existing.target_omset || 0) + (row.target_omset || 0)
+        existing.nilai_cbcover = (existing.nilai_cbcover || 0) + (row.nilai_cbcover || 0)
+        existing.target_cbcover = (existing.target_cbcover || 0) + (row.target_cbcover || 0)
+        existing.nilai_hhtkpl = (existing.nilai_hhtkpl || 0) + (row.nilai_hhtkpl || 0)
+        existing.target_hhtkpl = (existing.target_hhtkpl || 0) + (row.target_hhtkpl || 0)
+        existing.nilai_hht = (existing.nilai_hht || 0) + (row.nilai_hht || 0)
+        existing.target_hht = (existing.target_hht || 0) + (row.target_hht || 0)
+        existing.nilai_ipt = (existing.nilai_ipt || 0) + (row.nilai_ipt || 0)
+        existing.target_ipt = (existing.target_ipt || 0) + (row.target_ipt || 0)
+        existing.nilai_sbpt = (existing.nilai_sbpt || 0) + (row.nilai_sbpt || 0)
+        existing.target_sbpt = (existing.target_sbpt || 0) + (row.target_sbpt || 0)
+        existing.nilai_ec_std_mtd = (existing.nilai_ec_std_mtd || 0) + (row.nilai_ec_std_mtd || 0)
+        existing.target_ec_std_mtd = (existing.target_ec_std_mtd || 0) + (row.target_ec_std_mtd || 0)
+        existing.release = existing.release && row.release && existing.release !== row.release
+          ? `${existing.release},${row.release}` : (existing.release || row.release)
+      }
+      const dedupedRows = Array.from(dedupMap.values()).map(row => ({
+        ...row,
+        perc_omset: pct(row.nilai_omset, row.target_omset),
+        perc_cbcover: pct(row.nilai_cbcover, row.target_cbcover),
+        perc_hhtkpl: pct(row.nilai_hhtkpl, row.target_hhtkpl),
+      }))
+
+      if (dedupedRows.length > 0) {
+        const { error: upErr } = await supabase.from("omzet_phi_snapshot").upsert(dedupedRows, { onConflict: "period_month,distributor_id" })
         if (upErr) throw new Error(`Gagal simpan periode ${periodMonth}: ${upErr.message}`)
       }
-      results.push({ periodMonth, rows: dbRows.length })
+      results.push({ periodMonth, rows: dedupedRows.length })
 
-      const stt = await fetchFicomLiteMonthlyStt(token, sdCred.user_login, periodDate)
+      // Ficom Lite Monthly TERNYATA punya histori juga lewat param ?date=
+      // (dikonfirmasi user, lihat komentar di fetchFicomLiteMonthlyStt) —
+      // jadi ditarik tiap bulan dalam loop ini, bukan cuma bulan berjalan
+      // lagi. Login SEKALI aja di luar loop biar nggak login ulang2 ke
+      // Ficom tiap bulan pas backfill (9-10x).
+      const stt = await fetchFicomLiteMonthlyStt(sdToken, sdCred.user_login, toIsoDate(cutoff))
       if (stt) {
         const { error: refErr } = await supabase
           .from("omzet_phi_ficomlite_ref")
@@ -282,18 +289,14 @@ export async function GET(req: NextRequest) {
 }
 
 // body { backfill: true } → tombol "Tarik Histori dari Ficom" (Jan s/d
-// bulan ini). body { month: "YYYY-MM" } → tombol "Sync ulang" 1 bulan
-// tertentu di tabel Ringkasan Bulanan. Tanpa body / backfill:false →
-// tombol "Sync Hari Ini".
+// bulan ini). Tanpa body / backfill:false → tombol "Sync Hari Ini".
 export async function POST(req: NextRequest) {
   let backfill = false
-  let month: string | undefined
   try {
     const body = await req.json()
     backfill = !!body?.backfill
-    month = typeof body?.month === "string" && /^\d{4}-\d{2}$/.test(body.month) ? body.month : undefined
   } catch {
     // body kosong — default backfill=false
   }
-  return runSync(backfill, month)
+  return runSync(backfill)
 }
