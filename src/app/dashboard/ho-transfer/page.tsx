@@ -16,9 +16,20 @@ import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircle, CheckCircle2, Clock, MapPin, Building2,
 } from "lucide-react"
+import {
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Legend, LabelList, Cell,
+} from "recharts"
 import { supabase } from "@/lib/supabase"
 
 const HO_BASE = "http://52.163.214.18:8081/api/ho/dashboard-subdist"
+
+// Palet wilayah — SAMA kayak REGION_CLR di master-data/page.tsx, biar
+// warna wilayah konsisten di seluruh app.
+const WILAYAH_ORDER = ["GMA", "NOL", "SOL", "VIS", "MIN"]
+const WILAYAH_CLR: Record<string, string> = {
+  GMA: "#7C3AED", NOL: "#1D4ED8", SOL: "#DB2777", VIS: "#0891B2", MIN: "#DC2626",
+}
 
 // Bentuk mentah response GET next-date-phi/OmsetDif — field flagTrf/
 // text5/color/totalDiffRekonsil/hoVsConsol disimpan apa adanya, makna
@@ -192,6 +203,36 @@ export default function HoTransferPage() {
   const terlambatCount = activeRows.filter(r => r.terlambat === "T").length
   const tepatCount = activeRows.length - terlambatCount
 
+  // Tren jumlah Terlambat per tanggal sync — semua tanggal yang pernah
+  // ke-sync, dipakai apa adanya (bukan cuma 14 hari terakhir, soalnya
+  // histori kita belum tentu sepanjang itu).
+  const trendData = dates.map(d => {
+    const list = rows.filter(r => r.snapshot_date === d)
+    return {
+      date: d.slice(5), // "MM-DD" biar ringkas di sumbu-X
+      terlambat: list.filter(r => r.terlambat === "T").length,
+      total: list.length,
+    }
+  })
+
+  // Breakdown per wilayah (GMA/NOL/SOL/VIS/MIN) — jumlah subdist +
+  // berapa yang terlambat, buat chart & ranking "wilayah bermasalah".
+  const wilayahStats = WILAYAH_ORDER.map(w => {
+    const list = activeRows.filter(r => r.region_nm === w)
+    const terlambat = list.filter(r => r.terlambat === "T").length
+    const diffSum = list.reduce((s, r) => s + Math.abs(r.total_diff || 0), 0)
+    return {
+      wilayah: w,
+      total: list.length,
+      terlambat,
+      tepat: list.length - terlambat,
+      pctTerlambat: list.length > 0 ? Math.round((terlambat / list.length) * 100) : 0,
+      diffSum,
+    }
+  }).filter(w => w.total > 0)
+  const wilayahRanked = [...wilayahStats].sort((a, b) => b.pctTerlambat - a.pctTerlambat)
+  const maxPctTerlambat = Math.max(1, ...wilayahRanked.map(w => w.pctTerlambat))
+
   if (loading && rows.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
       <div style={{ width: 32, height: 32, border: "3px solid #1E3A5F", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -262,24 +303,107 @@ export default function HoTransferPage() {
       {activeDate && (
         <>
           {/* KPI row */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
             {[
-              { label: "Total Subdist", value: String(activeRows.length), color: "#0369A1", icon: Building2 },
-              { label: "Terlambat", value: String(terlambatCount), color: "#DC2626", icon: Clock },
-              { label: "Tepat Waktu", value: String(tepatCount), color: "#16A34A", icon: CheckCircle2 },
-              { label: "% Naik (dari HO)", value: activeSummary ? `${activeSummary.percentage}% (${activeSummary.total_naik}/${activeSummary.total})` : "n/a", color: "#7C3AED", icon: AlertCircle },
+              { label: "TOTAL SUBDIST", value: String(activeRows.length), color: "#0369A1", icon: Building2 },
+              { label: "TERLAMBAT", value: String(terlambatCount), color: "#DC2626", icon: Clock },
+              { label: "TEPAT WAKTU", value: String(tepatCount), color: "#16A34A", icon: CheckCircle2 },
+              { label: "% NAIK (DARI HO)", value: activeSummary ? `${activeSummary.percentage}%` : "n/a", sub: activeSummary ? `${activeSummary.total_naik}/${activeSummary.total} subdist` : undefined, color: "#7C3AED", icon: AlertCircle },
             ].map((c, i) => (
-              <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
-                <div style={{ height: 2, background: c.color }} />
-                <div style={{ padding: "10px 12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ fontSize: 9, color: "var(--text3)", fontWeight: 600, lineHeight: 1.3 }}>{c.label}</span>
-                    <c.icon size={14} color={c.color} />
+              <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em" }}>{c.label}</span>
+                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: c.color + "1A", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <c.icon size={13} color={c.color} />
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</div>
                 </div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</div>
+                {c.sub && <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 2 }}>{c.sub}</div>}
               </div>
             ))}
+          </div>
+
+          {/* Tren Terlambat + Breakdown per Wilayah */}
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 10 }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TREN</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Subdist Terlambat — {dates.length} Hari Tersimpan</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={trendData} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
+                  <defs>
+                    <linearGradient id="terlambatGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#DC2626" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#DC2626" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip formatter={(value: number, name: string) => [value, name === "terlambat" ? "Terlambat" : "Total Subdist"]} labelFormatter={l => `Tanggal ${l}`} />
+                  <Area type="monotone" dataKey="terlambat" name="Terlambat" stroke="#DC2626" strokeWidth={2} fill="url(#terlambatGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>BREAKDOWN</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Status per Wilayah ({activeDate})</div>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={wilayahStats} margin={{ top: 4, right: 8, left: -8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="wilayah" tick={{ fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  <Bar dataKey="tepat" name="Tepat Waktu" stackId="s" fill="#16A34A" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="terlambat" name="Terlambat" stackId="s" fill="#DC2626" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Top Wilayah Bermasalah (ranking % terlambat) + Selisih Omset per Wilayah */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TOP WILAYAH</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)" }}>Wilayah Paling Bermasalah</div>
+                </div>
+                <span style={{ fontSize: 10, color: "var(--text3)" }}>{wilayahRanked.length} wilayah</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {wilayahRanked.map((w, i) => (
+                  <div key={w.wilayah}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <span style={{ width: 18, height: 18, borderRadius: "50%", background: (WILAYAH_CLR[w.wilayah] || "#64748B") + "22", color: WILAYAH_CLR[w.wilayah] || "#64748B", fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{w.wilayah}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text3)" }}>{w.terlambat} terlambat · {w.pctTerlambat}%</span>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 999, background: "var(--surface2)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.max(2, (w.pctTerlambat / maxPctTerlambat) * 100)}%`, background: WILAYAH_CLR[w.wilayah] || "#64748B", borderRadius: 999 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>SELISIH OMSET</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>|Omset HO − Pro| per Wilayah</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={wilayahStats} layout="vertical" margin={{ top: 4, right: 24, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10 }} />
+                  <YAxis type="category" dataKey="wilayah" tick={{ fontSize: 11, fontWeight: 700 }} width={40} />
+                  <Tooltip formatter={(value: number) => value.toLocaleString("en-PH")} />
+                  <Bar dataKey="diffSum" name="Selisih" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="diffSum" position="right" style={{ fontSize: 10, fill: "var(--text3)" }} formatter={(v: number) => v.toLocaleString("en-PH")} />
+                    {wilayahStats.map(w => <Cell key={w.wilayah} fill={WILAYAH_CLR[w.wilayah] || "#64748B"} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
           {/* Search + filter */}
