@@ -25,15 +25,18 @@ const NAV_SUPPORT_LOKAL = [
   { icon: Cloud,  label: "OwnCloud Logs", path: "/dashboard/owncloud-admin", desc: "Log aktivitas OwnCloud", badge: "Log", badgeColor: "#0891B2" },
 ]
 
+// Urutan sesuai permintaan: Logix Tickets, Compare Target, Compare MPP,
+// MPP Health, Omzet PHI, Sharing Knowledge, Backlog PHI. "Data Transfer"
+// dirender terpisah (sub-group nested) SEBELUM list ini. "Productivity
+// Compare" sementara dihapus dari sidebar.
 const NAV_SUPPORT_PHI = [
-  { icon: BarChart3,  label: "Compare Target",     path: "/dashboard/target-compare",    desc: "Excel vs Ficom sampai Pcode", badge: "Target", badgeColor: "#0369A1" },
-  { icon: TrendingUp, label: "Productivity Compare", path: "/dashboard/productivity-compare", desc: "Target vs Realisasi per komponen", badge: "Prod", badgeColor: "#16A34A" },
   { icon: Ticket,     label: "Ticket Logix",       path: "/dashboard/logix-tickets",     desc: "Monitoring tiket Log Support Excellent", badge: "Logix", badgeColor: "#DC2626" },
-  { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
-  { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
-  { icon: Activity,      label: "MPP Health",          path: "/dashboard/mpp-health",     desc: "SFA Hierarchy Monitoring",    badge: "MPP",    badgeColor: "#1E3A5F" },
+  { icon: BarChart3,  label: "Compare Target",     path: "/dashboard/target-compare",    desc: "Excel vs Ficom sampai Pcode", badge: "Target", badgeColor: "#0369A1" },
   { icon: GitCompare,    label: "Compare MPP",         path: "/dashboard/mpp-compare",    desc: "Ficom Lite vs EDI Salesman Aktif", badge: "MPP", badgeColor: "#0369A1" },
+  { icon: Activity,      label: "MPP Health",          path: "/dashboard/mpp-health",     desc: "SFA Hierarchy Monitoring",    badge: "MPP",    badgeColor: "#1E3A5F" },
   { icon: DollarSign,    label: "Omzet PHI",           path: "/dashboard/omzet-phi",      desc: "Pareto ADP: omset vs target per bulan", badge: "Omset", badgeColor: "#16A34A" },
+  { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
+  { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
 ]
 
 // Sub-group "Data Transfer" di dalam Support PHI — nested 2 level
@@ -323,9 +326,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#DC2626"
             />
             <NestedContainer open={supportPhiOpen} lineColor="rgba(220,38,38,0.3)" maxHeight="760px">
-              {NAV_SUPPORT_PHI.map(item => <NestedBtn key={item.path} {...item} />)}
-
-              {/* Sub-group "Data Transfer" — nested 2 level di dalam Support PHI */}
+              {/* Sub-group "Data Transfer" — nested 2 level di dalam Support PHI, ditaruh paling atas */}
               <button onClick={() => setDataTransferOpen(v => !v)}
                 style={{
                   display: "flex", alignItems: "center", gap: "10px",
@@ -357,6 +358,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
                   </div>
                 </div>
               </div>
+
+              {NAV_SUPPORT_PHI.map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
