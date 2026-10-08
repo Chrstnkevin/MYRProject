@@ -14,13 +14,14 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
-  AlertCircle, CheckCircle2, Clock, MapPin, Building2,
+  AlertCircle, CheckCircle2, Clock, MapPin, Building2, Copy, Check,
 } from "lucide-react"
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, LabelList, Cell,
 } from "recharts"
 import { supabase } from "@/lib/supabase"
+import MotivationBanner from "@/components/layout/MotivationBanner"
 
 const HO_BASE = "http://52.163.214.18:8081/api/ho/dashboard-subdist"
 
@@ -116,6 +117,24 @@ function fmtPeso(n: number | null): string {
   if (n == null) return "-"
   return "₱" + Math.round(n).toLocaleString("en-PH")
 }
+// Sapaan otomatis sesuai jam saat tombol "Salin Pesan Update" diklik,
+// biar pesannya nggak basi kalau di-copy di luar sore hari.
+function greetingNow(): string {
+  const h = new Date().getHours()
+  if (h < 10) return "Selamat pagi"
+  if (h < 15) return "Selamat siang"
+  if (h < 18) return "Selamat sore"
+  return "Selamat malam"
+}
+// "08 Oktober 2026 15.23 WIB" — format persis kayak contoh template user.
+function fmtCutoff(iso: string): string {
+  const d = new Date(iso)
+  const day = String(d.getDate()).padStart(2, "0")
+  const month = d.toLocaleDateString("id-ID", { month: "long" })
+  const hh = String(d.getHours()).padStart(2, "0")
+  const mm = String(d.getMinutes()).padStart(2, "0")
+  return `${day} ${month} ${d.getFullYear()} ${hh}.${mm} WIB`
+}
 
 export default function HoTransferPage() {
   const [rows, setRows] = useState<SnapshotRow[]>([])
@@ -125,6 +144,7 @@ export default function HoTransferPage() {
 
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState("")
+  const [copied, setCopied] = useState(false)
 
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [search, setSearch] = useState("")
@@ -274,6 +294,25 @@ export default function HoTransferPage() {
 
   const pctTepatOverall = activeRows.length > 0 ? Math.round((tepatCount / activeRows.length) * 100) : 0
 
+  // Pesan update siap-kirim — "Naik"/"Belum Naik" pakai angka LANGSUNG
+  // dari endpoint /percentage HO (totalNaik/total, tersimpan di
+  // ho_transfer_summary), bukan hitungan terlambat/tepat kita sendiri,
+  // biar konsisten sama istilah yang dipakai sistem HO-nya ("naik").
+  async function handleCopyUpdate() {
+    const cutoffSrc = activeRows[0]?.synced_at || new Date().toISOString()
+    const total = activeSummary?.total ?? activeRows.length
+    const naik = activeSummary?.total_naik ?? tepatCount
+    const belumNaik = total - naik
+    const msg = `${greetingNow()} pak\nBerikut adalah status Data Transfer HO cut off ${fmtCutoff(cutoffSrc)}\n\n* Total ADP: ${total} ADP\n* Total ADP Telah Naik: ${naik} ADP\n* Total ADP Belum Naik: ${belumNaik} ADP\n\nTerimakasih pak`
+    try {
+      await navigator.clipboard.writeText(msg)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setSyncMsg("❌ Gagal menyalin ke clipboard — browser mungkin memblokir akses clipboard")
+    }
+  }
+
   if (loading && rows.length === 0) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
       <div style={{ width: 32, height: 32, border: "3px solid #1E3A5F", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
@@ -283,7 +322,9 @@ export default function HoTransferPage() {
   )
 
   return (
-    <div style={{ padding: "20px 24px", fontFamily: "'Plus Jakarta Sans',sans-serif", background: "var(--bg)", minHeight: "100%", display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ minHeight: "100%", background: "var(--bg)" }}>
+      <MotivationBanner page="data-transfer" />
+      <div style={{ padding: "20px 24px", fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Banner */}
       <div style={{ background: "linear-gradient(135deg,#0E4D64,#0891B2)", borderRadius: 14, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
@@ -310,6 +351,11 @@ export default function HoTransferPage() {
               title="Tarik data terbaru langsung dari HO (perlu akses jaringan yang bisa jangkau 52.163.214.18)"
               style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: syncing ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.18)", cursor: syncing ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ animation: syncing ? "spin 0.8s linear infinite" : "none", display: "inline-block" }}>⚡</span> {syncing ? "Sync..." : "Sync dari HO"}
+            </button>
+            <button onClick={handleCopyUpdate} disabled={!activeDate}
+              title="Salin pesan status update siap-kirim (WhatsApp/email)"
+              style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.25)", background: copied ? "#16A34A" : "rgba(255,255,255,0.18)", cursor: activeDate ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 700, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5, opacity: activeDate ? 1 : 0.5 }}>
+              {copied ? <Check size={13} /> : <Copy size={13} />} {copied ? "Tersalin!" : "Salin Pesan Update"}
             </button>
             <button onClick={loadData} disabled={loading} style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.1)", cursor: "pointer", fontSize: 11, color: "white", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
               <span style={{ animation: loading ? "spin 0.8s linear infinite" : "none", display: "inline-block" }}>↻</span> Refresh
@@ -351,15 +397,15 @@ export default function HoTransferPage() {
               { label: "TEPAT WAKTU", value: String(tepatCount), color: "#16A34A", icon: CheckCircle2 },
               { label: "% NAIK (DARI HO)", value: activeSummary ? `${activeSummary.percentage}%` : "n/a", sub: activeSummary ? `${activeSummary.total_naik}/${activeSummary.total} subdist` : undefined, color: "#7C3AED", icon: AlertCircle },
             ].map((c, i) => (
-              <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                  <span style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em" }}>{c.label}</span>
-                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: c.color + "1A", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <c.icon size={13} color={c.color} />
+              <div key={i} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "9px 11px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                  <span style={{ fontSize: 9, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.02em" }}>{c.label}</span>
+                  <div style={{ width: 19, height: 19, borderRadius: "50%", background: c.color + "1A", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <c.icon size={10} color={c.color} />
                   </div>
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</div>
-                {c.sub && <div style={{ fontSize: 10, color: "var(--text3)", marginTop: 2 }}>{c.sub}</div>}
+                <div style={{ fontSize: 18, fontWeight: 800, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</div>
+                {c.sub && <div style={{ fontSize: 9, color: "var(--text3)", marginTop: 1 }}>{c.sub}</div>}
               </div>
             ))}
           </div>
@@ -607,6 +653,7 @@ export default function HoTransferPage() {
           </div>
         </>
       )}
+      </div>
     </div>
   )
 }

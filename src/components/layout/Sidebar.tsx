@@ -31,11 +31,17 @@ const NAV_SUPPORT_PHI = [
   { icon: Ticket,     label: "Ticket Logix",       path: "/dashboard/logix-tickets",     desc: "Monitoring tiket Log Support Excellent", badge: "Logix", badgeColor: "#DC2626" },
   { icon: ClipboardList, label: "Backlog PHI",         path: "/dashboard/backlog-phi",    desc: "Concern & request PHI",       badge: "PHI",    badgeColor: "#DC2626" },
   { icon: Globe,         label: "Sharing Knowledge",   path: "/dashboard/landing-admin",  desc: "Tutorial, Infografis & Zoom", badge: undefined, badgeColor: undefined },
-  { icon: Radio,         label: "Data Transfer Ficom", path: "/dashboard/data-transfer",  desc: "Monitor EDI & transfer",      badge: "EDI",    badgeColor: "#0891B2" },
   { icon: Activity,      label: "MPP Health",          path: "/dashboard/mpp-health",     desc: "SFA Hierarchy Monitoring",    badge: "MPP",    badgeColor: "#1E3A5F" },
   { icon: GitCompare,    label: "Compare MPP",         path: "/dashboard/mpp-compare",    desc: "Ficom Lite vs EDI Salesman Aktif", badge: "MPP", badgeColor: "#0369A1" },
   { icon: DollarSign,    label: "Omzet PHI",           path: "/dashboard/omzet-phi",      desc: "Pareto ADP: omset vs target per bulan", badge: "Omset", badgeColor: "#16A34A" },
-  { icon: RefreshCw,     label: "Data Transfer HO",    path: "/dashboard/ho-transfer",    desc: "Status transfer data per subdist (HO)", badge: "HO", badgeColor: "#0891B2" },
+]
+
+// Sub-group "Data Transfer" di dalam Support PHI — nested 2 level
+// (Support PHI > Data Transfer > Web Ficom/Matrix HO), beda dari grup
+// lain yang cuma 1 level.
+const NAV_DATA_TRANSFER = [
+  { icon: Radio,     label: "Web Ficom", path: "/dashboard/data-transfer", desc: "Monitor EDI & transfer",                badge: "EDI", badgeColor: "#0891B2" },
+  { icon: RefreshCw, label: "Matrix HO", path: "/dashboard/ho-transfer",   desc: "Status transfer data per subdist (HO)", badge: "HO",  badgeColor: "#0891B2" },
 ]
 
 const NAV_BACKUP_RESTORE = [
@@ -100,7 +106,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
 
   const isProductivityActive  = NAV_PRODUCTIVITY.some(n => pathname.startsWith(n.path))
   const isSupportLokalActive  = NAV_SUPPORT_LOKAL.some(n => pathname.startsWith(n.path))
-  const isSupportPhiActive    = NAV_SUPPORT_PHI.some(n => pathname.startsWith(n.path))
+  const isDataTransferActive  = NAV_DATA_TRANSFER.some(n => pathname.startsWith(n.path))
+  const isSupportPhiActive    = NAV_SUPPORT_PHI.some(n => pathname.startsWith(n.path)) || isDataTransferActive
   const isBackupRestoreActive = NAV_BACKUP_RESTORE.some(n => pathname.startsWith(n.path))
   const isUtilisasiActive     = NAV_UTILISASI.some(n => pathname.startsWith(n.path))
   const isMasterActive        = NAV_MASTER.some(n => pathname.startsWith(n.path))
@@ -109,6 +116,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const [productivityOpen,  setProductivityOpen]  = useState(isProductivityActive)
   const [supportLokalOpen,  setSupportLokalOpen]  = useState(isSupportLokalActive)
   const [supportPhiOpen,    setSupportPhiOpen]    = useState(isSupportPhiActive)
+  const [dataTransferOpen,  setDataTransferOpen]  = useState(isDataTransferActive)
   const [backupRestoreOpen, setBackupRestoreOpen] = useState(isBackupRestoreActive)
   const [utilisasiOpen,     setUtilisasiOpen]     = useState(isUtilisasiActive)
   const [masterOpen,        setMasterOpen]        = useState(isMasterActive)
@@ -316,6 +324,39 @@ export default function Sidebar({ isOpen, onClose }: Props) {
             />
             <NestedContainer open={supportPhiOpen} lineColor="rgba(220,38,38,0.3)">
               {NAV_SUPPORT_PHI.map(item => <NestedBtn key={item.path} {...item} />)}
+
+              {/* Sub-group "Data Transfer" — nested 2 level di dalam Support PHI */}
+              <button onClick={() => setDataTransferOpen(v => !v)}
+                style={{
+                  display: "flex", alignItems: "center", gap: "10px",
+                  padding: "8px 10px 8px 34px", borderRadius: "var(--radius-sm)",
+                  border: "none", cursor: "pointer", width: "100%", textAlign: "left",
+                  transition: "all 0.15s",
+                  background: isDataTransferActive && !dataTransferOpen ? "var(--accent-muted)" : "transparent",
+                  fontFamily: "'Plus Jakarta Sans', sans-serif",
+                }}>
+                <div style={{
+                  width: "28px", height: "28px", borderRadius: "8px", flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: isDataTransferActive ? "#0891B2" : "var(--surface3)",
+                  transition: "all 0.15s",
+                }}>
+                  <RefreshCcw size={14} color={isDataTransferActive ? "white" : "var(--text3)"} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: "12px", fontWeight: isDataTransferActive ? 700 : 500, color: isDataTransferActive ? "#0891B2" : "var(--text)" }}>Data Transfer</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Web Ficom & Matrix HO</div>
+                </div>
+                {dataTransferOpen ? <ChevronDown size={13} color="var(--text3)" /> : <ChevronRight size={13} color="var(--text3)" />}
+              </button>
+              <div style={{ overflow: "hidden", maxHeight: dataTransferOpen ? "200px" : "0px", transition: "max-height 0.28s cubic-bezier(0.22,1,0.36,1)" }}>
+                <div style={{ paddingLeft: "22px", display: "flex", flexDirection: "column", gap: "2px" }}>
+                  <div style={{ position: "relative" }}>
+                    <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: "rgba(8,145,178,0.3)", borderRadius: "99px" }} />
+                    {NAV_DATA_TRANSFER.map(item => <NestedBtn key={item.path} {...item} />)}
+                  </div>
+                </div>
+              </div>
             </NestedContainer>
           </div>
 
