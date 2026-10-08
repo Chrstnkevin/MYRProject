@@ -27,7 +27,7 @@ interface TabConfig {
 }
 
 const TABS: TabConfig[] = [
-  { key: "masa-sfa",           label: "MASA SFA",              ediId: "EDI200001",  ediNm: "EDI OMSET DASHBOARD",         desc: "Sumber data Data Transfer Web Ficom (tgl gudang, HKA/HKE, release). Auto-refresh tiap jam lewat cron, bisa juga ditarik manual di sini.", ready: true, table: "edi_transfer_staging", syncEndpoint: "/api/ficom-edi-sync" },
+  { key: "masa-sfa",           label: "Omset Dashboard",       ediId: "EDI200001",  ediNm: "EDI OMSET DASHBOARD",         desc: "Sumber data Data Transfer Web Ficom (tgl gudang, HKA/HKE, release). Auto-refresh tiap jam lewat cron, bisa juga ditarik manual di sini.", ready: true, table: "edi_transfer_staging", syncEndpoint: "/api/ficom-edi-sync" },
   { key: "productivity",       label: "Productivity",          ediId: "EDI2600006", ediNm: "EDI FICOM LITE PRODUCTIVITY", desc: "Sumber data Productivity Compare (target vs realisasi per komponen). Auto-refresh tiap jam lewat cron (awal bulan s.d. hari ini), atau tarik manual dengan Date From/To sendiri di sini — termasuk buat tarik ulang bulan lampau.", ready: true, table: "ficom_productivity_staging", syncEndpoint: "/api/ficom-productivity-sync" },
   { key: "visit",               label: "Visit",                 ediId: "EDI2600008", ediNm: "EDI FICOM LITE VISIT",        desc: "Data kunjungan salesman per outlet. Date From/To diketik manual — default disarankan hari ini (maxday).", ready: true, table: "edi_visit_staging", syncEndpoint: "/api/ficom-edi-visit-sync" },
   { key: "hirarki",             label: "Hirarki SD-Salesman",   ediId: "EDI260001",  ediNm: "EDI Hirarki SD - Salesman",   desc: "Snapshot lengkap hierarki SD → NSM → GRSM → RSM → SS → Salesman per distributor. Tidak ada parameter tanggal.", ready: true, table: "edi_hirarki_staging", syncEndpoint: "/api/ficom-edi-hirarki-sync" },
@@ -60,6 +60,16 @@ export default function EdiPage() {
   const [filterCol, setFilterCol] = useState("")
   const [filterVal, setFilterVal] = useState("")
 
+  // ── Filter khusus tab Visit — beda dari "Filter kolom" generik (yang cuma
+  // bisa 1 kolom + 1 nilai sekaligus), di sini bisa gabung beberapa field
+  // bersamaan (distributor_id + status + rentang GPS dst). longitude_outlet
+  // "0" artinya outlet nggak kecatet titik GPS-nya (bukan di garis khatulistiwa).
+  const [visitFilters, setVisitFilters] = useState({
+    distributor_id: "", visit_id: "", cust_id: "", sls_id: "",
+    visit_date: "", status: "", gps: "all" as "all" | "zero" | "nonzero",
+  })
+  const resetVisitFilters = () => setVisitFilters({ distributor_id: "", visit_id: "", cust_id: "", sls_id: "", visit_date: "", status: "", gps: "all" })
+
   const today = ficomDateNoPad(new Date())
   const [visitFrom, setVisitFrom] = useState(today)
   const [visitTo, setVisitTo] = useState(today)
@@ -78,7 +88,7 @@ export default function EdiPage() {
   }, [])
 
   useEffect(() => {
-    setMsg(""); setSearch(""); setFilterCol(""); setFilterVal("")
+    setMsg(""); setSearch(""); setFilterCol(""); setFilterVal(""); resetVisitFilters()
     if (active.table) loadPreview(active.table)
     else setRows([])
   }, [tab, active.table, loadPreview])
@@ -95,7 +105,7 @@ export default function EdiPage() {
       const res = await fetch(active.syncEndpoint, opts)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Sync gagal")
-      setMsg(`✅ ${data.rows} baris tersinkron dari Ficom`)
+      setMsg(`✅ ${data.rows} baris tersinkron dari Ficom${data.warning ? ` — ⚠️ ${data.warning}` : ""}`)
       if (active.table) await loadPreview(active.table)
     } catch (e) {
       setMsg("❌ " + (e instanceof Error ? e.message : String(e)))
@@ -115,14 +125,38 @@ export default function EdiPage() {
     return Array.from(set).sort()
   }, [rows, filterCol])
 
+  // Opsi dropdown "Status" di filter Visit — nilai unik yang ada di 300 baris
+  // preview terbaru (sama kayak filterOptions generik di atas).
+  const visitStatusOptions = useMemo(() => {
+    if (tab !== "visit") return []
+    const set = new Set<string>()
+    rows.forEach(r => { const v = r["status"]; if (v) set.add(String(v)) })
+    return Array.from(set).sort()
+  }, [rows, tab])
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
     return rows.filter(r => {
       if (filterCol && filterVal && String(r[filterCol] ?? "") !== filterVal) return false
       if (q && !columns.some(c => String(r[c] ?? "").toLowerCase().includes(q))) return false
+      if (tab === "visit") {
+        const vf = visitFilters
+        if (vf.distributor_id && !String(r["distributor_id"] ?? "").toLowerCase().includes(vf.distributor_id.toLowerCase())) return false
+        if (vf.visit_id && !String(r["visit_id"] ?? "").toLowerCase().includes(vf.visit_id.toLowerCase())) return false
+        if (vf.cust_id && !String(r["cust_id"] ?? "").toLowerCase().includes(vf.cust_id.toLowerCase())) return false
+        if (vf.sls_id && !String(r["sls_id"] ?? "").toLowerCase().includes(vf.sls_id.toLowerCase())) return false
+        if (vf.visit_date && String(r["visit_date"] ?? "") !== vf.visit_date) return false
+        if (vf.status && String(r["status"] ?? "") !== vf.status) return false
+        if (vf.gps !== "all") {
+          const lon = parseFloat(String(r["longitude_outlet"] ?? "0"))
+          const isZero = !lon || lon === 0
+          if (vf.gps === "zero" && !isZero) return false
+          if (vf.gps === "nonzero" && isZero) return false
+        }
+      }
       return true
     })
-  }, [rows, search, filterCol, filterVal, columns])
+  }, [rows, search, filterCol, filterVal, columns, tab, visitFilters])
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -247,6 +281,39 @@ export default function EdiPage() {
                 )}
               </div>
             </div>
+
+            {tab === "visit" && (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", marginBottom: "8px" }}>
+                <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Filter:</span>
+                <input value={visitFilters.distributor_id} onChange={e => setVisitFilters(f => ({ ...f, distributor_id: e.target.value }))}
+                  placeholder="Distributor ID" style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit", width: "100px" }} />
+                <input value={visitFilters.visit_id} onChange={e => setVisitFilters(f => ({ ...f, visit_id: e.target.value }))}
+                  placeholder="Visit ID" style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit", width: "90px" }} />
+                <input value={visitFilters.cust_id} onChange={e => setVisitFilters(f => ({ ...f, cust_id: e.target.value }))}
+                  placeholder="Cust ID" style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit", width: "90px" }} />
+                <input value={visitFilters.sls_id} onChange={e => setVisitFilters(f => ({ ...f, sls_id: e.target.value }))}
+                  placeholder="SLS ID" style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit", width: "90px" }} />
+                <input type="date" value={visitFilters.visit_date} onChange={e => setVisitFilters(f => ({ ...f, visit_date: e.target.value }))}
+                  style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit" }} />
+                <select value={visitFilters.status} onChange={e => setVisitFilters(f => ({ ...f, status: e.target.value }))}
+                  style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit" }}>
+                  <option value="">Semua Status</option>
+                  {visitStatusOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select value={visitFilters.gps} onChange={e => setVisitFilters(f => ({ ...f, gps: e.target.value as typeof f.gps }))}
+                  style={{ fontSize: "11px", padding: "6px 8px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontFamily: "inherit" }}>
+                  <option value="all">GPS: Semua</option>
+                  <option value="zero">GPS: Longitude 0 (tanpa GPS)</option>
+                  <option value="nonzero">GPS: Longitude ≠ 0 (ada GPS)</option>
+                </select>
+                {(visitFilters.distributor_id || visitFilters.visit_id || visitFilters.cust_id || visitFilters.sls_id || visitFilters.visit_date || visitFilters.status || visitFilters.gps !== "all") && (
+                  <button onClick={resetVisitFilters}
+                    style={{ fontSize: "11px", padding: "6px 10px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text3)", cursor: "pointer", fontFamily: "inherit" }}>
+                    Reset Filter
+                  </button>
+                )}
+              </div>
+            )}
 
             <div style={{ border: "1px solid var(--border)", borderRadius: "10px", overflow: "auto", maxHeight: "440px" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px" }}>
