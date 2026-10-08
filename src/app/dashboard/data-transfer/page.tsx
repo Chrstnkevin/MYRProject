@@ -11,7 +11,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react"
 import {
   RefreshCw, Upload, X, Search, ChevronDown, ChevronRight,
   CheckCircle, AlertCircle, Clock, Calendar, Radio, Save,
-  Filter, TriangleAlert, Info
+  Filter, TriangleAlert, Info, Copy, Check
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { parseEdiText } from "@/lib/parseEdiText"
@@ -177,6 +177,7 @@ export default function DataTransferPage() {
   const [master,       setMaster]       = useState<MasterRow[]>([])
   const [loading,      setLoading]      = useState(false)
   const [lastRefresh,  setLastRefresh]  = useState<Date|null>(null)
+  const [copiedUpdate, setCopiedUpdate] = useState(false)
   const [baseline,     setBaseline]     = useState(() => {
     const today = new Date().toISOString().slice(0, 10)
     return getBaseline(today)
@@ -345,6 +346,29 @@ export default function DataTransferPage() {
     const ok = activeRows.filter(r => r.lama <= 0).length
     return { ok, total: activeRows.length, p: pct(ok, activeRows.length) }
   }, [activeRows])
+
+  // Pesan update siap-kirim — cutoff pakai lastRefresh (waktu data
+  // terakhir di-refresh di halaman ini), persentase pakai angka yang
+  // SAMA dengan card "Overall ADP" (overall.p) biar konsisten sama yang
+  // ketampil di layar.
+  async function handleCopyUpdate() {
+    const d = lastRefresh || new Date()
+    const day = d.getDate()
+    const month = d.toLocaleDateString("en-US", { month: "short" })
+    const hh = String(d.getHours()).padStart(2, "0")
+    const mm = String(d.getMinutes()).padStart(2, "0")
+    const cutoff = `${day} ${month} ${d.getFullYear()} ${hh}:${mm} WIB`
+    const h = d.getHours()
+    const greeting = h < 10 ? "Selamat pagi" : h < 15 ? "Selamat siang" : h < 18 ? "Selamat sore" : "Selamat malam"
+    const msg = `Dear pak \n\n${greeting} pak. Berikut adalah tarikan Data Transfer Web Ficom cut off ${cutoff} per ADP dengan presentase ${overall.p}%. \n\nTerimakasih pak`
+    try {
+      await navigator.clipboard.writeText(msg)
+      setCopiedUpdate(true)
+      setTimeout(() => setCopiedUpdate(false), 2000)
+    } catch {
+      setFicomSyncMsg("❌ Gagal menyalin ke clipboard — browser mungkin memblokir akses clipboard")
+    }
+  }
 
   const activeWfRows = useMemo(() => wfRows.filter(r => !r.excluded), [wfRows])
   const overallWf = useMemo(() => {
@@ -723,6 +747,14 @@ export default function DataTransferPage() {
             style={{ display:"flex", alignItems:"center", gap:"5px", padding:"7px 10px", borderRadius:"8px", border:"1px solid var(--border)", background:"var(--surface2)", color:"var(--text3)", fontSize:"12px", cursor:"pointer", fontFamily:"inherit" }}>
             <RefreshCw size={13} style={{ animation: loading?"spin 1s linear infinite":"none" }}/>
             {lastRefresh ? lastRefresh.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}) : "Refresh"}
+          </button>
+
+          {/* Salin Pesan Update */}
+          <button onClick={handleCopyUpdate}
+            title="Salin pesan update status Data Transfer Web Ficom ke clipboard"
+            style={{ display:"flex", alignItems:"center", gap:"6px", padding:"7px 14px", borderRadius:"8px", border:"none", background:copiedUpdate?"#16A34A":"rgba(8,145,178,0.12)", color:copiedUpdate?"white":"#0891B2", fontSize:"12px", fontWeight:700, cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}>
+            {copiedUpdate ? <Check size={13}/> : <Copy size={13}/>}
+            {copiedUpdate ? "Tersalin!" : "Salin Pesan Update"}
           </button>
 
           {/* Tabs */}

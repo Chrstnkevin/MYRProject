@@ -211,8 +211,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
     </button>
   )
 
-  const NestedContainer = ({ open, children, lineColor }: { open: boolean; children: React.ReactNode; lineColor?: string }) => (
-    <div style={{ overflow: "hidden", maxHeight: open ? "500px" : "0px", transition: "max-height 0.28s cubic-bezier(0.22,1,0.36,1)" }}>
+  const NestedContainer = ({ open, children, lineColor, maxHeight }: { open: boolean; children: React.ReactNode; lineColor?: string; maxHeight?: string }) => (
+    <div style={{ overflow: "hidden", maxHeight: open ? (maxHeight || "500px") : "0px", transition: "max-height 0.28s cubic-bezier(0.22,1,0.36,1)" }}>
       <div style={{ paddingLeft: "14px", paddingTop: "2px", display: "flex", flexDirection: "column", gap: "2px" }}>
         <div style={{ position: "relative" }}>
           <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: lineColor || "var(--border2)", borderRadius: "99px" }} />
@@ -322,7 +322,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               onToggle={() => setSupportPhiOpen(v => !v)}
               accentColor="#DC2626"
             />
-            <NestedContainer open={supportPhiOpen} lineColor="rgba(220,38,38,0.3)">
+            <NestedContainer open={supportPhiOpen} lineColor="rgba(220,38,38,0.3)" maxHeight="760px">
               {NAV_SUPPORT_PHI.map(item => <NestedBtn key={item.path} {...item} />)}
 
               {/* Sub-group "Data Transfer" — nested 2 level di dalam Support PHI */}
