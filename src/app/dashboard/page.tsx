@@ -8,7 +8,7 @@ import {
   CheckCircle2, Clock, Ban, ListTodo, Database,
   FileText, ArrowUpRight, AlertTriangle, ShieldCheck,
   Users, Shield, KeyRound, Building2,
-  Ticket, ClipboardList, Activity, Target,
+  Ticket, ClipboardList, Activity, Target, Radio, RefreshCw,
 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { useRouter } from "next/navigation"
@@ -37,6 +37,63 @@ function getWeekNumber(d: Date) {
   return Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
 }
 
+// ── Helper buat ringkasan "Laporan Data Transfer" (Web Ficom & Matrix HO) ──
+// Diadaptasi dari logic yang sama persis di data-transfer/page.tsx, dipangkas
+// cuma buat ngitung % overall + breakdown per wilayah (bukan tabel detail).
+function pct(n: number, d: number) { return d === 0 ? 0 : Math.round(n / d * 1000) / 10 }
+
+function statusColor(p: number): string {
+  if (p >= 90) return "#16A34A"
+  if (p >= 70) return "#D97706"
+  return "#DC2626"
+}
+
+function parseTglGudang(raw: string | null | undefined): string {
+  if (!raw) return ""
+  const s = String(raw)
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  const months: Record<string, string> = {
+    JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
+    JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12",
+  }
+  const parts = s.trim().toUpperCase().split(/\s+/)
+  if (parts.length === 3) {
+    const [d, m, y] = parts
+    return `${y}-${months[m] || "01"}-${d.padStart(2, "0")}`
+  }
+  return ""
+}
+
+function getBaseline(fromDateISO: string): string {
+  // h-1, tapi Senin → h-3 (Jumat), Minggu → h-2 (Jumat) — sama kayak data-transfer
+  const d = new Date(fromDateISO)
+  const day = d.getDay()
+  const sub = day === 1 ? 3 : day === 0 ? 2 : 1
+  d.setDate(d.getDate() - sub)
+  return d.toISOString().slice(0, 10)
+}
+
+function calcLama(tglISO: string, baselineISO: string): number {
+  if (!tglISO || !baselineISO) return 99
+  const t = new Date(tglISO + "T12:00:00").setHours(0, 0, 0, 0)
+  const b = new Date(baselineISO + "T12:00:00").setHours(0, 0, 0, 0)
+  return Math.round((b - t) / 86400000)
+}
+
+const WILAYAH_ORDER = ["GMA", "NOL", "SOL", "VIS", "MIN"]
+const WILAYAH_CLR: Record<string, string> = {
+  GMA: "#D97706", NOL: "#2563EB", SOL: "#9333EA", VIS: "#0891B2", MIN: "#EF4444",
+}
+function sortWilayah<T extends { wilayah: string }>(rows: T[]): T[] {
+  return rows.sort((a, b) => {
+    const ia = WILAYAH_ORDER.indexOf(a.wilayah), ib = WILAYAH_ORDER.indexOf(b.wilayah)
+    if (ia === -1 && ib === -1) return a.wilayah.localeCompare(b.wilayah)
+    if (ia === -1) return 1
+    if (ib === -1) return -1
+    return ia - ib
+  })
+}
+
 export default function HomePage() {
   const router = useRouter()
   const now          = new Date()
@@ -53,6 +110,16 @@ export default function HomePage() {
   // ── Ringkasan fitur lain (Logix, Backlog PHI, MPP Health, Compare Target) ──
   const [logixSummary, setLogixSummary] = useState<{ total: number; open: number; appsR1: number; openBr: number; solved: number } | null>(null)
   const [logixLoading, setLogixLoading] = useState(true)
+
+  // ── Laporan Data Transfer: Web Ficom (edi_transfer_staging) & Matrix HO (ho_transfer_summary) ──
+  const [ficomTransferSummary, setFicomTransferSummary] = useState<{
+    ok: number; total: number; p: number
+    byWilayah: { wilayah: string; ok: number; total: number }[]
+  } | null>(null)
+  const [hoTransferSummary, setHoTransferSummary] = useState<{
+    totalNaik: number; total: number; percentage: number; snapshotDate: string
+    byWilayah: { wilayah: string; naik: number; total: number }[]
+  } | null>(null)
   const [backlogSummary, setBacklogSummary] = useState<{ total: number; open: number; progress: number; done: number; hold: number } | null>(null)
   const [mppHealth, setMppHealth] = useState<{ subdist_issue: number; impacted_salesman: number; snapshot_time: string } | null>(null)
     const [compareSummary, setCompareSummary] = useState<{
@@ -104,6 +171,72 @@ export default function HomePage() {
         setLogixLoading(false)
       })
       .catch(() => setLogixLoading(false))
+
+    // Web Ficom — replikasi hitungan "Overall ADP" dari data-transfer/page.tsx
+    // (dedup per distributor_id ambil tgl_gudang terbaru, exclude kalau
+    // remarks master="Inactive" atau di-override manual, baseline default
+    // h-1/h-3 Senin/h-2 Minggu — SELALU default karena baseline cuma state
+    // lokal di halaman itu, nggak disimpan ke DB).
+    Promise.all([
+      supabase.from("edi_transfer_staging").select("distributor_id,tgl_gudang"),
+      supabase.from("master_data_adp").select("adp_code,region_name,remarks"),
+      supabase.from("edi_transfer_overrides").select("distributor_id,excluded"),
+    ]).then(([{ data: staging }, { data: master }, { data: overrides }]) => {
+      if (!staging || !master) return
+      const masterMap = new Map<string, { region_name: string; remarks: string }>()
+      master.forEach((m: { adp_code: number; region_name: string; remarks: string }) => {
+        const key = String(m.adp_code)
+        const cur = masterMap.get(key)
+        if (!cur || (m.remarks !== "Inactive" && cur.remarks === "Inactive")) masterMap.set(key, m)
+      })
+      const overrideMap = new Map((overrides || []).map((r: { distributor_id: string; excluded: boolean }) => [r.distributor_id, r.excluded]))
+      const baseline = getBaseline(new Date().toISOString().slice(0, 10))
+      const dedup = new Map<string, string>() // distributor_id -> tgl_gudang terbaru
+      staging.forEach((r: { distributor_id: string; tgl_gudang: string }) => {
+        const key = String(r.distributor_id)
+        const cur = dedup.get(key)
+        if (!cur || parseTglGudang(r.tgl_gudang) > parseTglGudang(cur)) dedup.set(key, r.tgl_gudang)
+      })
+      let ok = 0, total = 0
+      const byW = new Map<string, { ok: number; total: number }>()
+      dedup.forEach((tglGudang, distId) => {
+        const m = masterMap.get(distId)
+        const excluded = overrideMap.has(distId) ? overrideMap.get(distId)! : (m ? m.remarks === "Inactive" : false)
+        if (excluded) return
+        const lama = calcLama(parseTglGudang(tglGudang), baseline)
+        const wilayah = m?.region_name || "Lainnya"
+        total++; if (lama <= 0) ok++
+        const w = byW.get(wilayah) || { ok: 0, total: 0 }
+        w.total++; if (lama <= 0) w.ok++
+        byW.set(wilayah, w)
+      })
+      setFicomTransferSummary({
+        ok, total, p: pct(ok, total),
+        byWilayah: sortWilayah(Array.from(byW.entries()).map(([wilayah, v]) => ({ wilayah, ...v }))),
+      })
+    }).catch(() => {})
+
+    // Matrix HO — ambil snapshot terbaru dari ho_transfer_summary (sudah
+    // precomputed), lalu breakdown per wilayah dari ho_transfer_snapshot
+    // di tanggal snapshot yang sama.
+    Promise.resolve(supabase.from("ho_transfer_summary").select("*").order("snapshot_date", { ascending: false }).limit(1).maybeSingle())
+      .then(async ({ data: summaryRow }) => {
+        if (!summaryRow) return
+        const { data: rows } = await supabase.from("ho_transfer_snapshot")
+          .select("region_nm,terlambat").eq("snapshot_date", summaryRow.snapshot_date)
+        const byW = new Map<string, { naik: number; total: number }>()
+        ;(rows || []).forEach((r: { region_nm: string | null; terlambat: string | null }) => {
+          const wilayah = r.region_nm || "Lainnya"
+          const w = byW.get(wilayah) || { naik: 0, total: 0 }
+          w.total++; if (r.terlambat !== "T") w.naik++
+          byW.set(wilayah, w)
+        })
+        setHoTransferSummary({
+          totalNaik: summaryRow.total_naik, total: summaryRow.total, percentage: summaryRow.percentage,
+          snapshotDate: summaryRow.snapshot_date,
+          byWilayah: sortWilayah(Array.from(byW.entries()).map(([wilayah, v]) => ({ wilayah, ...v }))),
+        })
+      }).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -195,6 +328,154 @@ export default function HomePage() {
 
 
       <MotivationBanner page="home" />
+
+      {/* ── Laporan Harian: Data Transfer & Ticket Logix ── */}
+      {/* Satu panel ringkas buat ke-3 fitur yang paling sering di-screenshot
+          buat report harian (Web Ficom, Matrix HO, Ticket Logix) — jadi
+          tinggal screenshot panel ini sekali, nggak perlu bolak-balik 3 halaman. */}
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "10px", flexWrap: "wrap", gap: "6px" }}>
+          <div style={{ fontSize: "15px", fontWeight: 800, color: "var(--text)" }}>📊 Laporan Harian — Data Transfer & Ticket</div>
+          <div style={{ fontSize: "11px", color: "var(--text3)" }}>
+            {now.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" })}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "14px" }}>
+
+          {/* Web Ficom */}
+          <div className="card card-hover" style={{ padding: "18px 20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/data-transfer")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "34px", height: "34px", borderRadius: "9px", background: "linear-gradient(135deg,#0891B2,#0369A1)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Radio size={16} color="white" />
+                </div>
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 800, color: "var(--text)" }}>Web Ficom</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)" }}>Transfer EDI per ADP</div>
+                </div>
+              </div>
+              {ficomTransferSummary && (
+                <div style={{ fontSize: "22px", fontWeight: 800, color: statusColor(ficomTransferSummary.p), letterSpacing: "-0.03em" }}>
+                  {ficomTransferSummary.p}%
+                </div>
+              )}
+            </div>
+            {!ficomTransferSummary ? (
+              <div style={{ height: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
+            ) : (
+              <>
+                <div style={{ height: "7px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden", marginBottom: "6px" }}>
+                  <div style={{ height: "100%", width: `${ficomTransferSummary.p}%`, background: statusColor(ficomTransferSummary.p), borderRadius: "99px", transition: "width 0.8s ease" }} />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "12px" }}>
+                  <strong style={{ color: "var(--text)" }}>{ficomTransferSummary.ok}</strong>/{ficomTransferSummary.total} ADP sudah transfer
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                  {ficomTransferSummary.byWilayah.map(w => (
+                    <div key={w.wilayah} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ width: "28px", fontSize: "9px", fontWeight: 700, color: WILAYAH_CLR[w.wilayah] || "#64748B" }}>{w.wilayah}</span>
+                      <div style={{ flex: 1, height: "5px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pct(w.ok, w.total)}%`, background: WILAYAH_CLR[w.wilayah] || "#64748B", borderRadius: "99px" }} />
+                      </div>
+                      <span style={{ fontSize: "9px", color: "var(--text3)", width: "32px", textAlign: "right" }}>{w.ok}/{w.total}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Matrix HO */}
+          <div className="card card-hover" style={{ padding: "18px 20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/ho-transfer")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "34px", height: "34px", borderRadius: "9px", background: "linear-gradient(135deg,#2563EB,#1D4ED8)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <RefreshCw size={16} color="white" />
+                </div>
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 800, color: "var(--text)" }}>Matrix HO</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)" }}>Transfer data per subdist (HO)</div>
+                </div>
+              </div>
+              {hoTransferSummary && (
+                <div style={{ fontSize: "22px", fontWeight: 800, color: statusColor(hoTransferSummary.percentage), letterSpacing: "-0.03em" }}>
+                  {hoTransferSummary.percentage}%
+                </div>
+              )}
+            </div>
+            {!hoTransferSummary ? (
+              <div style={{ height: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
+            ) : (
+              <>
+                <div style={{ height: "7px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden", marginBottom: "6px" }}>
+                  <div style={{ height: "100%", width: `${hoTransferSummary.percentage}%`, background: statusColor(hoTransferSummary.percentage), borderRadius: "99px", transition: "width 0.8s ease" }} />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "12px" }}>
+                  <strong style={{ color: "var(--text)" }}>{hoTransferSummary.totalNaik}</strong>/{hoTransferSummary.total} ADP sudah naik
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                  {hoTransferSummary.byWilayah.map(w => (
+                    <div key={w.wilayah} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ width: "28px", fontSize: "9px", fontWeight: 700, color: WILAYAH_CLR[w.wilayah] || "#64748B" }}>{w.wilayah}</span>
+                      <div style={{ flex: 1, height: "5px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${pct(w.naik, w.total)}%`, background: WILAYAH_CLR[w.wilayah] || "#64748B", borderRadius: "99px" }} />
+                      </div>
+                      <span style={{ fontSize: "9px", color: "var(--text3)", width: "32px", textAlign: "right" }}>{w.naik}/{w.total}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Ticket Logix */}
+          <div className="card card-hover" style={{ padding: "18px 20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/logix-tickets")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ width: "34px", height: "34px", borderRadius: "9px", background: "linear-gradient(135deg,#DC2626,#F97316)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Ticket size={16} color="white" />
+                </div>
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 800, color: "var(--text)" }}>Ticket Logix</div>
+                  <div style={{ fontSize: "10px", color: "var(--text3)" }}>Log Support Excellent</div>
+                </div>
+              </div>
+              {logixSummary && (
+                <div style={{ fontSize: "22px", fontWeight: 800, color: statusColor(pct(logixSummary.solved, logixSummary.total)), letterSpacing: "-0.03em" }}>
+                  {pct(logixSummary.solved, logixSummary.total)}%
+                </div>
+              )}
+            </div>
+            {logixLoading || !logixSummary ? (
+              <div style={{ height: "80px", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>
+                {logixLoading ? "Memuat..." : "Gagal memuat / kredensial belum diisi"}
+              </div>
+            ) : (
+              <>
+                <div style={{ height: "7px", background: "var(--surface3)", borderRadius: "99px", overflow: "hidden", marginBottom: "6px" }}>
+                  <div style={{ height: "100%", width: `${pct(logixSummary.solved, logixSummary.total)}%`, background: statusColor(pct(logixSummary.solved, logixSummary.total)), borderRadius: "99px", transition: "width 0.8s ease" }} />
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "12px" }}>
+                  <strong style={{ color: "var(--text)" }}>{logixSummary.solved}</strong>/{logixSummary.total} tiket solved
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "6px" }}>
+                  {[
+                    { label: "Open", val: logixSummary.open, color: "#991B1B" },
+                    { label: "APPS R1", val: logixSummary.appsR1, color: "#92400E" },
+                    { label: "Open BR", val: logixSummary.openBr, color: "#C2410C" },
+                  ].map(({ label, val, color }) => (
+                    <div key={label} style={{ background: "var(--surface3)", borderRadius: "8px", padding: "7px 4px", textAlign: "center" }}>
+                      <div style={{ fontSize: "15px", fontWeight: 800, color, letterSpacing: "-0.02em" }}>{val}</div>
+                      <div style={{ fontSize: "9px", color: "var(--text3)", marginTop: "1px" }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+        </div>
+      </div>
 
       {/* Unified Stats Panel */}
       <div className="card" style={{ padding: "20px", overflow: "hidden" }}>
@@ -418,43 +699,8 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Ringkasan fitur lain */}
+      {/* Ringkasan fitur lain — Ticket Logix dipindah ke panel "Laporan Harian" di atas, nggak diulang di sini */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
-
-        {/* Ticket Logix */}
-        <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/logix-tickets")}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-            <div>
-              <div className="label">Ticket Logix</div>
-              <div style={{ fontSize: "16px", fontWeight: 800, marginTop: "2px" }}>Log Support Excellent</div>
-            </div>
-            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#FEE2E2", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Ticket size={18} color="#DC2626" />
-            </div>
-          </div>
-          {logixLoading ? (
-            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px" }}>Memuat...</div>
-          ) : logixSummary ? (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                {[
-                  { label: "Open", val: logixSummary.open, color: "#991B1B" },
-                  { label: "APPS R1", val: logixSummary.appsR1, color: "#92400E" },
-                  { label: "Open BR", val: logixSummary.openBr, color: "#C2410C" },
-                  { label: "Solved", val: logixSummary.solved, color: "#166534" },
-                ].map(({ label, val, color }) => (
-                  <div key={label} style={{ background: "var(--surface3)", borderRadius: "var(--radius-sm)", padding: "8px 10px", textAlign: "center" }}>
-                    <div style={{ fontSize: "18px", fontWeight: 800, color, letterSpacing: "-0.03em" }}>{val}</div>
-                    <div style={{ fontSize: "10px", color: "var(--text3)", marginTop: "2px" }}>{label}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: "12px", fontSize: "11px", color: "var(--text3)" }}>Total {logixSummary.total} tiket</div>
-            </>
-          ) : (
-            <div style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text3)", fontSize: "12px", textAlign: "center" }}>Gagal memuat / kredensial belum diisi</div>
-          )}
-        </div>
 
         {/* Backlog PHI */}
         <div className="card card-hover" style={{ padding: "20px", cursor: "pointer" }} onClick={() => router.push("/dashboard/backlog-phi")}>

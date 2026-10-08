@@ -154,24 +154,6 @@ const SLA_TABS = [
 const SLA_COMPARE_TAB = { key: "compare", label: "Perbandingan" } as const
 type SlaTabKey = typeof SLA_TABS[number]["key"] | typeof SLA_COMPARE_TAB.key
 
-// Bucket "per hari" (Senin—Minggu) buat panel SLA — gabungin semua tanggal
-// yang jatuh di hari itu (dalam rentang periode yang dipilih) jadi 1 titik
-// rata-rata, alternatif dari bucket per-tanggal biasa.
-const WEEKDAY_LABELS = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
-function weekdayIndex(d: Date): number {
-  const js = d.getDay() // 0 = Minggu
-  return js === 0 ? 6 : js - 1 // geser jadi 0 = Senin
-}
-function isInPeriod(d: Date, period: string): boolean {
-  if (period === "ALL") {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const start = new Date(today); start.setDate(start.getDate() - 13)
-    const dd = new Date(d); dd.setHours(0, 0, 0, 0)
-    return dd >= start && dd <= today
-  }
-  const [y, m] = period.split("-").map(Number)
-  return d.getFullYear() === y && d.getMonth() === m - 1
-}
 // PENTING: pakai tanggal kalender LOKAL (bukan toISOString(), yang
 // konversi ke UTC) — kalau nggak, buat timezone lebih maju dari UTC
 // (WIB/WITA/WIT/Manila dst.), tengah malam lokal ke-geser MUNDUR satu
@@ -206,6 +188,20 @@ function fmtWeekLabel(weekStartIso: string): string {
   return `${startLabel}–${endLabel}`
 }
 
+// Nomor minggu ISO 8601 (Senin sebagai awal minggu, minggu 1 = minggu yang
+// memuat Kamis pertama tahun itu) — dipakai buat label "W41" dst di chart
+// Tiket per Minggu. Dihitung dalam UTC biar nggak kena geser timezone lokal.
+function isoWeekNumber(iso: string): number {
+  const d = new Date(iso + "T00:00:00Z")
+  const dayNum = (d.getUTCDay() + 6) % 7 // 0 = Senin
+  d.setUTCDate(d.getUTCDate() - dayNum + 3) // geser ke Kamis minggu itu
+  const firstThursday = d.getTime()
+  const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4))
+  const jan4DayNum = (jan4.getUTCDay() + 6) % 7
+  jan4.setUTCDate(jan4.getUTCDate() - jan4DayNum + 3)
+  return 1 + Math.round((firstThursday - jan4.getTime()) / (7 * 86400000))
+}
+
 export default function LogixTicketsPage() {
   const [tickets, setTickets] = useState<LogixTicket[]>([])
   const [recordsTotal, setRecordsTotal] = useState("0")
@@ -237,10 +233,12 @@ export default function LogixTicketsPage() {
     return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" })
   }
 
-  // ── Tab metrik + filter nama + mode grouping (tanggal/hari) di panel SLA ──
+  // ── Mode chart Tren: Harian (14 hari terakhir) atau Mingguan (per minggu, sejak 1 Agustus) ──
+  const [trendMode, setTrendMode] = useState<"daily" | "weekly">("daily")
+
+  // ── Tab metrik + filter nama di panel SLA ──
   const [slaTabKey, setSlaTabKey] = useState<SlaTabKey>("responTas")
   const [slaNameFilter, setSlaNameFilter] = useState("ALL")
-  const [slaGroupBy, setSlaGroupBy] = useState<"date" | "weekday">("date")
   const activeSlaTab = SLA_TABS.find(t => t.key === slaTabKey) ?? null
   const handleSlaTabChange = (key: SlaTabKey) => { setSlaTabKey(key); setSlaNameFilter("ALL") }
 
@@ -515,6 +513,28 @@ Terimakasih pak`
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tickets])
 
+  // Tren tiket dibuat per MINGGU (Senin—Minggu), mulai 1 Agustus tahun berjalan
+  // sampai minggu berjalan sekarang — beda dari trendData di atas yang cuma
+  // 14 hari terakhir. Label pakai nomor minggu ISO ("W41" dst, bukan rentang
+  // tanggal) biar ringkas dan konsisten sama penyebutan minggu sehari-hari.
+  const weeklyTrendData = useMemo(() => {
+    const aug1Iso = `${new Date().getFullYear()}-08-01`
+    const startWeek = startOfWeek(aug1Iso)
+    const endWeek = startOfWeek(isoDate(new Date()))
+    const weeks: string[] = []
+    for (let c = startWeek; c <= endWeek; c = addDaysIso(c, 7)) weeks.push(c)
+    const rows = weeks.map(w => ({ key: w, label: `W${isoWeekNumber(w)}`, count: 0 }))
+    const byKey = new Map(rows.map(r => [r.key, r]))
+    for (const t of tickets) {
+      const n = Number(t.date_created)
+      if (!n) continue
+      const wk = startOfWeek(localDateKey(new Date(n * 1000)))
+      const row = byKey.get(wk)
+      if (row) row.count++
+    }
+    return rows
+  }, [tickets])
+
   // Parse "YYYY-MM-DD HH:mm:ss" (format datetime Logix) sebagai waktu LOKAL
   // — bukan Date.parse biasa, yang di sebagian browser bisa nganggap string
   // tanpa timezone itu UTC dan geser tanggalnya.
@@ -537,21 +557,15 @@ Terimakasih pak`
     return Array.from(set).sort()
   }, [slaTickets, activeSlaTab])
 
-  // Bucket kosong buat chart SLA — per tanggal (sinkron sama trendData) atau
-  // per hari-dalam-minggu (Senin—Minggu), tergantung slaGroupBy.
+  // Bucket kosong buat chart SLA — per tanggal, sinkron sama trendData.
   const slaBuckets = useMemo(() => {
-    if (slaGroupBy === "weekday") return WEEKDAY_LABELS.map(label => ({ label }))
     return buildDayBuckets(periodFilter)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slaGroupBy, periodFilter])
+  }, [periodFilter])
 
   const slaBucketIndex = (created: Date): number | null => {
-    if (slaGroupBy === "weekday") {
-      if (!isInPeriod(created, periodFilter)) return null
-      return weekdayIndex(created)
-    }
     const key = localDateKey(created)
-    return slaBuckets.findIndex(b => "key" in b && b.key === key)
+    return slaBuckets.findIndex(b => b.key === key)
   }
 
   // Grafik SLA (tab metrik tunggal): rata-rata durasi (hari) per bucket,
@@ -828,23 +842,57 @@ Terimakasih pak`
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", alignItems: "stretch" }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", display: "flex", flexDirection: "column" }}>
-              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "2px" }}>Tren</div>
-              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>Tiket Dibuat — 14 Hari Terakhir</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginBottom: "2px", flexWrap: "wrap" }}>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Tren</div>
+                <div style={{ display: "flex", gap: "2px", background: "var(--surface2)", padding: "2px", borderRadius: "6px" }}>
+                  <button onClick={() => setTrendMode("daily")}
+                    style={{
+                      padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                      fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                      background: trendMode === "daily" ? "var(--surface)" : "transparent",
+                      color: trendMode === "daily" ? "var(--text)" : "var(--text3)",
+                    }}>
+                    Harian
+                  </button>
+                  <button onClick={() => setTrendMode("weekly")}
+                    style={{
+                      padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
+                      fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
+                      background: trendMode === "weekly" ? "var(--surface)" : "transparent",
+                      color: trendMode === "weekly" ? "var(--text)" : "var(--text3)",
+                    }}>
+                    Mingguan
+                  </button>
+                </div>
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: 800, color: "var(--text)", marginBottom: "12px" }}>
+                {trendMode === "daily" ? "Tiket Dibuat — 14 Hari Terakhir" : "Tiket per Minggu"}
+              </div>
               <div style={{ flex: 1, minHeight: "180px" }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={trendData}>
-                    <defs>
-                      <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
-                        <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
-                    <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
-                  </AreaChart>
+                  {trendMode === "daily" ? (
+                    <AreaChart data={trendData}>
+                      <defs>
+                        <linearGradient id="logixTrend" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#0369A1" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#0369A1" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
+                      <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Area type="monotone" dataKey="count" stroke="#0369A1" strokeWidth={2} fill="url(#logixTrend)" name="Tiket dibuat" />
+                    </AreaChart>
+                  ) : (
+                    <BarChart data={weeklyTrendData}>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
+                      <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={0} />
+                      <YAxis allowDecimals={false} tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
+                      <Tooltip content={<ChartTooltip />} cursor={{ fill: "var(--surface2)" }} />
+                      <Bar dataKey="count" name="Tiket dibuat" fill="#0369A1" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                    </BarChart>
+                  )}
                 </ResponsiveContainer>
               </div>
             </div>
@@ -854,26 +902,6 @@ Terimakasih pak`
                 <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.04em" }}>SLA</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   {slaLoading && <RefreshCw size={11} color="var(--text3)" style={{ animation: "spin 1s linear infinite" }} />}
-                  <div style={{ display: "flex", gap: "2px", background: "var(--surface2)", padding: "2px", borderRadius: "6px" }}>
-                    <button onClick={() => setSlaGroupBy("date")}
-                      style={{
-                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
-                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
-                        background: slaGroupBy === "date" ? "var(--surface)" : "transparent",
-                        color: slaGroupBy === "date" ? "var(--text)" : "var(--text3)",
-                      }}>
-                      Tanggal
-                    </button>
-                    <button onClick={() => setSlaGroupBy("weekday")}
-                      style={{
-                        padding: "3px 8px", borderRadius: "5px", border: "none", cursor: "pointer",
-                        fontSize: "10px", fontWeight: 700, fontFamily: "inherit",
-                        background: slaGroupBy === "weekday" ? "var(--surface)" : "transparent",
-                        color: slaGroupBy === "weekday" ? "var(--text)" : "var(--text3)",
-                      }}>
-                      Per Hari
-                    </button>
-                  </div>
                   <select value={periodFilter} onChange={e => setPeriodFilter(e.target.value)}
                     style={{ padding: "3px 8px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: "10px", fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}>
                     <option value="ALL">14 Hari Terakhir</option>
@@ -925,7 +953,7 @@ Terimakasih pak`
                     {activeSlaTab ? (
                       <LineChart data={slaChartData}>
                         <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
                         <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
                         <Tooltip content={<ChartTooltip />} />
                         <Line type="monotone" dataKey="value" stroke={activeSlaTab.color} strokeWidth={2} dot={false} name={activeSlaTab.label} connectNulls />
@@ -933,7 +961,7 @@ Terimakasih pak`
                     ) : (
                       <LineChart data={slaCompareData}>
                         <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false} />
-                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={slaGroupBy === "weekday" ? 0 : 1} />
+                        <XAxis dataKey="label" tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} interval={1} />
                         <YAxis tick={{ fill: "var(--text3)", fontSize: 10 }} axisLine={false} tickLine={false} width={28} />
                         <Tooltip content={<ChartTooltip />} />
                         <Legend wrapperStyle={{ fontSize: "10px" }} iconSize={8} />

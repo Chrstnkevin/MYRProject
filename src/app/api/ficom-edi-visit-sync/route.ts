@@ -141,13 +141,46 @@ export async function POST(req: NextRequest) {
       .lte("visit_date", isoTo)
     if (delErr) throw new Error(`Gagal hapus staging rentang lama: ${delErr.message}`)
 
+    // Ficom kadang nambah kolom baru di response EDI (mis. "distance") yang
+    // belum ada di tabel edi_visit_staging — PostgREST nolak INSERT-nya
+    // dengan error "Could not find the 'X' column ... in the schema cache"
+    // (kode PGRST204). Daripada bikin SELURUH sync gagal gara-gara 1 kolom
+    // yang belum dikenal, kolom itu di-strip dari semua baris lalu insert
+    // dicoba ulang — jadi data lain tetap masuk, cuma kolom barunya yang
+    // sementara kebuang sampai ditambahkan manual ke skema tabel.
+    const droppedColumns = new Set<string>()
+    let insertRows = rows
     const chunk = 100
-    for (let i = 0; i < rows.length; i += chunk) {
-      const { error: insErr } = await supabase.from("edi_visit_staging").insert(rows.slice(i, i + chunk))
-      if (insErr) throw new Error(`Gagal insert staging: ${insErr.message}`)
+    for (let attempt = 0; attempt < 10; attempt++) {
+      let newlyDropped = ""
+      for (let i = 0; i < insertRows.length; i += chunk) {
+        const { error: insErr } = await supabase.from("edi_visit_staging").insert(insertRows.slice(i, i + chunk))
+        if (insErr) {
+          const m = /Could not find the '([^']+)' column/.exec(insErr.message)
+          if (m && insErr.code === "PGRST204" && !droppedColumns.has(m[1])) {
+            newlyDropped = m[1]
+            break
+          }
+          throw new Error(`Gagal insert staging: ${insErr.message}`)
+        }
+      }
+      if (!newlyDropped) break
+      droppedColumns.add(newlyDropped)
+      // Chunk sebelum yang gagal sudah kadung ke-insert di attempt ini —
+      // hapus ulang rentang tanggalnya biar re-insert dari awal (dengan
+      // kolom di-strip) nggak bikin baris dobel.
+      await supabase.from("edi_visit_staging").delete().gte("visit_date", isoFrom).lte("visit_date", isoTo)
+      insertRows = insertRows.map(r => {
+        const copy = { ...r }
+        droppedColumns.forEach(c => delete copy[c])
+        return copy
+      })
     }
 
-    return NextResponse.json({ success: true, rows: rows.length, dateFrom, dateTo, syncedAt: new Date().toISOString() })
+    return NextResponse.json({
+      success: true, rows: rows.length, dateFrom, dateTo, syncedAt: new Date().toISOString(),
+      ...(droppedColumns.size ? { warning: `Kolom belum ada di tabel, dilewati: ${Array.from(droppedColumns).join(", ")}` } : {}),
+    })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
