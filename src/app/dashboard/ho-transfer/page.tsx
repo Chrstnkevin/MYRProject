@@ -303,14 +303,14 @@ export default function HoTransferPage() {
       )}
 
       <div style={{ background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 8, padding: "10px 14px", fontSize: 11, color: "#92400E" }}>
-        ⚠️ Sumber data ini (host 52.163.214.18, bukan Ficom) sync-nya jalan di BROWSER kamu langsung, jadi tombol &quot;Sync dari HO&quot; cuma berhasil kalau perangkat kamu ada di jaringan yang bisa akses IP itu (mis. jaringan kantor/VPN). Beberapa kolom dari API ini (flagTrf, text5, color, dll) maknanya belum dikonfirmasi, jadi belum ditampilkan di tabel.
+        ⚠️ Sumber data ini (host 52.163.214.18, bukan Ficom) — tombol &quot;Sync dari HO&quot; narik data lewat server (bukan browser kamu langsung). Beberapa kolom dari API ini (flagTrf, text5, color, dll) maknanya belum dikonfirmasi, jadi belum ditampilkan di tabel.
       </div>
 
       {!activeDate && !loading && (
         <div style={{ textAlign: "center", padding: "48px", background: "var(--surface)", borderRadius: 16, border: "1.5px solid var(--border)" }}>
           <div style={{ fontSize: 40, marginBottom: 10 }}>🔁</div>
           <p style={{ fontSize: 14, fontWeight: 700, color: "var(--text)" }}>Belum ada data</p>
-          <p style={{ fontSize: 12, color: "var(--text3)", marginTop: 4 }}>Klik &quot;Sync dari HO&quot; buat narik data pertama kali (dari jaringan yang bisa akses HO)</p>
+          <p style={{ fontSize: 12, color: "var(--text3)", marginTop: 4 }}>Klik &quot;Sync dari HO&quot; buat narik data pertama kali</p>
         </div>
       )}
 
