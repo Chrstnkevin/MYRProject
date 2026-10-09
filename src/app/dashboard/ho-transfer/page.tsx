@@ -3,14 +3,15 @@
 //
 // Data Transfer HO — monitoring status transfer data per subdist (ADP)
 // dari sistem HO (Head Office), TERPISAH dari Ficom (host beda:
-// 52.163.214.18:8081, bukan ficom-phi.mayora.co.id). Dikonfirmasi user:
-// endpoint ini TIDAK butuh login/token (akses network internal), jadi
-// sync-nya SENGAJA client-side (browser yang fetch langsung), bukan
-// lewat API route server kita — IP internal kayak gini kemungkinan
-// besar cuma kejangkau dari jaringan kantor, bukan dari server hosting
-// (Vercel dkk), jadi kalau dipanggil server-side kemungkinan gagal.
-// Kalau ternyata CORS diblokir dari browser juga, baru perlu di-relay
-// lewat API route server (belum divalidasi).
+// 52.163.214.18:8081, bukan ficom-phi.mayora.co.id). Endpoint ini TIDAK
+// butuh login/token (akses network internal).
+//
+// Sync-nya lewat /api/ho-transfer-sync (server-side) — SEBELUMNYA fetch
+// langsung dari browser, tapi SELALU gagal "Failed to fetch" karena
+// diblokir sebagai mixed content (halaman kita HTTPS, HO API-nya HTTP
+// biasa — aturan baku browser, bukan soal jaringan kantor/CORS seperti
+// dugaan awal). Lihat src/app/api/ho-transfer-sync/route.ts buat detail
+// request ke HO-nya.
 
 import { useEffect, useMemo, useState } from "react"
 import {
@@ -22,8 +23,6 @@ import {
 } from "recharts"
 import { supabase } from "@/lib/supabase"
 import MotivationBanner from "@/components/layout/MotivationBanner"
-
-const HO_BASE = "http://52.163.214.18:8081/api/ho/dashboard-subdist"
 
 // Palet wilayah — SAMA kayak REGION_CLR di master-data/page.tsx, biar
 // warna wilayah konsisten di seluruh app.
@@ -58,33 +57,6 @@ function tierColor(pct: number): string {
   return pct >= 90 ? "#16A34A" : pct >= 70 ? "#D97706" : "#DC2626"
 }
 
-// Bentuk mentah response GET next-date-phi/OmsetDif — field flagTrf/
-// text5/color/totalDiffRekonsil/hoVsConsol disimpan apa adanya, makna
-// persisnya belum dikonfirmasi user.
-interface HoApiRow {
-  subdistId: string
-  subdistNm: string
-  sbdAdd1: string | null
-  sbdAdd2: string | null
-  regionId: string | null
-  regionNm: string | null
-  areaId: string | null
-  areaNm: string | null
-  extDate: string | null
-  nextDate: string | null
-  flagTrf: string | null
-  text5: string | null
-  terlambat: string | null
-  totalDiff: number | null
-  release: string | null
-  omzetHo: number | null
-  omzetPro: number | null
-  color: string | null
-  totalDiffRekonsil: number | null
-  hoVsConsol: number | null
-}
-interface HoApiPercentage { totalNaik: number; total: number; percentage: number }
-
 interface SnapshotRow {
   id: string
   snapshot_date: string
@@ -109,10 +81,6 @@ interface SnapshotRow {
 }
 interface SummaryRow { snapshot_date: string; total_naik: number; total: number; percentage: number }
 
-function todayIso(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
-}
 function fmtPeso(n: number | null): string {
   if (n == null) return "-"
   return "₱" + Math.round(n).toLocaleString("en-PH")
@@ -166,63 +134,22 @@ export default function HoTransferPage() {
     setLoading(false)
   }
 
-  // Sync CLIENT-SIDE — browser fetch langsung ke HO API (lihat catatan
-  // di atas soal kenapa bukan lewat API route server), lalu upsert
-  // hasilnya ke Supabase pakai client yang sama dipakai halaman ini.
+  // Sync SERVER-SIDE lewat /api/ho-transfer-sync. SEBELUMNYA ini fetch
+  // langsung dari browser ke HO API — ternyata SELALU diblokir browser
+  // sebagai "mixed content" (halaman kita HTTPS, HO API-nya HTTP biasa),
+  // bukan soal jaringan/CORS seperti dugaan awal. Request server-ke-server
+  // nggak kena aturan itu, makanya dipindah ke API route.
   async function handleSync() {
     setSyncing(true); setSyncMsg("")
     try {
-      const [listRes, pctRes] = await Promise.all([
-        fetch(`${HO_BASE}/next-date-phi/OmsetDif`),
-        fetch(`${HO_BASE}/percentage`),
-      ])
-      if (!listRes.ok) throw new Error(`Gagal ambil data subdist (HTTP ${listRes.status})`)
-      if (!pctRes.ok) throw new Error(`Gagal ambil ringkasan persentase (HTTP ${pctRes.status})`)
-      const list = await listRes.json() as HoApiRow[]
-      const pct = await pctRes.json() as HoApiPercentage
-
-      const snapshotDate = todayIso()
-      const now = new Date().toISOString()
-
-      const dbRows = list.map(r => ({
-        snapshot_date: snapshotDate,
-        subdist_id: r.subdistId,
-        subdist_nm: r.subdistNm || null,
-        sbd_add1: r.sbdAdd1 || null,
-        sbd_add2: r.sbdAdd2 || null,
-        region_id: r.regionId || null,
-        region_nm: r.regionNm || null,
-        area_id: r.areaId || null,
-        area_nm: r.areaNm || null,
-        ext_date: r.extDate || null,
-        next_date: r.nextDate || null,
-        flag_trf: r.flagTrf || null,
-        text5: r.text5 || null,
-        terlambat: r.terlambat || null,
-        total_diff: r.totalDiff,
-        release: r.release || null,
-        omzet_ho: r.omzetHo,
-        omzet_pro: r.omzetPro,
-        color: r.color || null,
-        total_diff_rekonsil: r.totalDiffRekonsil,
-        ho_vs_consol: r.hoVsConsol,
-        synced_at: now,
-      }))
-
-      if (dbRows.length > 0) {
-        const { error: upErr } = await supabase.from("ho_transfer_snapshot").upsert(dbRows, { onConflict: "snapshot_date,subdist_id" })
-        if (upErr) throw upErr
-      }
-      const { error: sumErr } = await supabase
-        .from("ho_transfer_summary")
-        .upsert({ snapshot_date: snapshotDate, total_naik: pct.totalNaik, total: pct.total, percentage: pct.percentage, synced_at: now }, { onConflict: "snapshot_date" })
-      if (sumErr) throw sumErr
-
-      setSyncMsg(`✅ Sync selesai — ${dbRows.length} subdist ter-update untuk ${snapshotDate}`)
+      const res = await fetch("/api/ho-transfer-sync", { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setSyncMsg(`✅ Sync selesai — ${data.rows} subdist ter-update untuk ${data.snapshotDate}`)
       await loadData()
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setSyncMsg(`❌ ${msg}${msg.includes("Failed to fetch") ? " — kemungkinan browser kamu nggak di jaringan yang bisa akses IP HO (52.163.214.18), atau CORS diblokir" : ""}`)
+      setSyncMsg(`❌ ${msg}`)
     }
     setSyncing(false)
   }
