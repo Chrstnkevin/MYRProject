@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import {
   Home, FileText, LayoutGrid, GitBranch, ScrollText,
@@ -9,6 +9,12 @@ import {
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
     Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket, GitCompare, DollarSign, RefreshCw
 } from "lucide-react"
+import { supabase } from "@/lib/supabase"
+import { featureKeyFromPath } from "@/lib/features"
+
+const NAV_ADMIN = [
+  { icon: Users, label: "User Management", path: "/dashboard/user-management", desc: "Verifikasi & atur akses user", badge: "Admin", badgeColor: "#7C3AED" },
+]
 
 const NAV_TOP = [
   { icon: Home, label: "Home", path: "/dashboard", desc: "Overview harian" },
@@ -129,8 +135,38 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const dayName = today.toLocaleDateString("id-ID", { weekday: "long" })
   const dateStr = today.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
 
-  const handleLogout = () => {
+  // ── Permission per fitur — filter menu sesuai user yang login. Fallback
+  // admin lama (cookie sb-session-manual) & user dengan is_admin=true di
+  // profiles SELALU full access. authLoaded dicek dulu biar menu nggak
+  // sempat "berkedip kosong" sebelum status permission-nya kebaca.
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [permittedKeys, setPermittedKeys] = useState<Set<string>>(new Set())
+  const [authLoaded, setAuthLoaded] = useState(false)
+
+  useEffect(() => {
+    (async () => {
+      const hasFallback = document.cookie.split("; ").some(c => c.startsWith("sb-session-manual="))
+      if (hasFallback) { setIsAdmin(true); setAuthLoaded(true); return }
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setAuthLoaded(true); return }
+      const { data: profile } = await supabase.from("profiles").select("is_admin").eq("id", user.id).maybeSingle()
+      if (profile?.is_admin) { setIsAdmin(true); setAuthLoaded(true); return }
+      const { data: perms } = await supabase.from("user_permissions").select("feature_key").eq("user_id", user.id)
+      setPermittedKeys(new Set((perms || []).map((p: { feature_key: string }) => p.feature_key)))
+      setAuthLoaded(true)
+    })()
+  }, [])
+
+  function canAccess(path: string): boolean {
+    if (!authLoaded || isAdmin) return true
+    const key = featureKeyFromPath(path)
+    if (!key) return true // Home dsb — selalu boleh
+    return permittedKeys.has(key)
+  }
+
+  const handleLogout = async () => {
     document.cookie = "sb-session-manual=; path=/; max-age=0"
+    await supabase.auth.signOut()
     router.push("/login")
   }
 
@@ -282,6 +318,26 @@ export default function Sidebar({ isOpen, onClose }: Props) {
             )
           })}
 
+          {/* User Management — admin-only */}
+          {isAdmin && NAV_ADMIN.map(({ icon: Icon, label, path, desc, badge, badgeColor }) => {
+            const active = isActive(path)
+            return (
+              <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
+                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+                <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
+                  <Icon size={16} color={active ? "white" : "var(--text3)"} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)" }}>{label}</span>
+                    <span style={{ fontSize: "9px", fontWeight: 700, background: badgeColor, color: "white", padding: "1px 7px", borderRadius: "99px" }}>{badge}</span>
+                  </div>
+                  <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
+                </div>
+              </button>
+            )
+          })}
+
           {/* ── Productivity ── */}
           <div style={{ marginTop: "4px" }}>
             <GroupHeader
@@ -294,7 +350,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#0891B2"
             />
             <NestedContainer open={productivityOpen} lineColor="rgba(8,145,178,0.3)">
-              {NAV_PRODUCTIVITY.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_PRODUCTIVITY.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -310,7 +366,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#0369A1"
             />
             <NestedContainer open={supportLokalOpen} lineColor="rgba(3,105,161,0.3)">
-              {NAV_SUPPORT_LOKAL.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_SUPPORT_LOKAL.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -354,12 +410,12 @@ export default function Sidebar({ isOpen, onClose }: Props) {
                 <div style={{ paddingLeft: "22px", display: "flex", flexDirection: "column", gap: "2px" }}>
                   <div style={{ position: "relative" }}>
                     <div style={{ position: "absolute", left: "16px", top: 0, bottom: 0, width: "1.5px", background: "rgba(8,145,178,0.3)", borderRadius: "99px" }} />
-                    {NAV_DATA_TRANSFER.map(item => <NestedBtn key={item.path} {...item} />)}
+                    {NAV_DATA_TRANSFER.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
                   </div>
                 </div>
               </div>
 
-              {NAV_SUPPORT_PHI.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_SUPPORT_PHI.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -375,7 +431,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#6d28d9"
             />
             <NestedContainer open={backupRestoreOpen} lineColor="rgba(109,40,217,0.3)">
-              {NAV_BACKUP_RESTORE.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_BACKUP_RESTORE.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -391,7 +447,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#1E88E5"
             />
             <NestedContainer open={utilisasiOpen} lineColor="rgba(30,136,229,0.3)">
-              {NAV_UTILISASI.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_UTILISASI.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -407,7 +463,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               accentColor="#7C3AED"
             />
             <NestedContainer open={masterOpen} lineColor="rgba(124,58,237,0.3)">
-              {NAV_MASTER.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_MASTER.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
 
@@ -422,7 +478,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               onToggle={() => setDokumenOpen(v => !v)}
             />
             <NestedContainer open={dokumenOpen}>
-              {NAV_DOKUMEN.map(item => <NestedBtn key={item.path} {...item} />)}
+              {NAV_DOKUMEN.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
         </nav>

@@ -1,13 +1,20 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Eye, EyeOff, Sparkles, LogIn } from "lucide-react"
+import { supabase } from "@/lib/supabase"
 
-const VALID_USERNAME = "admin123"
-const VALID_PASSWORD = "kevin123"
-// Cookie name yang dicek middleware
-const SESSION_COOKIE = "sb-session-manual"
+// Login lama (satu akun dipakai bareng semua orang) — DIPERTAHANKAN
+// sebagai fallback super-admin selama masa transisi ke Supabase Auth,
+// biar nggak ada jeda "nggak ada yang bisa login" pas fitur baru masih
+// digarap/dites. Jalur ini SAMA SEKALI nggak lewat Supabase Auth, jadi
+// nggak punya identitas user asli (nggak muncul di live presence, nggak
+// tunduk ke sistem permission per-fitur — otomatis akses semua halaman).
+const FALLBACK_USERNAME = "admin123"
+const FALLBACK_PASSWORD = "kevin123"
+const FALLBACK_COOKIE   = "sb-session-manual"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -22,15 +29,58 @@ export default function LoginPage() {
     setError("")
     setLoading(true)
 
-    await new Promise(r => setTimeout(r, 600)) // feel legit
-
-    if (username === VALID_USERNAME && password === VALID_PASSWORD) {
-      // Set cookie manual agar middleware mengenalinya
-      document.cookie = `sb-session-manual=authenticated; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
+    // 1) Jalur fallback admin lama — dicek duluan, persis kayak sebelumnya.
+    if (username === FALLBACK_USERNAME && password === FALLBACK_PASSWORD) {
+      await new Promise(r => setTimeout(r, 400))
+      document.cookie = `${FALLBACK_COOKIE}=authenticated; path=/; max-age=${60 * 60 * 24 * 7}; SameSite=Lax`
       router.push("/dashboard")
-    } else {
-      setError("Username atau password salah.")
+      setLoading(false)
+      return
     }
+
+    // 2) Jalur Supabase Auth asli — field "username" di sini dipakai
+    // sebagai email (satu form buat dua jalur, biar UI nggak berubah).
+    const { data, error: signInErr } = await supabase.auth.signInWithPassword({
+      email: username.trim(),
+      password,
+    })
+
+    if (signInErr) {
+      setError("Email/username atau password salah.")
+      setLoading(false)
+      return
+    }
+    if (!data.user) {
+      setError("Login gagal — coba lagi.")
+      setLoading(false)
+      return
+    }
+
+    // Cek status verifikasi admin DULU sebelum dianggap berhasil login —
+    // kalau belum approved, sign-out lagi & kasih pesan sesuai statusnya.
+    const { data: profile, error: profileErr } = await supabase
+      .from("profiles").select("status").eq("id", data.user.id).maybeSingle()
+
+    if (profileErr || !profile) {
+      await supabase.auth.signOut()
+      setError("Gagal memuat profil akun — coba lagi atau hubungi admin.")
+      setLoading(false)
+      return
+    }
+    if (profile.status === "pending") {
+      await supabase.auth.signOut()
+      setError("Akun kamu masih menunggu verifikasi admin.")
+      setLoading(false)
+      return
+    }
+    if (profile.status === "rejected") {
+      await supabase.auth.signOut()
+      setError("Akun kamu ditolak admin. Hubungi admin kalau ini keliru.")
+      setLoading(false)
+      return
+    }
+
+    router.push("/dashboard")
     setLoading(false)
   }
 
@@ -78,11 +128,11 @@ export default function LoginPage() {
 
           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div>
-              <div className="label" style={{ marginBottom: "6px" }}>Username</div>
+              <div className="label" style={{ marginBottom: "6px" }}>Email</div>
               <input
                 className="input"
                 type="text"
-                placeholder="Masukkan username"
+                placeholder="nama@email.com"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
                 autoComplete="username"
@@ -146,6 +196,10 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+
+          <div style={{ textAlign: "center", marginTop: "18px", fontSize: "13px", color: "var(--text3)" }}>
+            Belum punya akun? <Link href="/register" style={{ color: "var(--accent)", fontWeight: 700 }}>Daftar</Link>
+          </div>
         </div>
 
         <div style={{ textAlign: "center", marginTop: "20px", fontSize: "11px", color: "var(--text3)" }}>
