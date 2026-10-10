@@ -130,21 +130,21 @@ export default function UserManagementPage() {
             <div style={{ fontSize: "11px", color: "var(--text3)" }}>{p.email} · daftar {new Date(p.created_at).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" })}</div>
           </div>
           <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 9px", borderRadius: "99px", whiteSpace: "nowrap", ...STATUS_CLR[p.status] }}>{STATUS_LABEL[p.status]}</span>
-          {p.status === "pending" ? (
-            <div style={{ display: "flex", gap: "6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            {p.status === "rejected" ? (
               <button onClick={() => setStatus(p.id, "approved")} style={{ display: "flex", alignItems: "center", gap: "5px", padding: "6px 12px", borderRadius: "7px", border: "none", background: "#166534", color: "white", fontSize: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                <CheckCircle2 size={13} /> Approve
+                <CheckCircle2 size={13} /> Aktifkan
               </button>
+            ) : (
               <button onClick={() => setStatus(p.id, "rejected")} style={{ display: "flex", alignItems: "center", gap: "5px", padding: "6px 12px", borderRadius: "7px", border: "1px solid var(--border)", background: "var(--surface2)", color: "#991B1B", fontSize: "11px", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
-                <XCircle size={13} /> Tolak
+                <XCircle size={13} /> Nonaktifkan
               </button>
-            </div>
-          ) : (
+            )}
             <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text3)", cursor: "pointer" }}>
               <input type="checkbox" checked={p.is_admin} onChange={e => toggleAdmin(p.id, e.target.checked)} />
               Jadikan admin
             </label>
-          )}
+          </div>
         </div>
 
         {isOpen && (
@@ -188,7 +188,7 @@ export default function UserManagementPage() {
         </div>
         <div>
           <h1 style={{ fontSize: "20px", fontWeight: 800, margin: 0 }}>User Management</h1>
-          <p style={{ fontSize: "12px", color: "var(--text3)", margin: 0 }}>Verifikasi akun baru & atur fitur yang boleh diakses tiap user</p>
+          <p style={{ fontSize: "12px", color: "var(--text3)", margin: 0 }}>Atur fitur yang boleh diakses tiap user, nonaktifkan akun kalau perlu</p>
         </div>
       </div>
 

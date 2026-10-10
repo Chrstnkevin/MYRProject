@@ -2,10 +2,12 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Eye, EyeOff, Sparkles, UserPlus, CheckCircle2 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 
 export default function RegisterPage() {
+  const router = useRouter()
   const [fullName, setFullName] = useState("")
   const [email, setEmail]       = useState("")
   const [password, setPassword] = useState("")
@@ -14,7 +16,6 @@ export default function RegisterPage() {
   const [error, setError]       = useState("")
   const [loading, setLoading]   = useState(false)
   const [done, setDone]         = useState(false)
-  const [needsEmailConfirm, setNeedsEmailConfirm] = useState(false)
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -28,13 +29,14 @@ export default function RegisterPage() {
       password,
       options: { data: { full_name: fullName.trim() } },
     })
-    setLoading(false)
 
-    if (signUpErr) { setError(signUpErr.message); return }
-    // Supabase balikin session null kalau project-nya masih butuh user
-    // klik link konfirmasi email dulu sebelum bisa login — beda kasus
-    // sama "menunggu approve admin" (itu dicek pas login, bukan di sini).
-    setNeedsEmailConfirm(!data.session && !!data.user && !data.user.email_confirmed_at)
+    if (signUpErr) { setError(signUpErr.message); setLoading(false); return }
+    // Akun langsung aktif (status approved otomatis, nggak nunggu admin
+    // lagi) — kalau Supabase project nggak minta konfirmasi email, session
+    // langsung ada dan bisa langsung masuk dashboard. Kalau minta
+    // konfirmasi email dulu, session-nya null sampai link di email diklik.
+    if (data.session) { router.push("/dashboard"); return }
+    setLoading(false)
     setDone(true)
   }
 
@@ -45,8 +47,7 @@ export default function RegisterPage() {
           <CheckCircle2 size={44} color="var(--success, #16A34A)" style={{ margin: "0 auto 16px" }} />
           <div style={{ fontSize: "18px", fontWeight: 800, marginBottom: "8px" }}>Registrasi berhasil!</div>
           <p style={{ fontSize: "13px", color: "var(--text3)", lineHeight: 1.6 }}>
-            {needsEmailConfirm && <>Cek email kamu dan klik link konfirmasi dulu, lalu </>}
-            Akun kamu perlu diverifikasi admin sebelum bisa login ke dashboard. Hubungi admin buat minta diverifikasi.
+            Cek email kamu dan klik link konfirmasi dulu, baru bisa login ke dashboard.
           </p>
           <Link href="/login" style={{ display: "inline-block", marginTop: "20px", fontSize: "13px", fontWeight: 700, color: "var(--accent)" }}>
             ← Kembali ke halaman login
