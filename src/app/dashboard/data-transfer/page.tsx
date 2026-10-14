@@ -13,7 +13,7 @@ import {
   CheckCircle, AlertCircle, Clock, Calendar, Radio, Save,
   Filter, TriangleAlert, Info, Copy, Check
 } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend } from "recharts"
 import { supabase } from "@/lib/supabase"
 import { parseEdiText } from "@/lib/parseEdiText"
 import MotivationBanner from "@/components/layout/MotivationBanner"
@@ -163,6 +163,15 @@ function buildMasterMap(master: MasterRow[]): Record<string, MasterRow> {
 
 const AOR_COLORS: Record<string,string> = {
   GMA:"#D97706", NOL:"#2563EB", SOL:"#9333EA", VIS:"#0891B2", MIN:"#EF4444"
+}
+
+// Warna per slot trigger — dipakai konsisten di chart & legend "Ketepatan
+// Waktu per Trigger" (pagi=biru langit, siang=kuning terik, sore=oranye senja).
+const SLOT_COLORS: Record<"pagi"|"siang"|"sore", string> = {
+  pagi:"#0EA5E9", siang:"#F59E0B", sore:"#F97316"
+}
+const SLOT_LABELS: Record<"pagi"|"siang"|"sore", string> = {
+  pagi:"Pagi (06:00)", siang:"Siang (12:00)", sore:"Sore (17:00)"
 }
 
 const TAS_MAP: Record<string,string> = {
@@ -856,7 +865,7 @@ export default function DataTransferPage() {
               "Summary Release" (breakdown per nilai release). Card GMA/NOL/SOL
               lama dihapus (dikonfirmasi user) — breakdown per Area/TAS tetap
               ada di section "Per Area"/"Per TAS" di bawah. */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"10px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:"10px" }}>
             <div style={{ background:ovBg, borderRadius:"10px", padding:"14px 16px" }}>
               <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall Data Transfer ADP</div>
               <div style={{ fontSize:"28px", fontWeight:900, color:ovColor }}>{overall.p}%</div>
@@ -900,7 +909,7 @@ export default function DataTransferPage() {
           </div>
 
           {/* Area + TAS progress bars + distribusi Tanggal Gudang */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"10px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px,1fr))", gap:"10px" }}>
             {[{ title:"Per Area", stats:aorStats }, { title:"Per TAS", stats:tasStats }].map(({ title, stats }) => (
               <div key={title} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
                 <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>{title}</div>
@@ -962,6 +971,34 @@ export default function DataTransferPage() {
                 Belum ada log telat 7 hari terakhir — atau scheduler belum di-setup. Panggil <code style={{ background:"var(--surface2)", padding:"1px 6px", borderRadius:"4px" }}>GET /api/data-transfer-late-log?slot=pagi|siang|sore</code> dari scheduler eksternal kamu (mis. cron-job.org) di jam 06:00/12:00/17:00.
               </div>
             ) : (
+              <>
+                {/* Chart pisah per slot — top 12 ADP paling sering telat,
+                    3 bar bersebelahan (pagi/siang/sore) per ADP biar
+                    kelihatan jam berapa yang paling sering kejadian.
+                    Dibungkus scroll horizontal + minWidth ngikutin jumlah
+                    ADP, biar di layar HP bar-nya nggak gepeng numpuk —
+                    tinggal geser, bukan dipaksa muat semua di layar sempit. */}
+                <div style={{ overflowX:"auto", marginBottom:"16px" }}>
+                  <div style={{ height:"220px", minWidth:`${Math.max(320, lateSummary.slice(0,12).length * 70)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={lateSummary.slice(0,12)} margin={{ top:4, right:8, left:-16, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
+                        <XAxis dataKey="distributor_id" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false} interval={0} angle={-35} textAnchor="end" height={46}/>
+                        <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={24}/>
+                        <Tooltip
+                          contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}
+                          labelFormatter={(id) => `ADP ${id}`}
+                          formatter={(v: number, key: string) => [`${v}x`, SLOT_LABELS[key as "pagi"|"siang"|"sore"]]}
+                        />
+                        <Legend formatter={(key) => SLOT_LABELS[key as "pagi"|"siang"|"sore"]} wrapperStyle={{ fontSize:"11px" }}/>
+                        <Bar dataKey="pagi"  fill={SLOT_COLORS.pagi}  radius={[3,3,0,0]} maxBarSize={14}/>
+                        <Bar dataKey="siang" fill={SLOT_COLORS.siang} radius={[3,3,0,0]} maxBarSize={14}/>
+                        <Bar dataKey="sore"  fill={SLOT_COLORS.sore}  radius={[3,3,0,0]} maxBarSize={14}/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
               <div style={{ overflowX:"auto" }}>
                 <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"11px" }}>
                   <thead>
@@ -994,6 +1031,7 @@ export default function DataTransferPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 
@@ -1047,7 +1085,7 @@ export default function DataTransferPage() {
 
       {/* ── HISTORY TAB ── */}
       {tab === "history" && (
-        <div style={{ display:"grid", gridTemplateColumns:"260px 1fr", gap:"14px" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px,1fr))", gap:"14px" }}>
           {/* Sidebar snapshots */}
           <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"hidden" }}>
             <div style={{ padding:"12px 14px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -1078,7 +1116,7 @@ export default function DataTransferPage() {
           <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
             {selectedSnap && (<>
               {/* History summary */}
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"10px" }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:"10px" }}>
                 <div style={{ background: histOverall.p>=90?"#DCFCE7":histOverall.p>=70?"#EFF6FF":"#FEE2E2", borderRadius:"10px", padding:"14px 16px" }}>
                   <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall</div>
                   <div style={{ fontSize:"28px", fontWeight:900, color: histOverall.p>=90?"#166534":histOverall.p>=70?"#0369A1":"#991B1B" }}>{histOverall.p}%</div>
