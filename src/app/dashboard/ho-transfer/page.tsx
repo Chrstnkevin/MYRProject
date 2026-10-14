@@ -317,7 +317,7 @@ export default function HoTransferPage() {
       {activeDate && (
         <>
           {/* KPI row */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 10 }}>
             {[
               { label: "TOTAL SUBDIST", value: String(activeRows.length), color: "#0369A1", icon: Building2 },
               { label: "TERLAMBAT", value: String(terlambatCount), color: "#DC2626", icon: Clock },
@@ -339,7 +339,7 @@ export default function HoTransferPage() {
 
           {/* Current Progress (donut + wilayah chips) + PIC Performance —
               model layout ikutin referensi dashboard yang dikasih user. */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.3fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 10 }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>CURRENT PROGRESS</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 14 }}>Status Transfer Hari Ini</div>
@@ -407,7 +407,8 @@ export default function HoTransferPage() {
                 </div>
                 <span style={{ fontSize: 10, color: "var(--text3)" }}>{picStats.length} PIC</span>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: "480px" }}>
                 <thead>
                   <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)" }}>
                     <th style={{ padding: "6px 8px" }}>#</th>
@@ -443,11 +444,12 @@ export default function HoTransferPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 
           {/* Tren Terlambat + Top Wilayah Bermasalah */}
-          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 10 }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TREN</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Subdist Terlambat — {dates.length} Hari Tersimpan</div>
