@@ -9,9 +9,19 @@ import { createClient } from "@supabase/supabase-js"
 // di-override/remarks="Inactive", baseline default h-1/h-3 Senin/h-2
 // Minggu), lalu simpen 1 baris per ADP telat ke data_transfer_late_log.
 //
+// KHUSUS slot "sore" (trigger terakhir/representatif buat status hari
+// itu): SEKALIGUS auto-save "Save Snapshot" (persis logic handleSave di
+// page.tsx) ke edi_transfer_snapshots + edi_transfer_detail — biar
+// riwayat harian lengkap (bukan cuma yang telat) tetap kesimpen otomatis
+// walau nggak ada yang klik tombol "Save Snapshot" manual. Di-skip kalau
+// snapshot auto buat tanggal itu udah pernah dibuat (hindari dobel kalau
+// scheduler ke-trigger 2x di hari yang sama).
+//
 // Contoh panggilan: GET /api/data-transfer-late-log?slot=pagi
 const SLOTS = ["pagi", "siang", "sore"] as const
 type Slot = typeof SLOTS[number]
+
+const AUTO_SNAPSHOT_CREATED_BY = "Auto (trigger sore)"
 
 function parseTglGudang(raw: string | null | undefined): string {
   if (!raw) return ""
@@ -51,6 +61,9 @@ function todayLocalIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
 }
 
+interface StagingRow { distributor_id: string; distributor_nm: string; tgl_gudang: string; spv: string; grsm: string; release: string }
+interface MasterRow { adp_code: number; region_name: string; remarks: string; server: number; server_name: string; depot: string }
+
 async function handle(slotParam: string | null) {
   if (!slotParam || !SLOTS.includes(slotParam as Slot)) {
     return NextResponse.json({ error: `Param "slot" wajib diisi salah satu dari: ${SLOTS.join(", ")}` }, { status: 400 })
@@ -62,15 +75,15 @@ async function handle(slotParam: string | null) {
   const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
   const [{ data: staging, error: stagingErr }, { data: master, error: masterErr }, { data: overrides }] = await Promise.all([
-    supabase.from("edi_transfer_staging").select("distributor_id,distributor_nm,tgl_gudang"),
-    supabase.from("master_data_adp").select("adp_code,region_name,remarks"),
+    supabase.from("edi_transfer_staging").select("distributor_id,distributor_nm,tgl_gudang,spv,grsm,release"),
+    supabase.from("master_data_adp").select("adp_code,region_name,remarks,server,server_name,depot"),
     supabase.from("edi_transfer_overrides").select("distributor_id,excluded"),
   ])
   if (stagingErr) return NextResponse.json({ error: `Gagal ambil staging: ${stagingErr.message}` }, { status: 500 })
   if (masterErr) return NextResponse.json({ error: `Gagal ambil master: ${masterErr.message}` }, { status: 500 })
 
-  const masterMap = new Map<string, { region_name: string; remarks: string }>()
-  ;(master || []).forEach((m: { adp_code: number; region_name: string; remarks: string }) => {
+  const masterMap = new Map<string, MasterRow>()
+  ;(master as MasterRow[] || []).forEach(m => {
     const key = String(m.adp_code)
     const cur = masterMap.get(key)
     if (!cur || (m.remarks !== "Inactive" && cur.remarks === "Inactive")) masterMap.set(key, m)
@@ -78,18 +91,21 @@ async function handle(slotParam: string | null) {
   const overrideMap = new Map((overrides || []).map((r: { distributor_id: string; excluded: boolean }) => [r.distributor_id, r.excluded]))
 
   const baseline = getBaseline(todayLocalIso())
-  const dedup = new Map<string, { distributor_nm: string; tgl_gudang: string }>()
-  ;(staging || []).forEach((r: { distributor_id: string; distributor_nm: string; tgl_gudang: string }) => {
+  const dedup = new Map<string, StagingRow>()
+  ;(staging as StagingRow[] || []).forEach(r => {
     const key = String(r.distributor_id)
     const cur = dedup.get(key)
     if (!cur || parseTglGudang(r.tgl_gudang) > parseTglGudang(cur.tgl_gudang)) dedup.set(key, r)
   })
 
+  const isExcluded = (distId: string, m: MasterRow | undefined) =>
+    overrideMap.has(distId) ? overrideMap.get(distId)! : (m ? m.remarks === "Inactive" : false)
+
+  // ── 1) Log ADP yang telat (selalu jalan tiap slot) ──
   const lateRows: { log_date: string; time_slot: Slot; distributor_id: string; distributor_nm: string; aor: string; tas: string; lama: number }[] = []
   dedup.forEach((row, distId) => {
     const m = masterMap.get(distId)
-    const excluded = overrideMap.has(distId) ? overrideMap.get(distId)! : (m ? m.remarks === "Inactive" : false)
-    if (excluded) return
+    if (isExcluded(distId, m)) return
     const lama = calcLama(parseTglGudang(row.tgl_gudang), baseline)
     if (lama <= 0) return
     const aor = m?.region_name || ""
@@ -98,13 +114,52 @@ async function handle(slotParam: string | null) {
       distributor_nm: row.distributor_nm || distId, aor, tas: TAS_MAP[aor] || "", lama,
     })
   })
-
   if (lateRows.length > 0) {
     const { error: upErr } = await supabase.from("data_transfer_late_log").upsert(lateRows, { onConflict: "log_date,time_slot,distributor_id" })
     if (upErr) return NextResponse.json({ error: `Gagal simpan log: ${upErr.message}` }, { status: 500 })
   }
 
-  return NextResponse.json({ success: true, slot, logDate: todayLocalIso(), lateCount: lateRows.length })
+  // ── 2) Khusus slot "sore": auto-save snapshot harian lengkap ──
+  let snapshotSaved = false
+  let snapshotCount = 0
+  if (slot === "sore") {
+    const { data: existingSnap } = await supabase.from("edi_transfer_snapshots")
+      .select("id").eq("snapshot_date", baseline).eq("created_by", AUTO_SNAPSHOT_CREATED_BY).maybeSingle()
+
+    if (!existingSnap) {
+      const { data: snap, error: snapErr } = await supabase.from("edi_transfer_snapshots")
+        .insert({ snapshot_date: baseline, note: `Auto snapshot ${baseline} (trigger sore 17:00)`, created_by: AUTO_SNAPSHOT_CREATED_BY })
+        .select().single()
+      if (snapErr || !snap) return NextResponse.json({ error: `Gagal buat snapshot: ${snapErr?.message}` }, { status: 500 })
+
+      const details: Record<string, unknown>[] = []
+      dedup.forEach((row, distId) => {
+        const m = masterMap.get(distId)
+        if (isExcluded(distId, m)) return
+        const tglIso = parseTglGudang(row.tgl_gudang)
+        const aor = m?.region_name || ""
+        details.push({
+          snapshot_id: snap.id, snapshot_date: baseline, distributor_id: distId,
+          distributor_nm: row.distributor_nm || distId, tgl_gudang: tglIso,
+          lama: calcLama(tglIso, baseline), excluded: false,
+          server: m?.server, server_name: m?.server_name, depot: m?.depot,
+          aor, tas: TAS_MAP[aor] || "", spv: row.spv, grsm: row.grsm, release: row.release,
+        })
+      })
+      const chunk = 100
+      for (let i = 0; i < details.length; i += chunk) {
+        const { error: insErr } = await supabase.from("edi_transfer_detail").insert(details.slice(i, i + chunk))
+        if (insErr) return NextResponse.json({ error: `Gagal simpan detail snapshot: ${insErr.message}` }, { status: 500 })
+      }
+      snapshotSaved = true
+      snapshotCount = details.length
+    }
+  }
+
+  return NextResponse.json({
+    success: true, slot, logDate: todayLocalIso(), lateCount: lateRows.length,
+    ...(slot === "sore" ? { snapshotSaved, snapshotCount } : {}),
+  })
 }
 
 export async function GET(req: NextRequest) {
