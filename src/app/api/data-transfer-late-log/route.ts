@@ -9,19 +9,20 @@ import { createClient } from "@supabase/supabase-js"
 // di-override/remarks="Inactive", baseline default h-1/h-3 Senin/h-2
 // Minggu), lalu simpen 1 baris per ADP telat ke data_transfer_late_log.
 //
-// KHUSUS slot "sore" (trigger terakhir/representatif buat status hari
-// itu): SEKALIGUS auto-save "Save Snapshot" (persis logic handleSave di
-// page.tsx) ke edi_transfer_snapshots + edi_transfer_detail — biar
-// riwayat harian lengkap (bukan cuma yang telat) tetap kesimpen otomatis
-// walau nggak ada yang klik tombol "Save Snapshot" manual. Di-skip kalau
-// snapshot auto buat tanggal itu udah pernah dibuat (hindari dobel kalau
-// scheduler ke-trigger 2x di hari yang sama).
+// SETIAP slot (pagi/siang/sore) SEKALIGUS auto-save "Save Snapshot"
+// (persis logic handleSave di page.tsx) ke edi_transfer_snapshots +
+// edi_transfer_detail — masing-masing slot dapet snapshot SENDIRI
+// (created_by beda per slot), jadi riwayat harian lengkap (bukan cuma
+// yang telat) tersimpan 3x sehari dan bisa kebandingin progresinya
+// dalam 1 hari, bukan cuma status akhir hari. Di-skip kalau snapshot
+// buat tanggal+slot itu udah pernah dibuat (hindari dobel kalau
+// scheduler ke-trigger 2x).
 //
 // Contoh panggilan: GET /api/data-transfer-late-log?slot=pagi
 const SLOTS = ["pagi", "siang", "sore"] as const
 type Slot = typeof SLOTS[number]
 
-const AUTO_SNAPSHOT_CREATED_BY = "Auto (trigger sore)"
+const SLOT_LABELS: Record<Slot, string> = { pagi: "trigger pagi 06:00", siang: "trigger siang 12:00", sore: "trigger sore 17:00" }
 
 function parseTglGudang(raw: string | null | undefined): string {
   if (!raw) return ""
@@ -119,46 +120,48 @@ async function handle(slotParam: string | null) {
     if (upErr) return NextResponse.json({ error: `Gagal simpan log: ${upErr.message}` }, { status: 500 })
   }
 
-  // ── 2) Khusus slot "sore": auto-save snapshot harian lengkap ──
+  // ── 2) Auto-save snapshot harian lengkap, SEMUA slot (pagi/siang/sore) —
+  // masing-masing slot dapet snapshot sendiri (bukan nimpa satu sama
+  // lain), jadi bisa kebandingin progresinya dalam 1 hari juga, bukan
+  // cuma status akhir hari. Dedup key-nya tanggal+slot, bukan tanggal doang.
+  const createdBy = `Auto (trigger ${slot})`
   let snapshotSaved = false
   let snapshotCount = 0
-  if (slot === "sore") {
-    const { data: existingSnap } = await supabase.from("edi_transfer_snapshots")
-      .select("id").eq("snapshot_date", baseline).eq("created_by", AUTO_SNAPSHOT_CREATED_BY).maybeSingle()
+  const { data: existingSnap } = await supabase.from("edi_transfer_snapshots")
+    .select("id").eq("snapshot_date", baseline).eq("created_by", createdBy).maybeSingle()
 
-    if (!existingSnap) {
-      const { data: snap, error: snapErr } = await supabase.from("edi_transfer_snapshots")
-        .insert({ snapshot_date: baseline, note: `Auto snapshot ${baseline} (trigger sore 17:00)`, created_by: AUTO_SNAPSHOT_CREATED_BY })
-        .select().single()
-      if (snapErr || !snap) return NextResponse.json({ error: `Gagal buat snapshot: ${snapErr?.message}` }, { status: 500 })
+  if (!existingSnap) {
+    const { data: snap, error: snapErr } = await supabase.from("edi_transfer_snapshots")
+      .insert({ snapshot_date: baseline, note: `Auto snapshot ${baseline} (${SLOT_LABELS[slot]})`, created_by: createdBy })
+      .select().single()
+    if (snapErr || !snap) return NextResponse.json({ error: `Gagal buat snapshot: ${snapErr?.message}` }, { status: 500 })
 
-      const details: Record<string, unknown>[] = []
-      dedup.forEach((row, distId) => {
-        const m = masterMap.get(distId)
-        if (isExcluded(distId, m)) return
-        const tglIso = parseTglGudang(row.tgl_gudang)
-        const aor = m?.region_name || ""
-        details.push({
-          snapshot_id: snap.id, snapshot_date: baseline, distributor_id: distId,
-          distributor_nm: row.distributor_nm || distId, tgl_gudang: tglIso,
-          lama: calcLama(tglIso, baseline), excluded: false,
-          server: m?.server, server_name: m?.server_name, depot: m?.depot,
-          aor, tas: TAS_MAP[aor] || "", spv: row.spv, grsm: row.grsm, release: row.release,
-        })
+    const details: Record<string, unknown>[] = []
+    dedup.forEach((row, distId) => {
+      const m = masterMap.get(distId)
+      if (isExcluded(distId, m)) return
+      const tglIso = parseTglGudang(row.tgl_gudang)
+      const aor = m?.region_name || ""
+      details.push({
+        snapshot_id: snap.id, snapshot_date: baseline, distributor_id: distId,
+        distributor_nm: row.distributor_nm || distId, tgl_gudang: tglIso,
+        lama: calcLama(tglIso, baseline), excluded: false,
+        server: m?.server, server_name: m?.server_name, depot: m?.depot,
+        aor, tas: TAS_MAP[aor] || "", spv: row.spv, grsm: row.grsm, release: row.release,
       })
-      const chunk = 100
-      for (let i = 0; i < details.length; i += chunk) {
-        const { error: insErr } = await supabase.from("edi_transfer_detail").insert(details.slice(i, i + chunk))
-        if (insErr) return NextResponse.json({ error: `Gagal simpan detail snapshot: ${insErr.message}` }, { status: 500 })
-      }
-      snapshotSaved = true
-      snapshotCount = details.length
+    })
+    const chunk = 100
+    for (let i = 0; i < details.length; i += chunk) {
+      const { error: insErr } = await supabase.from("edi_transfer_detail").insert(details.slice(i, i + chunk))
+      if (insErr) return NextResponse.json({ error: `Gagal simpan detail snapshot: ${insErr.message}` }, { status: 500 })
     }
+    snapshotSaved = true
+    snapshotCount = details.length
   }
 
   return NextResponse.json({
     success: true, slot, logDate: todayLocalIso(), lateCount: lateRows.length,
-    ...(slot === "sore" ? { snapshotSaved, snapshotCount } : {}),
+    snapshotSaved, snapshotCount,
   })
 }
 
