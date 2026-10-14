@@ -86,8 +86,9 @@ interface SnapshotDetail {
 
 // Data dari ho_transfer_snapshot (fitur Matrix HO, tabel beda) — dipakai
 // buat compare "Tanggal Transfer EFC" (tgl_gudang dari EDI) vs "Tanggal
-// Gudang" (ext_date dari HO). Join-nya by distributor_id === subdist_id.
-interface HoExtDateInfo { ext_date: string | null; terlambat: string | null }
+// Gudang" — field yang bener buat "Tanggal Gudang" itu next_date (BUKAN
+// ext_date, sempat salah ambil). Join-nya by distributor_id === subdist_id.
+interface HoExtDateInfo { next_date: string | null }
 
 // Baris log dari tabel data_transfer_late_log — diisi server-side lewat
 // /api/data-transfer-late-log tiap kali di-trigger scheduler eksternal
@@ -297,21 +298,21 @@ export default function DataTransferPage() {
     })()
   }, [])
 
-  // Data "Tanggal Gudang" (ext_date) dari fitur Matrix HO (ho_transfer_snapshot,
+  // Data "Tanggal Gudang" (next_date) dari fitur Matrix HO (ho_transfer_snapshot,
   // tabel BEDA dari edi_transfer_staging) — dipakai buat compare "Tanggal
-  // Transfer EFC" (tgl_gudang dari EDI) vs "Tanggal Gudang" asli (ext_date
-  // dari HO). Ambil snapshot HO yang PALING BARU aja (bukan histori), join
-  // ke ADP lewat distributor_id === subdist_id.
+  // Transfer EFC" (tgl_gudang dari EDI) vs "Tanggal Gudang" (next_date dari
+  // HO — bukan ext_date). Ambil snapshot HO yang PALING BARU aja (bukan
+  // histori), join ke ADP lewat distributor_id === subdist_id.
   useEffect(() => {
     (async () => {
       const { data: latestRow } = await supabase.from("ho_transfer_snapshot")
         .select("snapshot_date").order("snapshot_date", { ascending: false }).limit(1).maybeSingle()
       if (!latestRow) return
       const { data } = await supabase.from("ho_transfer_snapshot")
-        .select("subdist_id,ext_date,terlambat").eq("snapshot_date", latestRow.snapshot_date)
+        .select("subdist_id,next_date").eq("snapshot_date", latestRow.snapshot_date)
       const map = new Map<string, HoExtDateInfo>()
-      ;(data || []).forEach((r: { subdist_id: string; ext_date: string | null; terlambat: string | null }) => {
-        map.set(String(r.subdist_id), { ext_date: r.ext_date, terlambat: r.terlambat })
+      ;(data || []).forEach((r: { subdist_id: string; next_date: string | null }) => {
+        map.set(String(r.subdist_id), { next_date: r.next_date })
       })
       setHoExtDateMap(map)
     })()
@@ -478,12 +479,12 @@ export default function DataTransferPage() {
   }, [activeRows])
 
   // Distribusi "Tanggal Transfer EFC" (field tgl_gudang asli dari EDI —
-  // DIGANTI NAMANYA dari "Tanggal Gudang" biar nggak ketuker sama "Tanggal
-  // Gudang" yang sebenarnya, yang datanya dari ext_date Matrix HO, lihat
-  // tglGudangHoStats di bawah) — berapa ADP per tanggal, biar kelihatan
-  // kalau ada tanggal lama yang nyangkut. Warna bar ngikutin "lama" hari
-  // itu vs baseline, sama kayak StatusBadge di tabel (hijau = on time,
-  // kuning/oranye/merah = makin lama ketinggalannya).
+  // DIGANTI NAMANYA dari "Tanggal Gudang" biar nggak ketuker sama kolom
+  // "Tanggal Gudang" di tabel, yang datanya dari next_date Matrix HO) —
+  // berapa ADP per tanggal, biar kelihatan kalau ada tanggal lama yang
+  // nyangkut. Warna bar ngikutin "lama" hari itu vs baseline, sama kayak
+  // StatusBadge di tabel (hijau = on time, kuning/oranye/merah = makin
+  // lama ketinggalannya).
   const tglTransferEfcStats = useMemo(() => {
     const map = new Map<string, number>()
     for (const r of activeRows) {
@@ -500,49 +501,24 @@ export default function DataTransferPage() {
       })
   }, [activeRows, baseline])
 
-  // Distribusi "Tanggal Gudang" ASLI — field ext_date dari fitur Matrix HO
-  // (ho_transfer_snapshot, lihat useEffect di atas), di-join ke ADP lewat
-  // distributor_id === subdist_id. Formatnya SAMA kayak tgl_gudang EDI
-  // ("DD MON YYYY"), jadi bisa pakai parseTglGudang yang sama. ADP yang
-  // nggak ketemu pasangannya di data HO otomatis ke-skip (belum ke-sync
-  // Matrix HO, atau ADP ini nggak ada di HO).
-  const tglGudangHoStats = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const r of activeRows) {
-      const ho = hoExtDateMap.get(r.distributor_id)
-      const iso = parseTglGudang(ho?.ext_date)
-      if (!iso) continue
-      map.set(iso, (map.get(iso) || 0) + 1)
-    }
-    return Array.from(map.entries())
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([iso, count]) => {
-        const lama = calcLama(iso, baseline)
-        const color = lama <= 0 ? "#16A34A" : lama === 1 ? "#D97706" : lama <= 3 ? "#EA580C" : "#DC2626"
-        return { iso, count, color, label: new Date(iso + "T12:00:00").toLocaleDateString("id-ID", { day:"2-digit", month:"short" }) }
-      })
-  }, [activeRows, hoExtDateMap, baseline])
-
   // % ADP tepat waktu per SERVER (138/228/252/dst, field "server" dari
-  // master_data_adp), diukur dari status "terlambat" di Matrix HO (snapshot
-  // terbaru) — biar kelihatan server mana yang paling banyak nyangkut.
-  // ADP yang belum ke-sync Matrix HO (nggak ketemu pasangannya) di-skip,
-  // nggak ikut ngitung total per server.
-  const serverHoStats = useMemo(() => {
+  // master_data_adp) — diukur dari data Data Transfer/EDI PUNYA SENDIRI
+  // (r.lama <= 0, SAMA kayak aorStats/tasStats di atas), BUKAN dari Matrix
+  // HO — biar kelihatan server mana yang paling banyak nyangkut transfer
+  // EDI-nya.
+  const serverStats = useMemo(() => {
     const map = new Map<string, { ok: number; total: number }>()
     for (const r of activeRows) {
-      const ho = hoExtDateMap.get(r.distributor_id)
-      if (!ho) continue
       const srv = r.server || "?"
       const cur = map.get(srv) || { ok: 0, total: 0 }
       cur.total++
-      if (ho.terlambat !== "T") cur.ok++
+      if (r.lama <= 0) cur.ok++
       map.set(srv, cur)
     }
     return Array.from(map.entries())
       .map(([server, v]) => ({ server, ...v, p: pct(v.ok, v.total) }))
       .sort((a, b) => a.server.localeCompare(b.server))
-  }, [activeRows, hoExtDateMap])
+  }, [activeRows])
 
   // Rekap "ADP mana telat di jam berapa, berapa kali" dari 7 hari log
   // terakhir — per ADP, hitung berapa kali kejadian telat di tiap slot
@@ -742,9 +718,9 @@ export default function DataTransferPage() {
 
   // ── TABLE component (shared) ───────────────────────────────
   const DataTable = ({ rows, isHistory = false, showSpv = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean, showSpv?: boolean }) => {
-    // "Tgl Transfer EFC" = tgl_gudang dari EDI, "Tgl Gudang" = ext_date dari
+    // "Tgl Transfer EFC" = tgl_gudang dari EDI, "Tgl Gudang" = next_date dari
     // Matrix HO (join by distributor_id, lihat hoExtDateMap) — dua kolom
-    // berdampingan biar gampang dibandingin, sama kayak 2 chart di atas.
+    // berdampingan biar gampang dibandingin.
     const headers = showSpv
       ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer EFC","Tgl Gudang","Release","Status"]
       : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer EFC","Tgl Gudang","Release","Status"]
@@ -792,7 +768,7 @@ export default function DataTransferPage() {
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{r.tas||"—"}</td>
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text3)" }}>{r.hka_hke || "—"}</td>
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px" }}>{r.tgl_gudang||r.tgl_iso||"—"}</td>
-                  <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text2)" }}>{hoExtDateMap.get(r.distributor_id)?.ext_date || "—"}</td>
+                  <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text2)" }}>{hoExtDateMap.get(r.distributor_id)?.next_date || "—"}</td>
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)", whiteSpace:"nowrap" }}>{r.release || "—"}</td>
                   <td style={{ padding:"8px 12px" }}>
                     {r.excluded ? <span style={{ fontSize:"10px", color:"var(--text3)" }}>— Excluded</span> : <StatusBadge lama={r.lama}/>}
@@ -1032,48 +1008,23 @@ export default function DataTransferPage() {
               )}
             </div>
 
-            {/* Distribusi Tanggal Gudang ASLI — dari ext_date Matrix HO,
-                dibandingin sama "Tanggal Transfer EFC" di sebelahnya. Kalau
-                dua chart ini beda pola, berarti ada ADP yang EDI-nya udah
-                update tapi Matrix HO-nya belum (atau sebaliknya). */}
-            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px", display:"flex", flexDirection:"column" }}>
-              <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>Tanggal Gudang</div>
-              {tglGudangHoStats.length === 0 ? (
-                <div style={{ flex:1, minHeight:"140px", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--text3)", fontSize:"11px", textAlign:"center", padding:"0 10px" }}>Belum ada data Matrix HO yang cocok (ADP belum ke-sync di sana)</div>
-              ) : (
-                <div style={{ flex:1, minHeight:"140px" }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={tglGudangHoStats}>
-                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
-                      <XAxis dataKey="label" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false}/>
-                      <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={24}/>
-                      <Tooltip formatter={(v: number) => [`${v} ADP`, "Jumlah"]} contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}/>
-                      <Bar dataKey="count" radius={[4,4,0,0]} maxBarSize={28}>
-                        {tglGudangHoStats.map(d => <Cell key={d.iso} fill={d.color}/>)}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-
             {/* Per Server (138/228/252/dst) — % ADP tepat waktu menurut
-                Matrix HO, biar kelihatan server mana yang paling banyak
-                nyangkut/telat. */}
+                data Data Transfer/EDI sendiri (r.lama <= 0), biar kelihatan
+                server mana yang paling banyak nyangkut transfer EDI-nya. */}
             <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px", display:"flex", flexDirection:"column" }}>
-              <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>Per Server (Matrix HO)</div>
-              {serverHoStats.length === 0 ? (
-                <div style={{ flex:1, minHeight:"140px", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--text3)", fontSize:"11px", textAlign:"center", padding:"0 10px" }}>Belum ada data Matrix HO yang cocok</div>
+              <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>Per Server</div>
+              {serverStats.length === 0 ? (
+                <div style={{ flex:1, minHeight:"140px", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--text3)", fontSize:"11px" }}>Tidak ada data</div>
               ) : (
                 <div style={{ flex:1, minHeight:"140px" }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={serverHoStats}>
+                    <BarChart data={serverStats}>
                       <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
                       <XAxis dataKey="server" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false}/>
                       <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={28} domain={[0,100]}/>
                       <Tooltip formatter={(v: number, _n, p) => [`${v}% (${p.payload.ok}/${p.payload.total})`, "Tepat waktu"]} contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}/>
                       <Bar dataKey="p" radius={[4,4,0,0]} maxBarSize={36}>
-                        {serverHoStats.map(s => <Cell key={s.server} fill={s.p >= 90 ? "#16A34A" : s.p >= 70 ? "#D97706" : "#DC2626"}/>)}
+                        {serverStats.map(s => <Cell key={s.server} fill={s.p >= 90 ? "#16A34A" : s.p >= 70 ? "#D97706" : "#DC2626"}/>)}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
