@@ -57,9 +57,18 @@ function calcLama(tglISO: string, baselineISO: string): number {
 
 const TAS_MAP: Record<string, string> = { GMA: "JC", NOL: "Van", SOL: "Jonathan", VIS: "Darren", MIN: "JC" }
 
+// BUG YANG DIPERBAIKI (ketauan dari kasus serupa di ho-transfer-sync):
+// new Date().getFullYear()/getMonth()/getDate() ngikutin timezone PROSES
+// server (Vercel = UTC), bukan WIB. Trigger jam 06:00 WIB = 23:00 UTC
+// HARI SEBELUMNYA, jadi tanggalnya kehitung mundur 1 hari — bukan cuma
+// bikin log_date/snapshot_date salah, tapi baseline (dipakai hitung
+// "lama"/telat-nggaknya tiap ADP) ikut salah juga buat SEMUA ADP yang
+// diproses trigger pagi. Fix: geser +7 jam (offset WIB) dulu sebelum baca
+// tanggal kalendernya via method UTC, biar nggak kepengaruh timezone
+// proses server sama sekali.
 function todayLocalIso(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000)
+  return `${wib.getUTCFullYear()}-${String(wib.getUTCMonth() + 1).padStart(2, "0")}-${String(wib.getUTCDate()).padStart(2, "0")}`
 }
 
 interface StagingRow { distributor_id: string; distributor_nm: string; tgl_gudang: string; spv: string; grsm: string; release: string }

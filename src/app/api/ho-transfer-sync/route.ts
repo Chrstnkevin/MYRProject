@@ -35,9 +35,18 @@ interface HoApiRow {
 }
 interface HoApiPercentage { totalNaik: number; total: number; percentage: number }
 
+// BUG YANG DIPERBAIKI: sebelumnya pakai new Date().getFullYear()/getMonth()/
+// getDate() — method "lokal" yang ngikutin timezone PROSES server (Vercel
+// jalan di UTC), BUKAN WIB. Akibatnya pas di-trigger jam 06:00 WIB (= 23:00
+// UTC HARI SEBELUMNYA, karena WIB = UTC+7), snapshot_date yang dihitung jadi
+// tanggal KEMARIN, bukan hari ini — sync yang harusnya kesimpen di tanggal
+// baru malah nge-upsert (nimpa) baris tanggal sebelumnya. Fix: geser
+// timestamp +7 jam dulu (offset WIB), baru baca tanggal kalendernya pakai
+// method UTC — ini bikin hasilnya nggak kepengaruh timezone proses server
+// sama sekali, selalu representasi tanggal WIB yang benar.
 function todayIso(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+  const wib = new Date(Date.now() + 7 * 60 * 60 * 1000)
+  return `${wib.getUTCFullYear()}-${String(wib.getUTCMonth() + 1).padStart(2, "0")}-${String(wib.getUTCDate()).padStart(2, "0")}`
 }
 
 export async function POST() {
