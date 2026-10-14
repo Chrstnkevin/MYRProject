@@ -13,6 +13,7 @@ import {
   CheckCircle, AlertCircle, Clock, Calendar, Radio, Save,
   Filter, TriangleAlert, Info, Copy, Check
 } from "lucide-react"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
 import { supabase } from "@/lib/supabase"
 import { parseEdiText } from "@/lib/parseEdiText"
 import MotivationBanner from "@/components/layout/MotivationBanner"
@@ -81,6 +82,18 @@ interface SnapshotDetail {
   grsm?:          string
   release?:       string
   hka_hke?:       string
+}
+
+// Baris log dari tabel data_transfer_late_log — diisi server-side lewat
+// /api/data-transfer-late-log tiap kali di-trigger scheduler eksternal
+// (06:00/12:00/17:00). Dipakai buat card "Ketepatan Waktu per Trigger".
+interface LateLogRow {
+  log_date:       string
+  time_slot:      "pagi" | "siang" | "sore"
+  distributor_id: string
+  distributor_nm: string | null
+  aor:            string | null
+  tas:            string | null
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -178,6 +191,7 @@ export default function DataTransferPage() {
   const [loading,      setLoading]      = useState(false)
   const [lastRefresh,  setLastRefresh]  = useState<Date|null>(null)
   const [copiedUpdate, setCopiedUpdate] = useState(false)
+  const [lateLogs,     setLateLogs]     = useState<LateLogRow[]>([])
   const [baseline,     setBaseline]     = useState(() => {
     const today = new Date().toISOString().slice(0, 10)
     return getBaseline(today)
@@ -253,6 +267,20 @@ export default function DataTransferPage() {
   }, [])
 
   useEffect(() => { loadMaster(); loadStaging(); loadOverrides() }, [loadMaster, loadStaging, loadOverrides])
+
+  // Log "ADP telat" 7 hari terakhir, diisi server-side lewat endpoint
+  // /api/data-transfer-late-log (dipanggil scheduler eksternal user
+  // sendiri 3x sehari) — dipakai buat card "Ketepatan Waktu per Trigger".
+  useEffect(() => {
+    (async () => {
+      const sevenDaysAgo = new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+      const sevenDaysAgoIso = `${sevenDaysAgo.getFullYear()}-${String(sevenDaysAgo.getMonth()+1).padStart(2,"0")}-${String(sevenDaysAgo.getDate()).padStart(2,"0")}`
+      const { data } = await supabase.from("data_transfer_late_log")
+        .select("log_date,time_slot,distributor_id,distributor_nm,aor,tas")
+        .gte("log_date", sevenDaysAgoIso)
+      setLateLogs((data as LateLogRow[]) || [])
+    })()
+  }, [])
 
   // Toggle Include/Exclude — update state LANGSUNG (biar responsif di UI)
   // sekaligus upsert ke edi_transfer_overrides (biar tidak hilang pas reload).
@@ -413,6 +441,42 @@ export default function DataTransferPage() {
       return { tas: t, ok, total: g.length, p: pct(ok, g.length) }
     }).filter(g => g.total > 0)
   }, [activeRows])
+
+  // Distribusi "Tanggal Gudang" (field tgl_gudang asli dari EDI) — berapa
+  // ADP per tanggal, biar kelihatan kalau ada tanggal lama yang nyangkut
+  // (belum ke-update ke tanggal gudang terbaru). Warna bar ngikutin "lama"
+  // hari itu vs baseline, sama kayak StatusBadge di tabel (hijau = on time,
+  // kuning/oranye/merah = makin lama ketinggalannya).
+  const tglGudangStats = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const r of activeRows) {
+      const iso = r.tgl_iso || parseTglGudang(r.tgl_gudang)
+      if (!iso) continue
+      map.set(iso, (map.get(iso) || 0) + 1)
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([iso, count]) => {
+        const lama = calcLama(iso, baseline)
+        const color = lama <= 0 ? "#16A34A" : lama === 1 ? "#D97706" : lama <= 3 ? "#EA580C" : "#DC2626"
+        return { iso, count, color, label: new Date(iso + "T12:00:00").toLocaleDateString("id-ID", { day:"2-digit", month:"short" }) }
+      })
+  }, [activeRows, baseline])
+
+  // Rekap "ADP mana telat di jam berapa, berapa kali" dari 7 hari log
+  // terakhir — per ADP, hitung berapa kali kejadian telat di tiap slot
+  // (pagi/siang/sore), diurut dari yang paling sering telat.
+  const lateSummary = useMemo(() => {
+    const map = new Map<string, { distributor_nm: string; aor: string; tas: string; pagi: number; siang: number; sore: number }>()
+    for (const log of lateLogs) {
+      const cur = map.get(log.distributor_id) || { distributor_nm: log.distributor_nm || log.distributor_id, aor: log.aor || "", tas: log.tas || "", pagi: 0, siang: 0, sore: 0 }
+      cur[log.time_slot]++
+      map.set(log.distributor_id, cur)
+    }
+    return Array.from(map.entries())
+      .map(([distributor_id, v]) => ({ distributor_id, ...v, total: v.pagi + v.siang + v.sore }))
+      .sort((a, b) => b.total - a.total)
+  }, [lateLogs])
 
   // ── Filtered rows for table ────────────────────────────────
   const filteredRows = useMemo(() => {
@@ -598,8 +662,8 @@ export default function DataTransferPage() {
   // ── TABLE component (shared) ───────────────────────────────
   const DataTable = ({ rows, isHistory = false, showSpv = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean, showSpv?: boolean }) => {
     const headers = showSpv
-      ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer","Release","Status"]
-      : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer","Release","Status"]
+      ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Gudang","Release","Status"]
+      : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Gudang","Release","Status"]
     const colCount = headers.length + (isHistory ? 0 : 1)
     return (
     <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"auto" }}>
@@ -835,8 +899,8 @@ export default function DataTransferPage() {
             </div>
           </div>
 
-          {/* Area + TAS progress bars */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"10px" }}>
+          {/* Area + TAS progress bars + distribusi Tanggal Gudang */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"10px" }}>
             {[{ title:"Per Area", stats:aorStats }, { title:"Per TAS", stats:tasStats }].map(({ title, stats }) => (
               <div key={title} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
                 <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>{title}</div>
@@ -857,6 +921,80 @@ export default function DataTransferPage() {
                 })}
               </div>
             ))}
+
+            {/* Distribusi Tanggal Gudang — bar chart, warna ngikutin seberapa
+                "lama" tanggal itu dari baseline (hijau=on time s.d. merah=paling telat) */}
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px", display:"flex", flexDirection:"column" }}>
+              <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>Tanggal Gudang</div>
+              {tglGudangStats.length === 0 ? (
+                <div style={{ flex:1, minHeight:"140px", display:"flex", alignItems:"center", justifyContent:"center", color:"var(--text3)", fontSize:"11px" }}>Tidak ada data</div>
+              ) : (
+                <div style={{ flex:1, minHeight:"140px" }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={tglGudangStats}>
+                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
+                      <XAxis dataKey="label" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false}/>
+                      <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={24}/>
+                      <Tooltip formatter={(v: number) => [`${v} ADP`, "Jumlah"]} contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}/>
+                      <Bar dataKey="count" radius={[4,4,0,0]} maxBarSize={28}>
+                        {tglGudangStats.map(d => <Cell key={d.iso} fill={d.color}/>)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ketepatan Waktu per Trigger — rekap dari data_transfer_late_log,
+              diisi lewat /api/data-transfer-late-log yang di-trigger
+              scheduler eksternal user sendiri 3x sehari (06:00/12:00/17:00).
+              Warna sel ngikutin intensitas (makin sering telat, makin merah). */}
+          <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
+            <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:"10px", flexWrap:"wrap", marginBottom:"10px" }}>
+              <div>
+                <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em" }}>Ketepatan Waktu per Trigger</div>
+                <div style={{ fontSize:"11px", color:"var(--text3)", marginTop:"2px" }}>ADP mana sering telat, jam berapa, berapa kali — 7 hari terakhir (trigger pagi 06:00 · siang 12:00 · sore 17:00)</div>
+              </div>
+            </div>
+            {lateSummary.length === 0 ? (
+              <div style={{ padding:"24px", textAlign:"center", color:"var(--text3)", fontSize:"11px" }}>
+                Belum ada log telat 7 hari terakhir — atau scheduler belum di-setup. Panggil <code style={{ background:"var(--surface2)", padding:"1px 6px", borderRadius:"4px" }}>GET /api/data-transfer-late-log?slot=pagi|siang|sore</code> dari scheduler eksternal kamu (mis. cron-job.org) di jam 06:00/12:00/17:00.
+              </div>
+            ) : (
+              <div style={{ overflowX:"auto" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"11px" }}>
+                  <thead>
+                    <tr style={{ background:"var(--surface2)" }}>
+                      {["ADP","Nama","Area","TAS","Pagi","Siang","Sore","Total"].map(h => (
+                        <th key={h} style={{ padding:"7px 10px", fontSize:"10px", fontWeight:700, color:"var(--text3)", textAlign: ["Pagi","Siang","Sore","Total"].includes(h) ? "center" : "left", borderBottom:"1px solid var(--border)", textTransform:"uppercase", whiteSpace:"nowrap" }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {lateSummary.map(row => {
+                      const cell = (n: number) => {
+                        const bg = n === 0 ? "transparent" : n <= 2 ? "#FEE2E2" : n <= 4 ? "#FCA5A5" : "#DC2626"
+                        const color = n === 0 ? "var(--text3)" : n <= 4 ? "#991B1B" : "white"
+                        return <td style={{ padding:"6px 10px", textAlign:"center", fontWeight: n>0 ? 800:400, background:bg, color }}>{n || "—"}</td>
+                      }
+                      return (
+                        <tr key={row.distributor_id} style={{ borderBottom:"1px solid var(--border)" }}>
+                          <td style={{ padding:"6px 10px", fontFamily:"monospace", fontWeight:700, color:"#0369A1" }}>{row.distributor_id}</td>
+                          <td style={{ padding:"6px 10px", maxWidth:"200px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.distributor_nm}</td>
+                          <td style={{ padding:"6px 10px" }}>{row.aor ? <span style={{ background:(AOR_COLORS[row.aor]||"#888")+"15", color:AOR_COLORS[row.aor]||"#888", padding:"2px 8px", borderRadius:"99px", fontSize:"10px", fontWeight:700 }}>{row.aor}</span> : "—"}</td>
+                          <td style={{ padding:"6px 10px", color:"var(--text3)" }}>{row.tas || "—"}</td>
+                          {cell(row.pagi)}
+                          {cell(row.siang)}
+                          {cell(row.sore)}
+                          <td style={{ padding:"6px 10px", textAlign:"center", fontWeight:800, color:"var(--text)" }}>{row.total}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* View toggle: By ADP (dedup per distributor) / By WF (mentah per SPV) */}
