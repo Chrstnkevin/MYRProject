@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { runHoTransferSync } from "@/lib/syncHoTransfer"
 
 // Dipanggil scheduler EKSTERNAL (cron-job.org/dsb — bukan Vercel Cron
 // bawaan, nggak ada vercel.json di project ini) 3x sehari: 06:00 (pagi),
@@ -17,6 +18,13 @@ import { createClient } from "@supabase/supabase-js"
 // dalam 1 hari, bukan cuma status akhir hari. Di-skip kalau snapshot
 // buat tanggal+slot itu udah pernah dibuat (hindari dobel kalau
 // scheduler ke-trigger 2x).
+//
+// SEKALIAN jalanin sync "Data Transfer HO" (src/lib/syncHoTransfer.ts)
+// tiap dipanggil — jadi scheduler eksternal cukup 3 cron job (pagi/
+// siang/sore) buat SEMUA sync (EDI Web Ficom + HO), bukan 6 job
+// terpisah. Dijalanin independen dari logic EDI di atas (try/catch
+// sendiri di dalam runHoTransferSync) — kalau salah satu gagal, yang
+// lain tetap jalan & hasilnya tetap dilaporkan di response.
 //
 // Contoh panggilan: GET /api/data-transfer-late-log?slot=pagi
 const SLOTS = ["pagi", "siang", "sore"] as const
@@ -84,13 +92,14 @@ async function handle(slotParam: string | null) {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-  const [{ data: staging, error: stagingErr }, { data: master, error: masterErr }, { data: overrides }] = await Promise.all([
+  const [hoSync, { data: staging, error: stagingErr }, { data: master, error: masterErr }, { data: overrides }] = await Promise.all([
+    runHoTransferSync(supabase),
     supabase.from("edi_transfer_staging").select("distributor_id,distributor_nm,tgl_gudang,spv,grsm,release"),
     supabase.from("master_data_adp").select("adp_code,region_name,remarks,server,server_name,depot"),
     supabase.from("edi_transfer_overrides").select("distributor_id,excluded"),
   ])
-  if (stagingErr) return NextResponse.json({ error: `Gagal ambil staging: ${stagingErr.message}` }, { status: 500 })
-  if (masterErr) return NextResponse.json({ error: `Gagal ambil master: ${masterErr.message}` }, { status: 500 })
+  if (stagingErr) return NextResponse.json({ error: `Gagal ambil staging: ${stagingErr.message}`, hoSync }, { status: 500 })
+  if (masterErr) return NextResponse.json({ error: `Gagal ambil master: ${masterErr.message}`, hoSync }, { status: 500 })
 
   const masterMap = new Map<string, MasterRow>()
   ;(master as MasterRow[] || []).forEach(m => {
@@ -126,7 +135,7 @@ async function handle(slotParam: string | null) {
   })
   if (lateRows.length > 0) {
     const { error: upErr } = await supabase.from("data_transfer_late_log").upsert(lateRows, { onConflict: "log_date,time_slot,distributor_id" })
-    if (upErr) return NextResponse.json({ error: `Gagal simpan log: ${upErr.message}` }, { status: 500 })
+    if (upErr) return NextResponse.json({ error: `Gagal simpan log: ${upErr.message}`, hoSync }, { status: 500 })
   }
 
   // ── 2) Auto-save snapshot harian lengkap, SEMUA slot (pagi/siang/sore) —
@@ -143,7 +152,7 @@ async function handle(slotParam: string | null) {
     const { data: snap, error: snapErr } = await supabase.from("edi_transfer_snapshots")
       .insert({ snapshot_date: baseline, note: `Auto snapshot ${baseline} (${SLOT_LABELS[slot]})`, created_by: createdBy })
       .select().single()
-    if (snapErr || !snap) return NextResponse.json({ error: `Gagal buat snapshot: ${snapErr?.message}` }, { status: 500 })
+    if (snapErr || !snap) return NextResponse.json({ error: `Gagal buat snapshot: ${snapErr?.message}`, hoSync }, { status: 500 })
 
     const details: Record<string, unknown>[] = []
     dedup.forEach((row, distId) => {
@@ -162,7 +171,7 @@ async function handle(slotParam: string | null) {
     const chunk = 100
     for (let i = 0; i < details.length; i += chunk) {
       const { error: insErr } = await supabase.from("edi_transfer_detail").insert(details.slice(i, i + chunk))
-      if (insErr) return NextResponse.json({ error: `Gagal simpan detail snapshot: ${insErr.message}` }, { status: 500 })
+      if (insErr) return NextResponse.json({ error: `Gagal simpan detail snapshot: ${insErr.message}`, hoSync }, { status: 500 })
     }
     snapshotSaved = true
     snapshotCount = details.length
@@ -170,7 +179,7 @@ async function handle(slotParam: string | null) {
 
   return NextResponse.json({
     success: true, slot, logDate: todayLocalIso(), lateCount: lateRows.length,
-    snapshotSaved, snapshotCount,
+    snapshotSaved, snapshotCount, hoSync,
   })
 }
 
