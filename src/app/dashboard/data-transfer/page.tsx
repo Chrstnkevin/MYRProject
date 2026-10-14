@@ -865,7 +865,7 @@ export default function DataTransferPage() {
               "Summary Release" (breakdown per nilai release). Card GMA/NOL/SOL
               lama dihapus (dikonfirmasi user) — breakdown per Area/TAS tetap
               ada di section "Per Area"/"Per TAS" di bawah. */}
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"10px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:"10px" }}>
             <div style={{ background:ovBg, borderRadius:"10px", padding:"14px 16px" }}>
               <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall Data Transfer ADP</div>
               <div style={{ fontSize:"28px", fontWeight:900, color:ovColor }}>{overall.p}%</div>
@@ -909,7 +909,7 @@ export default function DataTransferPage() {
           </div>
 
           {/* Area + TAS progress bars + distribusi Tanggal Gudang */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"10px" }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(240px,1fr))", gap:"10px" }}>
             {[{ title:"Per Area", stats:aorStats }, { title:"Per TAS", stats:tasStats }].map(({ title, stats }) => (
               <div key={title} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"10px", padding:"14px 16px" }}>
                 <div style={{ fontSize:"11px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"10px" }}>{title}</div>
@@ -974,24 +974,29 @@ export default function DataTransferPage() {
               <>
                 {/* Chart pisah per slot — top 12 ADP paling sering telat,
                     3 bar bersebelahan (pagi/siang/sore) per ADP biar
-                    kelihatan jam berapa yang paling sering kejadian. */}
-                <div style={{ height:"220px", marginBottom:"16px" }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={lateSummary.slice(0,12)} margin={{ top:4, right:8, left:-16, bottom:0 }}>
-                      <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
-                      <XAxis dataKey="distributor_id" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false} interval={0} angle={-35} textAnchor="end" height={46}/>
-                      <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={24}/>
-                      <Tooltip
-                        contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}
-                        labelFormatter={(id) => `ADP ${id}`}
-                        formatter={(v: number, key: string) => [`${v}x`, SLOT_LABELS[key as "pagi"|"siang"|"sore"]]}
-                      />
-                      <Legend formatter={(key) => SLOT_LABELS[key as "pagi"|"siang"|"sore"]} wrapperStyle={{ fontSize:"11px" }}/>
-                      <Bar dataKey="pagi"  fill={SLOT_COLORS.pagi}  radius={[3,3,0,0]} maxBarSize={14}/>
-                      <Bar dataKey="siang" fill={SLOT_COLORS.siang} radius={[3,3,0,0]} maxBarSize={14}/>
-                      <Bar dataKey="sore"  fill={SLOT_COLORS.sore}  radius={[3,3,0,0]} maxBarSize={14}/>
-                    </BarChart>
-                  </ResponsiveContainer>
+                    kelihatan jam berapa yang paling sering kejadian.
+                    Dibungkus scroll horizontal + minWidth ngikutin jumlah
+                    ADP, biar di layar HP bar-nya nggak gepeng numpuk —
+                    tinggal geser, bukan dipaksa muat semua di layar sempit. */}
+                <div style={{ overflowX:"auto", marginBottom:"16px" }}>
+                  <div style={{ height:"220px", minWidth:`${Math.max(320, lateSummary.slice(0,12).length * 70)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={lateSummary.slice(0,12)} margin={{ top:4, right:8, left:-16, bottom:0 }}>
+                        <CartesianGrid strokeDasharray="2 4" stroke="var(--border)" vertical={false}/>
+                        <XAxis dataKey="distributor_id" tick={{ fill:"var(--text3)", fontSize:9 }} axisLine={false} tickLine={false} interval={0} angle={-35} textAnchor="end" height={46}/>
+                        <YAxis allowDecimals={false} tick={{ fill:"var(--text3)", fontSize:10 }} axisLine={false} tickLine={false} width={24}/>
+                        <Tooltip
+                          contentStyle={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"8px", fontSize:"11px" }}
+                          labelFormatter={(id) => `ADP ${id}`}
+                          formatter={(v: number, key: string) => [`${v}x`, SLOT_LABELS[key as "pagi"|"siang"|"sore"]]}
+                        />
+                        <Legend formatter={(key) => SLOT_LABELS[key as "pagi"|"siang"|"sore"]} wrapperStyle={{ fontSize:"11px" }}/>
+                        <Bar dataKey="pagi"  fill={SLOT_COLORS.pagi}  radius={[3,3,0,0]} maxBarSize={14}/>
+                        <Bar dataKey="siang" fill={SLOT_COLORS.siang} radius={[3,3,0,0]} maxBarSize={14}/>
+                        <Bar dataKey="sore"  fill={SLOT_COLORS.sore}  radius={[3,3,0,0]} maxBarSize={14}/>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
 
               <div style={{ overflowX:"auto" }}>
@@ -1080,7 +1085,7 @@ export default function DataTransferPage() {
 
       {/* ── HISTORY TAB ── */}
       {tab === "history" && (
-        <div style={{ display:"grid", gridTemplateColumns:"260px 1fr", gap:"14px" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(260px,1fr))", gap:"14px" }}>
           {/* Sidebar snapshots */}
           <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"hidden" }}>
             <div style={{ padding:"12px 14px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between" }}>
@@ -1111,7 +1116,7 @@ export default function DataTransferPage() {
           <div style={{ display:"flex", flexDirection:"column", gap:"12px" }}>
             {selectedSnap && (<>
               {/* History summary */}
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"10px" }}>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(150px,1fr))", gap:"10px" }}>
                 <div style={{ background: histOverall.p>=90?"#DCFCE7":histOverall.p>=70?"#EFF6FF":"#FEE2E2", borderRadius:"10px", padding:"14px 16px" }}>
                   <div style={{ fontSize:"10px", fontWeight:700, color:"var(--text3)", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:"4px" }}>Overall</div>
                   <div style={{ fontSize:"28px", fontWeight:900, color: histOverall.p>=90?"#166534":histOverall.p>=70?"#0369A1":"#991B1B" }}>{histOverall.p}%</div>
