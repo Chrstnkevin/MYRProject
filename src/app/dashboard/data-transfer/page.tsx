@@ -742,9 +742,12 @@ export default function DataTransferPage() {
 
   // ── TABLE component (shared) ───────────────────────────────
   const DataTable = ({ rows, isHistory = false, showSpv = false }: { rows: (DisplayRow|SnapshotDetail)[], isHistory?: boolean, showSpv?: boolean }) => {
+    // "Tgl Transfer EFC" = tgl_gudang dari EDI, "Tgl Gudang" = ext_date dari
+    // Matrix HO (join by distributor_id, lihat hoExtDateMap) — dua kolom
+    // berdampingan biar gampang dibandingin, sama kayak 2 chart di atas.
     const headers = showSpv
-      ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Gudang","Release","Status"]
-      : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Gudang","Release","Status"]
+      ? ["","No","WF/SPV","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer EFC","Tgl Gudang","Release","Status"]
+      : ["","No","ADP","Distributor","Server","Server Name","Area","TAS","HKA","Tgl Transfer EFC","Tgl Gudang","Release","Status"]
     const colCount = headers.length + (isHistory ? 0 : 1)
     return (
     <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"12px", overflow:"auto" }}>
@@ -789,6 +792,7 @@ export default function DataTransferPage() {
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)" }}>{r.tas||"—"}</td>
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text3)" }}>{r.hka_hke || "—"}</td>
                   <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px" }}>{r.tgl_gudang||r.tgl_iso||"—"}</td>
+                  <td style={{ padding:"8px 12px", fontFamily:"monospace", fontSize:"11px", color:"var(--text2)" }}>{hoExtDateMap.get(r.distributor_id)?.ext_date || "—"}</td>
                   <td style={{ padding:"8px 12px", fontSize:"11px", color:"var(--text3)", whiteSpace:"nowrap" }}>{r.release || "—"}</td>
                   <td style={{ padding:"8px 12px" }}>
                     {r.excluded ? <span style={{ fontSize:"10px", color:"var(--text3)" }}>— Excluded</span> : <StatusBadge lama={r.lama}/>}
