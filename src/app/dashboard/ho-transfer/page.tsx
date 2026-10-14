@@ -249,9 +249,8 @@ export default function HoTransferPage() {
   )
 
   return (
-    <div style={{ minHeight: "100%", background: "var(--bg)" }}>
+    <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="data-transfer" />
-      <div style={{ padding: "20px 24px", fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
 
       {/* Banner */}
       <div style={{ background: "linear-gradient(135deg,#0E4D64,#0891B2)", borderRadius: 14, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
@@ -582,7 +581,6 @@ export default function HoTransferPage() {
           </div>
         </>
       )}
-      </div>
     </div>
   )
 }
