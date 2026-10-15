@@ -92,6 +92,22 @@ async function handle(slotParam: string | null) {
   if (stagingErr) return NextResponse.json({ error: `Gagal ambil staging: ${stagingErr.message}` }, { status: 500 })
   if (masterErr) return NextResponse.json({ error: `Gagal ambil master: ${masterErr.message}` }, { status: 500 })
 
+  // GUARD: kalau staging balik 0 baris, JANGAN lanjut log/snapshot. Ini
+  // kejadian nyata — "Tarik dari Ficom" (ficom-edi-sync) nge-truncate
+  // edi_transfer_staging dulu baru insert ulang per-chunk (lihat route
+  // itu), jadi ada jendela waktu singkat tabelnya kosong total. Kalau
+  // trigger pagi/siang/sore kebetulan nembak PAS di jendela itu, bakal
+  // kesimpen log 0-telat + snapshot 0 baris yang KELIATAN sukses padahal
+  // datanya bukan cerminan hari itu — dan karena snapshot udah ke-insert,
+  // dedup existingSnap bikin slot+tanggal itu nggak akan pernah retry.
+  // Mending gagal eksplisit di sini (keliatan di cron-job.org, dan belum
+  // bikin snapshot) daripada diam-diam nyimpen data kosong permanen.
+  if (!staging || staging.length === 0) {
+    return NextResponse.json({
+      error: "edi_transfer_staging kosong pas trigger ini jalan (kemungkinan lagi ketimpa proses 'Tarik dari Ficom' yang truncate-lalu-isi-ulang) — dilewati, TIDAK nyimpen log/snapshot kosong. Coba trigger ulang manual (GET/POST endpoint ini dengan slot yang sama) setelah pastikan staging udah keisi lagi.",
+    }, { status: 503 })
+  }
+
   const masterMap = new Map<string, MasterRow>()
   ;(master as MasterRow[] || []).forEach(m => {
     const key = String(m.adp_code)

@@ -55,6 +55,16 @@ export async function runHoTransferSync(supabase: SupabaseClient): Promise<HoSyn
     const list = await listRes.json() as HoApiRow[]
     const pct = await pctRes.json() as HoApiPercentage
 
+    // GUARD: kalau API HO balikin 0 baris (API-nya lagi down/ngaco
+    // sesaat), jangan nulis apa-apa — termasuk ho_transfer_summary.
+    // Sebelumnya summary tetap keupsert walau list kosong (upsert
+    // dgn total:0 keikut angka pct.total apa adanya), bikin trend
+    // "% Naik" kelihatan anjlok/0% di tanggal itu padahal itu cuma
+    // glitch upstream, bukan progres asli hari itu.
+    if (!list.length) {
+      return { success: false, error: "API HO (52.163.214.18) balikin 0 subdist — kemungkinan API-nya lagi down/kosong sesaat, data lama TIDAK ditimpa" }
+    }
+
     const snapshotDate = todayIsoWIB()
     const now = new Date().toISOString()
 
