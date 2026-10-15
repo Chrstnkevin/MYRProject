@@ -174,9 +174,26 @@ async function handle(slotParam: string | null) {
   })
 }
 
+// Pembungkus try/catch PALING LUAR — sebelumnya nggak ada, jadi kalau ada
+// exception yang nggak ketangkep (mis. Supabase network-level error yang
+// nge-throw bukan balikin {error}, bukan Postgrest-level error biasa),
+// Vercel balikin halaman 500 generik POLOS tanpa body JSON — bikin
+// scheduler (cron-job.org) nggak bisa nunjukin pesan error aslinya sama
+// sekali (cuma "500 Internal Server Error", RAW RESPONSE-nya kosong).
+// Sekarang APAPUN yang gagal di handle(), selalu balik JSON {error:...}
+// yang jelas, biar ketauan penyebab pastinya dari RAW RESPONSE.
+async function safeHandle(slotParam: string | null) {
+  try {
+    return await handle(slotParam)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: `Error tak terduga (nggak ketangkep try/catch biasa): ${msg}` }, { status: 500 })
+  }
+}
+
 export async function GET(req: NextRequest) {
-  return handle(req.nextUrl.searchParams.get("slot"))
+  return safeHandle(req.nextUrl.searchParams.get("slot"))
 }
 export async function POST(req: NextRequest) {
-  return handle(req.nextUrl.searchParams.get("slot"))
+  return safeHandle(req.nextUrl.searchParams.get("slot"))
 }

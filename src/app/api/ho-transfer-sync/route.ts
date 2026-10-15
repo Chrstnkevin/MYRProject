@@ -11,16 +11,26 @@ import { runHoTransferSync } from "@/lib/syncHoTransfer"
 // tetap boleh, cuma fetch() dari origin HTTPS yang diblokir). Request
 // server-ke-server nggak kena aturan mixed-content itu.
 //
-// Dipanggil tombol "Sync dari HO" manual di halaman ho-transfer. Logic
-// sync-nya sendiri ada di src/lib/syncHoTransfer.ts (shared) — endpoint
-// data-transfer-late-log juga manggil fungsi yang sama, biar scheduler
-// eksternal cukup 3 cron job (pagi/siang/sore) buat semua sync sekaligus.
+// Dipanggil tombol "Sync dari HO" manual di halaman ho-transfer, dan/atau
+// scheduler eksternal kalau di-setup cron job terpisah buat ini. Logic
+// sync-nya sendiri ada di src/lib/syncHoTransfer.ts (shared).
+//
+// Dibungkus try/catch paling luar — kalau createClient() atau hal lain di
+// luar runHoTransferSync (yang udah py try/catch sendiri) nge-throw,
+// Vercel balikin 500 generik polos tanpa body JSON, bikin scheduler nggak
+// bisa nunjukin error aslinya. Sekarang selalu balik JSON {error:...} yang
+// jelas apapun penyebabnya.
 export async function POST() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  const supabase = createClient(supabaseUrl, supabaseAnonKey)
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
-  const result = await runHoTransferSync(supabase)
-  if (!result.success) return NextResponse.json({ error: result.error }, { status: 500 })
-  return NextResponse.json(result)
+    const result = await runHoTransferSync(supabase)
+    if (!result.success) return NextResponse.json({ error: result.error }, { status: 500 })
+    return NextResponse.json(result)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    return NextResponse.json({ error: `Error tak terduga (nggak ketangkep try/catch biasa): ${msg}` }, { status: 500 })
+  }
 }
