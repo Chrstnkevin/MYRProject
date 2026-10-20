@@ -482,25 +482,9 @@ export default function HoTransferPage() {
               </table>
               </div>
             </div>
-
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px" }}>
-              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TANGGAL GUDANG</div>
-              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Jumlah Subdist per Tanggal Gudang</div>
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={gudangDateStats} margin={{ top: 16, right: 8, left: -20, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                  <XAxis dataKey="short" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-                  <Tooltip formatter={(value: number) => [value, "Subdist"]} labelFormatter={(l, p) => p?.[0]?.payload?.date || l} />
-                  <Bar dataKey="count" name="Subdist" radius={[4, 4, 0, 0]} fill="#0891B2">
-                    <LabelList dataKey="count" position="top" style={{ fontSize: 10, fill: "var(--text3)", fontWeight: 700 }} />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
           </div>
 
-          {/* Tren Terlambat + Top Wilayah Bermasalah */}
+          {/* Tren Terlambat + Top Wilayah Bermasalah + Tanggal Gudang */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 10 }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TREN</div>
@@ -547,6 +531,22 @@ export default function HoTransferPage() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TANGGAL GUDANG</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Jumlah Subdist per Tanggal Gudang</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={gudangDateStats} margin={{ top: 16, right: 8, left: -20, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="short" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip formatter={(value: number) => [value, "Subdist"]} labelFormatter={(l, p) => p?.[0]?.payload?.date || l} />
+                  <Bar dataKey="count" name="Subdist" radius={[4, 4, 0, 0]} fill="#0891B2">
+                    <LabelList dataKey="count" position="top" style={{ fontSize: 10, fill: "var(--text3)", fontWeight: 700 }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
