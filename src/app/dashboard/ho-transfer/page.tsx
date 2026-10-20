@@ -104,6 +104,20 @@ function fmtCutoff(iso: string): string {
   return `${day} ${month} ${d.getFullYear()} ${hh}.${mm} WIB`
 }
 
+// next_date dari HO formatnya string "DD MON YYYY" (mis. "20 OCT 2026"),
+// bukan ISO — dipakai buat urutin pilihan filter tanggal gudang secara
+// kronologis (bukan alfabetis, yang salah urut buat nama bulan).
+const HO_MONTHS: Record<string, string> = {
+  JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
+  JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12",
+}
+function hoDateSortKey(raw: string): string {
+  const parts = raw.trim().toUpperCase().split(/\s+/)
+  if (parts.length !== 3) return raw
+  const [d, m, y] = parts
+  return `${y}-${HO_MONTHS[m] || "00"}-${d.padStart(2, "0")}`
+}
+
 export default function HoTransferPage() {
   const [rows, setRows] = useState<SnapshotRow[]>([])
   const [summaries, setSummaries] = useState<SummaryRow[]>([])
@@ -118,6 +132,7 @@ export default function HoTransferPage() {
   const [search, setSearch] = useState("")
   const [wilayahFilter, setWilayahFilter] = useState("ALL")
   const [statusFilter, setStatusFilter] = useState<"ALL" | "TERLAMBAT" | "TEPAT">("ALL")
+  const [gudangDateFilter, setGudangDateFilter] = useState("ALL")
 
   useEffect(() => { loadData() }, [])
 
@@ -161,6 +176,8 @@ export default function HoTransferPage() {
   const activeSummary = activeDate ? (summaries.find(s => s.snapshot_date === activeDate) || null) : null
 
   const wilayahOptions = Array.from(new Set(activeRows.map(r => r.region_nm).filter(Boolean))) as string[]
+  const gudangDateOptions = Array.from(new Set(activeRows.map(r => r.next_date).filter(Boolean))) as string[]
+  gudangDateOptions.sort((a, b) => hoDateSortKey(a).localeCompare(hoDateSortKey(b)))
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -169,9 +186,10 @@ export default function HoTransferPage() {
       if (wilayahFilter !== "ALL" && r.region_nm !== wilayahFilter) return false
       if (statusFilter === "TERLAMBAT" && r.terlambat !== "T") return false
       if (statusFilter === "TEPAT" && r.terlambat === "T") return false
+      if (gudangDateFilter !== "ALL" && r.next_date !== gudangDateFilter) return false
       return true
     })
-  }, [activeRows, search, wilayahFilter, statusFilter])
+  }, [activeRows, search, wilayahFilter, statusFilter, gudangDateFilter])
 
   const terlambatCount = activeRows.filter(r => r.terlambat === "T").length
   const tepatCount = activeRows.length - terlambatCount
@@ -530,6 +548,12 @@ export default function HoTransferPage() {
               <option value="TERLAMBAT">Terlambat</option>
               <option value="TEPAT">Tepat Waktu</option>
             </select>
+            <select value={gudangDateFilter} onChange={e => setGudangDateFilter(e.target.value)}
+              title="Filter berdasarkan Tanggal Gudang (Next Date)"
+              style={{ padding: "9px 12px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 12, fontFamily: "inherit" }}>
+              <option value="ALL">Semua Tanggal Gudang</option>
+              {gudangDateOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
             <span style={{ alignSelf: "center", fontSize: 11, color: "var(--text3)" }}>{filtered.length}/{activeRows.length} subdist</span>
           </div>
 
@@ -542,8 +566,7 @@ export default function HoTransferPage() {
                     <th style={{ padding: "8px 10px" }}>Subdist</th>
                     <th style={{ padding: "8px 10px" }}>Wilayah</th>
                     <th style={{ padding: "8px 10px" }}>Area</th>
-                    <th style={{ padding: "8px 10px" }}>Ext Date</th>
-                    <th style={{ padding: "8px 10px" }}>Next Date</th>
+                    <th style={{ padding: "8px 10px" }}>Tanggal Gudang</th>
                     <th style={{ padding: "8px 10px" }}>Status</th>
                     <th style={{ padding: "8px 10px", textAlign: "right" }}>Omset HO</th>
                     <th style={{ padding: "8px 10px", textAlign: "right" }}>Omset Pro</th>
@@ -552,7 +575,7 @@ export default function HoTransferPage() {
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "var(--text3)" }}>Tidak ada data yang cocok</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "var(--text3)" }}>Tidak ada data yang cocok</td></tr>
                   ) : filtered.map(r => (
                     <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={{ padding: "7px 10px" }}>
@@ -563,7 +586,6 @@ export default function HoTransferPage() {
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={10} />{r.region_nm || "-"}</span>
                       </td>
                       <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.area_nm || "-"}</td>
-                      <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.ext_date || "-"}</td>
                       <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.next_date || "-"}</td>
                       <td style={{ padding: "7px 10px" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: r.terlambat === "T" ? "#FEE2E2" : "#DCFCE7", color: r.terlambat === "T" ? "#991B1B" : "#166534" }}>

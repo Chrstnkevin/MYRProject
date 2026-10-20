@@ -363,7 +363,21 @@ async function crawlOrgTree(token: string, rootEmpId: string, periodDate: string
 
   async function crawl(empId: string, depth: number) {
     if (depth > 3) return
-    const children = await limiter(() => ficomGet<FicomChild[]>(`/api/dashboard/detilChange/${empId}/${METRIC}/${periodDate}`, token))
+    // SEBELUMNYA: ficomGet gagal (mis. detilChange balikin HTTP 500 buat 1
+    // empId tertentu — pernah kejadian nyata buat WF5126/OMSET tanggal hari
+    // itu juga, kemungkinan data node itu belum siap di sisi Ficom) bikin
+    // exception nembus sampai ke crawlOrgTree, nge-GAGALKAN SELURUH sync
+    // org tree (bukan cuma cabang WF5126) — padahal task lain (Dashboard
+    // Category/Product/Salesman breakdown) udah per-task try/catch sendiri
+    // dan cuma nge-log warning kalau gagal. Sekarang node yang gagal di-skip
+    // (log warning, cabangnya nggak ikut ke-crawl), bukan nggagalin semuanya.
+    let children: FicomChild[]
+    try {
+      children = await limiter(() => ficomGet<FicomChild[]>(`/api/dashboard/detilChange/${empId}/${METRIC}/${periodDate}`, token))
+    } catch (e) {
+      log(`⚠ detilChange gagal buat ${empId} (dilewati, node lain tetap lanjut): ${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
     const level = levelForDepth(depth)
     for (const c of children) {
       const d = c.data
@@ -378,6 +392,16 @@ async function crawlOrgTree(token: string, rootEmpId: string, periodDate: string
     await Promise.all(toRecurse.map(c => crawl(c.data.empId!, depth + 1)))
   }
   await crawl(rootEmpId, 1)
+
+  // GUARD: kalau crawl root sendiri yang gagal (bukan cuma 1 cabang di
+  // tengah), `nodes` bakal kosong total — tanpa guard ini, kode di bawah
+  // tetap bikin 1 node "SD" dengan target/actual 0 dan keliatan SUKSES
+  // ke-upload, nimpa data hari itu jadi 0 padahal cuma gara-gara root
+  // request-nya gagal (mis. token invalid/expired). Mending gagal eksplisit
+  // di sini daripada diam-diam nyimpen 0.
+  if (nodes.length === 0) {
+    throw new Error(`crawlOrgTree: 0 node berhasil diambil dari root ${rootEmpId} — kemungkinan token invalid/expired atau Ficom down, bukan cuma 1 node yang gagal`)
+  }
 
   // Ficom cuma isi target STT yang akurat di level Salesman (leaf) — level
   // RDM/ADM-ADS di atasnya sering 0 di response asli. Jadi dihitung ulang
