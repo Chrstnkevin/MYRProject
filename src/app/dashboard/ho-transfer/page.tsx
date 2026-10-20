@@ -139,9 +139,19 @@ export default function HoTransferPage() {
   async function loadData() {
     setLoading(true)
     setLoadError("")
+    // PENYEBAB "sync bilang 85, tapi Total Subdist cuma kebaca 65": query ini
+    // SEBELUMNYA .select("*") TANPA .limit() — Supabase/PostgREST diam-diam
+    // nge-cap response di default server (umumnya 1000 baris) kalau nggak
+    // dikasih limit eksplisit. Karena histori ho_transfer_snapshot numpuk
+    // terus tiap hari (85-an baris/hari), total baris lintas-tanggal udah
+    // ngelewatin cap itu — dan karena di-order ASCENDING (tanggal lama
+    // duluan), baris TERBARU (hari ini) justru yang KEPOTONG duluan pas kena
+    // limit, bukan yang lama. Fix: urut DESCENDING (tanggal terbaru duluan)
+    // + limit eksplisit jauh di atas kebutuhan, biar data hari ini/terbaru
+    // selalu utuh kebawa walau histori terus bertambah.
     const [snapRes, summaryRes] = await Promise.all([
-      supabase.from("ho_transfer_snapshot").select("*").order("snapshot_date", { ascending: true }),
-      supabase.from("ho_transfer_summary").select("*").order("snapshot_date", { ascending: true }),
+      supabase.from("ho_transfer_snapshot").select("*").order("snapshot_date", { ascending: false }).limit(20000),
+      supabase.from("ho_transfer_summary").select("*").order("snapshot_date", { ascending: false }).limit(5000),
     ])
     if (snapRes.error) setLoadError(snapRes.error.message)
     else setRows((snapRes.data || []) as SnapshotRow[])
