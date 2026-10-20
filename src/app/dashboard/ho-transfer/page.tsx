@@ -249,6 +249,15 @@ export default function HoTransferPage() {
 
   const pctTepatOverall = activeRows.length > 0 ? Math.round((tepatCount / activeRows.length) * 100) : 0
 
+  // Distribusi jumlah subdist per Tanggal Gudang (next_date) — kartu baru
+  // di sebelah Current Progress, biar kelihatan seberapa banyak subdist
+  // yang "menumpuk" di tanggal gudang tertentu (biasanya tanggal2 lama
+  // yang masih nyangkut = backlog). Dipake dari gudangDateOptions yang
+  // udah diurutin kronologis (lihat di atas).
+  const gudangDateStats = gudangDateOptions.map(d => ({
+    date: d, short: d.replace(/\s+\d{4}$/, ""), count: activeRows.filter(r => r.next_date === d).length,
+  }))
+
   // Pesan update siap-kirim — "Naik"/"Belum Naik" pakai angka LANGSUNG
   // dari endpoint /percentage HO (totalNaik/total, tersimpan di
   // ho_transfer_summary), bukan hitungan terlambat/tepat kita sendiri,
@@ -473,6 +482,22 @@ export default function HoTransferPage() {
               </table>
               </div>
             </div>
+
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TANGGAL GUDANG</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Jumlah Subdist per Tanggal Gudang</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={gudangDateStats} margin={{ top: 16, right: 8, left: -20, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="short" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip formatter={(value: number) => [value, "Subdist"]} labelFormatter={(l, p) => p?.[0]?.payload?.date || l} />
+                  <Bar dataKey="count" name="Subdist" radius={[4, 4, 0, 0]} fill="#0891B2">
+                    <LabelList dataKey="count" position="top" style={{ fontSize: 10, fill: "var(--text3)", fontWeight: 700 }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
           {/* Tren Terlambat + Top Wilayah Bermasalah */}
@@ -523,24 +548,6 @@ export default function HoTransferPage() {
                 ))}
               </div>
             </div>
-          </div>
-
-          {/* Selisih Omset per Wilayah */}
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>SELISIH OMSET</div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>|Omset HO − Pro| per Wilayah</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={wilayahStats} layout="vertical" margin={{ top: 4, right: 40, left: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10 }} />
-                <YAxis type="category" dataKey="wilayah" tick={{ fontSize: 11, fontWeight: 700 }} width={40} />
-                <Tooltip formatter={(value: number) => value.toLocaleString("en-PH")} />
-                <Bar dataKey="diffSum" name="Selisih" radius={[0, 4, 4, 0]}>
-                  <LabelList dataKey="diffSum" position="right" style={{ fontSize: 10, fill: "var(--text3)" }} formatter={(v: number) => v.toLocaleString("en-PH")} />
-                  {wilayahStats.map(w => <Cell key={w.wilayah} fill={WILAYAH_CLR[w.wilayah] || "#64748B"} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
           </div>
 
           {/* Search + filter */}
