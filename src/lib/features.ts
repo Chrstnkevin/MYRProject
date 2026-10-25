@@ -43,6 +43,8 @@ export const FEATURES: FeatureDef[] = [
   { key: "userflow",             label: "User Flow",           group: "Dokumen" },
   { key: "scenario-test",        label: "Scenario Test",       group: "Dokumen" },
   { key: "poster-gen",           label: "Poster Generator",    group: "Dokumen" },
+  { key: "superhuman-docs",      label: "Superhuman Docs",     group: "Dokumen" },
+  { key: "pilot-plan",           label: "Plan Pilot SFA",      group: "Dokumen" },
 ]
 
 export const FEATURE_GROUPS: string[] = Array.from(new Set(FEATURES.map(f => f.group)))

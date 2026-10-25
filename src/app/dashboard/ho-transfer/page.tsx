@@ -104,6 +104,20 @@ function fmtCutoff(iso: string): string {
   return `${day} ${month} ${d.getFullYear()} ${hh}.${mm} WIB`
 }
 
+// next_date dari HO formatnya string "DD MON YYYY" (mis. "20 OCT 2026"),
+// bukan ISO — dipakai buat urutin pilihan filter tanggal gudang secara
+// kronologis (bukan alfabetis, yang salah urut buat nama bulan).
+const HO_MONTHS: Record<string, string> = {
+  JAN: "01", FEB: "02", MAR: "03", APR: "04", MAY: "05", JUN: "06",
+  JUL: "07", AUG: "08", SEP: "09", OCT: "10", NOV: "11", DEC: "12",
+}
+function hoDateSortKey(raw: string): string {
+  const parts = raw.trim().toUpperCase().split(/\s+/)
+  if (parts.length !== 3) return raw
+  const [d, m, y] = parts
+  return `${y}-${HO_MONTHS[m] || "00"}-${d.padStart(2, "0")}`
+}
+
 export default function HoTransferPage() {
   const [rows, setRows] = useState<SnapshotRow[]>([])
   const [summaries, setSummaries] = useState<SummaryRow[]>([])
@@ -118,15 +132,26 @@ export default function HoTransferPage() {
   const [search, setSearch] = useState("")
   const [wilayahFilter, setWilayahFilter] = useState("ALL")
   const [statusFilter, setStatusFilter] = useState<"ALL" | "TERLAMBAT" | "TEPAT">("ALL")
+  const [gudangDateFilter, setGudangDateFilter] = useState("ALL")
 
   useEffect(() => { loadData() }, [])
 
   async function loadData() {
     setLoading(true)
     setLoadError("")
+    // PENYEBAB "sync bilang 85, tapi Total Subdist cuma kebaca 65": query ini
+    // SEBELUMNYA .select("*") TANPA .limit() — Supabase/PostgREST diam-diam
+    // nge-cap response di default server (umumnya 1000 baris) kalau nggak
+    // dikasih limit eksplisit. Karena histori ho_transfer_snapshot numpuk
+    // terus tiap hari (85-an baris/hari), total baris lintas-tanggal udah
+    // ngelewatin cap itu — dan karena di-order ASCENDING (tanggal lama
+    // duluan), baris TERBARU (hari ini) justru yang KEPOTONG duluan pas kena
+    // limit, bukan yang lama. Fix: urut DESCENDING (tanggal terbaru duluan)
+    // + limit eksplisit jauh di atas kebutuhan, biar data hari ini/terbaru
+    // selalu utuh kebawa walau histori terus bertambah.
     const [snapRes, summaryRes] = await Promise.all([
-      supabase.from("ho_transfer_snapshot").select("*").order("snapshot_date", { ascending: true }),
-      supabase.from("ho_transfer_summary").select("*").order("snapshot_date", { ascending: true }),
+      supabase.from("ho_transfer_snapshot").select("*").order("snapshot_date", { ascending: false }).limit(20000),
+      supabase.from("ho_transfer_summary").select("*").order("snapshot_date", { ascending: false }).limit(5000),
     ])
     if (snapRes.error) setLoadError(snapRes.error.message)
     else setRows((snapRes.data || []) as SnapshotRow[])
@@ -161,6 +186,8 @@ export default function HoTransferPage() {
   const activeSummary = activeDate ? (summaries.find(s => s.snapshot_date === activeDate) || null) : null
 
   const wilayahOptions = Array.from(new Set(activeRows.map(r => r.region_nm).filter(Boolean))) as string[]
+  const gudangDateOptions = Array.from(new Set(activeRows.map(r => r.next_date).filter(Boolean))) as string[]
+  gudangDateOptions.sort((a, b) => hoDateSortKey(a).localeCompare(hoDateSortKey(b)))
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -169,9 +196,10 @@ export default function HoTransferPage() {
       if (wilayahFilter !== "ALL" && r.region_nm !== wilayahFilter) return false
       if (statusFilter === "TERLAMBAT" && r.terlambat !== "T") return false
       if (statusFilter === "TEPAT" && r.terlambat === "T") return false
+      if (gudangDateFilter !== "ALL" && r.next_date !== gudangDateFilter) return false
       return true
     })
-  }, [activeRows, search, wilayahFilter, statusFilter])
+  }, [activeRows, search, wilayahFilter, statusFilter, gudangDateFilter])
 
   const terlambatCount = activeRows.filter(r => r.terlambat === "T").length
   const tepatCount = activeRows.length - terlambatCount
@@ -220,6 +248,15 @@ export default function HoTransferPage() {
   }).sort((a, b) => b.perfPct - a.perfPct)
 
   const pctTepatOverall = activeRows.length > 0 ? Math.round((tepatCount / activeRows.length) * 100) : 0
+
+  // Distribusi jumlah subdist per Tanggal Gudang (next_date) — kartu baru
+  // di sebelah Current Progress, biar kelihatan seberapa banyak subdist
+  // yang "menumpuk" di tanggal gudang tertentu (biasanya tanggal2 lama
+  // yang masih nyangkut = backlog). Dipake dari gudangDateOptions yang
+  // udah diurutin kronologis (lihat di atas).
+  const gudangDateStats = gudangDateOptions.map(d => ({
+    date: d, short: d.replace(/\s+\d{4}$/, ""), count: activeRows.filter(r => r.next_date === d).length,
+  }))
 
   // Pesan update siap-kirim — "Naik"/"Belum Naik" pakai angka LANGSUNG
   // dari endpoint /percentage HO (totalNaik/total, tersimpan di
@@ -447,7 +484,7 @@ export default function HoTransferPage() {
             </div>
           </div>
 
-          {/* Tren Terlambat + Top Wilayah Bermasalah */}
+          {/* Tren Terlambat + Top Wilayah Bermasalah + Tanggal Gudang */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 10 }}>
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
               <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TREN</div>
@@ -495,24 +532,22 @@ export default function HoTransferPage() {
                 ))}
               </div>
             </div>
-          </div>
 
-          {/* Selisih Omset per Wilayah */}
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-            <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>SELISIH OMSET</div>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>|Omset HO − Pro| per Wilayah</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <BarChart data={wilayahStats} layout="vertical" margin={{ top: 4, right: 40, left: 8, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10 }} />
-                <YAxis type="category" dataKey="wilayah" tick={{ fontSize: 11, fontWeight: 700 }} width={40} />
-                <Tooltip formatter={(value: number) => value.toLocaleString("en-PH")} />
-                <Bar dataKey="diffSum" name="Selisih" radius={[0, 4, 4, 0]}>
-                  <LabelList dataKey="diffSum" position="right" style={{ fontSize: 10, fill: "var(--text3)" }} formatter={(v: number) => v.toLocaleString("en-PH")} />
-                  {wilayahStats.map(w => <Cell key={w.wilayah} fill={WILAYAH_CLR[w.wilayah] || "#64748B"} />)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px" }}>
+              <div style={{ fontSize: 10, color: "var(--text3)", fontWeight: 700, letterSpacing: "0.03em", marginBottom: 2 }}>TANGGAL GUDANG</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "var(--text)", marginBottom: 12 }}>Jumlah Subdist per Tanggal Gudang</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={gudangDateStats} margin={{ top: 16, right: 8, left: -20, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="short" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                  <Tooltip formatter={(value: number) => [value, "Subdist"]} labelFormatter={(l, p) => p?.[0]?.payload?.date || l} />
+                  <Bar dataKey="count" name="Subdist" radius={[4, 4, 0, 0]} fill="#0891B2">
+                    <LabelList dataKey="count" position="top" style={{ fontSize: 10, fill: "var(--text3)", fontWeight: 700 }} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
           {/* Search + filter */}
@@ -530,6 +565,12 @@ export default function HoTransferPage() {
               <option value="TERLAMBAT">Terlambat</option>
               <option value="TEPAT">Tepat Waktu</option>
             </select>
+            <select value={gudangDateFilter} onChange={e => setGudangDateFilter(e.target.value)}
+              title="Filter berdasarkan Tanggal Gudang (Next Date)"
+              style={{ padding: "9px 12px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 12, fontFamily: "inherit" }}>
+              <option value="ALL">Semua Tanggal Gudang</option>
+              {gudangDateOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
             <span style={{ alignSelf: "center", fontSize: 11, color: "var(--text3)" }}>{filtered.length}/{activeRows.length} subdist</span>
           </div>
 
@@ -542,8 +583,7 @@ export default function HoTransferPage() {
                     <th style={{ padding: "8px 10px" }}>Subdist</th>
                     <th style={{ padding: "8px 10px" }}>Wilayah</th>
                     <th style={{ padding: "8px 10px" }}>Area</th>
-                    <th style={{ padding: "8px 10px" }}>Ext Date</th>
-                    <th style={{ padding: "8px 10px" }}>Next Date</th>
+                    <th style={{ padding: "8px 10px" }}>Tanggal Gudang</th>
                     <th style={{ padding: "8px 10px" }}>Status</th>
                     <th style={{ padding: "8px 10px", textAlign: "right" }}>Omset HO</th>
                     <th style={{ padding: "8px 10px", textAlign: "right" }}>Omset Pro</th>
@@ -552,7 +592,7 @@ export default function HoTransferPage() {
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
-                    <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "var(--text3)" }}>Tidak ada data yang cocok</td></tr>
+                    <tr><td colSpan={8} style={{ padding: 40, textAlign: "center", color: "var(--text3)" }}>Tidak ada data yang cocok</td></tr>
                   ) : filtered.map(r => (
                     <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                       <td style={{ padding: "7px 10px" }}>
@@ -563,7 +603,6 @@ export default function HoTransferPage() {
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><MapPin size={10} />{r.region_nm || "-"}</span>
                       </td>
                       <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.area_nm || "-"}</td>
-                      <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.ext_date || "-"}</td>
                       <td style={{ padding: "7px 10px", color: "var(--text3)" }}>{r.next_date || "-"}</td>
                       <td style={{ padding: "7px 10px" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: r.terlambat === "T" ? "#FEE2E2" : "#DCFCE7", color: r.terlambat === "T" ? "#991B1B" : "#166534" }}>

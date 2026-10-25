@@ -77,6 +77,7 @@ const NAV_DOKUMEN = [
   { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",       desc: "AI Flowchart Generator",  ai: true  },
   { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test",  desc: "Form Scenario Testing",   ai: false },
   { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",     desc: "AI Poster dari Dokumen",  ai: true  },
+    { icon: FolderOpen,    label: "Superhuman Docs",  path: "/dashboard/superhuman-docs", desc: "Browse Doc & Table (read-only)", ai: false },
 ]
 
 const FlagIndonesia = ({ size = 16 }: { size?: number }) => (
