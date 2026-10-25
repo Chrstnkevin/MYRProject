@@ -78,6 +78,7 @@ const NAV_DOKUMEN = [
   { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test",  desc: "Form Scenario Testing",   ai: false },
   { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",     desc: "AI Poster dari Dokumen",  ai: true  },
     { icon: FolderOpen,    label: "Superhuman Docs",  path: "/dashboard/superhuman-docs", desc: "Browse Doc & Table (read-only)", ai: false },
+  { icon: ClipboardList, label: "Plan Pilot SFA",   path: "/dashboard/pilot-plan",      desc: "Kurasi dokumen + generate Form Detail PILOT", ai: false },
 ]
 
 const FlagIndonesia = ({ size = 16 }: { size?: number }) => (
