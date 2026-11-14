@@ -205,6 +205,23 @@ export default function CodaPage() {
     : null
   const expandedCat = categorized?.find(c => c.key === expandedCategory) || null
 
+  // Diagnostik: baris yang User Request-nya BUKAN salah satu dari 4
+  // kategori — biar kelihatan jelas kenapa jumlah per-kategori sedikit
+  // (apakah emang mayoritas data punya User Request lain, atau ada
+  // variasi penulisan yang kelewat kecocokannya, mis. "Phi " vs "PHI").
+  const otherValueCounts = categorized ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of rows) {
+      const v = getFieldValue(r.values, "User Request").trim()
+      const isCategorized = PLAN_PILOT_CATEGORIES.some(cat => cat.match(v))
+      if (!isCategorized) {
+        const key = v || "(kosong)"
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+  })() : []
+
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
@@ -278,6 +295,19 @@ export default function CodaPage() {
               )}
             </div>
           ))}
+          {otherValueCounts.length > 0 && (
+            <div style={{ gridColumn: "1/-1", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 6 }}>
+                {otherValueCounts.reduce((s, [, n]) => s + n, 0)} baris lain dengan &quot;User Request&quot; di luar PHI/HSJ/PGD/MT/SC:
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {otherValueCounts.slice(0, 15).map(([val, n]) => (
+                  <span key={val} style={{ padding: "3px 9px", borderRadius: 999, fontSize: 10, background: "var(--surface2)", color: "var(--text2)" }}>{val} ({n})</span>
+                ))}
+                {otherValueCounts.length > 15 && <span style={{ fontSize: 10, color: "var(--text3)", alignSelf: "center" }}>+{otherValueCounts.length - 15} nilai lain</span>}
+              </div>
+            </div>
+          )}
         </div>
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
