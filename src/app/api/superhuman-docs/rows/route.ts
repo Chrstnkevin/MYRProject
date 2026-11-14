@@ -9,11 +9,13 @@ interface RowItem { id: string; name?: string; values: Record<string, unknown> }
 // Ambil SEMUA halaman — SEBELUMNYA limit=200 doang (kebetulan pas sama
 // jumlah baris "Plan Pilot", 200, jadi keliatan lengkap padahal cuma
 // untung-untungan; table lain yang lebih dari 200 baris bakal kepotong).
-// limit dinaikin 200->500 biar round-trip ke Coda lebih sedikit buat
-// table besar (mis. Plan Pilot 9919 baris: ~50 request jadi ~20) — ini
-// yang bikin loading kerasa lama. Ditambah cache 5 menit per docId+
-// tableId biar buka tab yang sama berkali-kali nggak fetch ulang dari
-// nol; `fresh=1` (dipakai tombol Refresh) buat bypass cache ini.
+// limit dinaikin lagi 500->1000 (Plan Pilot 9919 baris: ~20 request
+// jadi ~10) — paginasinya SEQUENTIAL (nextPageLink butuh respons
+// halaman sebelumnya dulu, nggak bisa diparalel), jadi ngurangin
+// JUMLAH round-trip itu satu-satunya cara ngurangin total waktu
+// tunggu buat table besar. Cache diperpanjang 5->20 menit biar
+// kunjungan ulang dalam sesi yang sama kerasa instan (Refresh/`fresh=1`
+// tetep bisa bypass kalau emang butuh data paling baru).
 //
 // `simple=0`: SKIP valueFormat=simple (defaultnya "1"/simple tetep
 // jalan, Plan Pilot & Semua Dokumen nggak kepengaruh). Ketauan dari
@@ -31,10 +33,10 @@ export async function GET(req: NextRequest) {
     if (!docId || !tableId) return NextResponse.json({ error: "Param docId & tableId wajib diisi" }, { status: 400 })
     const fresh = req.nextUrl.searchParams.get("fresh") === "1"
     const simple = req.nextUrl.searchParams.get("simple") !== "0"
-    const items = await withSuperhumanDocsCache(`rows:${docId}:${tableId}:${simple ? "s" : "r"}`, 5 * 60_000, fresh, () =>
+    const items = await withSuperhumanDocsCache(`rows:${docId}:${tableId}:${simple ? "s" : "r"}`, 20 * 60_000, fresh, () =>
       callSuperhumanDocsApiAllPages<RowItem>(
         `/docs/${encodeURIComponent(docId)}/tables/${encodeURIComponent(tableId)}/rows`,
-        { limit: 500, useColumnNames: true, valueFormat: simple ? "simple" : undefined }
+        { limit: 1000, useColumnNames: true, valueFormat: simple ? "simple" : undefined }
       )
     )
     return NextResponse.json({ items })

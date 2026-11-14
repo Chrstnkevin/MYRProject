@@ -60,10 +60,10 @@ const TABS: TabDef[] = [
 // user), jadi grouping per kategori bikin 1 batch kepecah nggak jelas
 // ke beberapa tab. Sekarang Plan Pilot cuma 1 TABEL isi SEMUA baris,
 // filter manual lewat dropdown "Plan Pilot" yang udah ada.
-// "Plan Pilot" (nama batch pilot-nya, mis. "Pilot Matrix 26.11.02")
-// ditambahin di preview sesuai request user — sebelumnya cuma
-// Doc No/Doc Name/Status Dev, info batch pilot-nya nggak kelihatan.
-const PREVIEW_COLS = ["Plan Pilot", "Doc. No.", "Doc. Name", "Status Dev"]
+// Kolom yang ditampilin buat Plan Pilot — dicocokin lewat
+// resolveColumns() (normKey-match, bukan exact) kayak ADOP, biar aman
+// kalau nama kolom aslinya beda dikit format-nya.
+const PLAN_PILOT_PREVIEW_COLS = ["Plan Pilot", "Doc. No.", "Doc. Name", "Release", "Task PIC 2", "DEV PIC", "BR PIC", "Status Dev", "Status Project"]
 
 // Khusus tab "ADOP" — 4 TAB terpisah (beda dari Plan Pilot yang 4 panel
 // sejajar) berdasarkan kolom "User" (bukan "User Request" — table ini
@@ -388,6 +388,43 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
   )
 }
 
+// Dropdown dengan kotak search — dibutuhin buat "Plan Pilot" karena
+// sekarang nampilin SEMUA baris (grouping dibuang), opsinya bisa puluhan
+// batch sekaligus, <select> polos jadi kepanjangan buat di-scroll.
+function SearchableSelect({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: string[]; placeholder: string }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState("")
+  const filtered = query ? options.filter(o => o.toLowerCase().includes(query.toLowerCase())) : options
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => { setOpen(o => !o); setQuery("") }}
+        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: value ? "var(--text)" : "var(--text3)", fontSize: 11, fontFamily: "inherit", cursor: "pointer", minWidth: 200, textAlign: "left" }}>
+        {value || placeholder}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+          <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 6, minWidth: 260, maxHeight: 320, display: "flex", flexDirection: "column", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
+            <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Cari..."
+              style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", marginBottom: 4, outline: "none" }} />
+            <div style={{ overflowY: "auto", maxHeight: 250 }}>
+              <div onClick={() => { onChange(""); setOpen(false) }}
+                style={{ padding: "6px 8px", fontSize: 11, color: "var(--text3)", cursor: "pointer", borderRadius: 4 }}>— Semua —</div>
+              {filtered.map(o => (
+                <div key={o} onClick={() => { onChange(o); setOpen(false) }}
+                  style={{ padding: "6px 8px", fontSize: 11, color: o === value ? "#0891B2" : "var(--text2)", fontWeight: o === value ? 700 : 400, cursor: "pointer", borderRadius: 4, background: o === value ? "#0891B21A" : undefined }}>
+                  {o}
+                </div>
+              ))}
+              {filtered.length === 0 && <div style={{ padding: "6px 8px", fontSize: 11, color: "var(--text3)" }}>Nggak ketemu.</div>}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // Dropdown multi-pilih (checkbox) — diminta user biar Timeline bisa
 // pilih beberapa sekaligus (mis. 2026.Q4 + 2026.Q4.BE + 2026.X bareng),
 // mirip widget filter Coda sendiri. selected=[] berarti "semua" (filter
@@ -497,18 +534,6 @@ export default function CodaPage() {
   // 2027.Q1 dkk pas waktunya).
   const [adopTimelineFilter, setAdopTimelineFilter] = useState<string[]>(["2026.Q4", "2026.Q4.BE", "2026.X"])
   const [adopSprintFilter, setAdopSprintFilter] = useState("")
-  // Debug: daftar SEMUA table/view di doc yang lagi aktif — dipakai buat
-  // ketauan kalau table yang ketemu itu "view" (filter permanen beda dari
-  // base table-nya), biar bisa dicocokin mana yang punya baris lengkap.
-  const [allTables, setAllTables] = useState<CodaTableItem[] | null>(null)
-  const [allTablesLoading, setAllTablesLoading] = useState(false)
-  // Debug: raw response dari endpoint GET-single-table (beda dari /tables
-  // yang list semua) — dipakai buat cek field APA AJA yang beneran
-  // dikasih Coda buat table yang lagi dipakai tab ini (filter,
-  // parentTable, dll), soalnya endpoint list ternyata nggak ngasih
-  // field-field itu sama sekali.
-  const [tableDetailRaw, setTableDetailRaw] = useState<string | null>(null)
-  const [tableDetailLoading, setTableDetailLoading] = useState(false)
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -533,34 +558,6 @@ export default function CodaPage() {
     setLoading(l => ({ ...l, [tabKey]: false }))
   }
 
-  async function loadAllTables() {
-    if (!loc) return
-    setAllTablesLoading(true)
-    try {
-      const res = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(loc.docId)}&fresh=1`).then(r => r.json())
-      setAllTables(res.error ? [] : (res.items || []))
-    } catch {
-      setAllTables([])
-    }
-    setAllTablesLoading(false)
-  }
-
-  // Debug: ambil raw detail dari ID View "ADOP BACKLOG" yang ASLI (bukan
-  // hasil redirect ke parentTable, karena parentTable-nya sendiri nggak
-  // ketemu) — butuh ID View aslinya buat ini, jadi dicari ulang dari
-  // allTables kalau ada, fallback ke loc.tableId.
-  async function loadTableDetail(tableId: string) {
-    if (!loc) return
-    setTableDetailLoading(true)
-    try {
-      const res = await fetch(`/api/superhuman-docs/table-detail?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(tableId)}&fresh=1`).then(r => r.json())
-      setTableDetailRaw(JSON.stringify(res, null, 2))
-    } catch (e) {
-      setTableDetailRaw(`Error: ${e instanceof Error ? e.message : String(e)}`)
-    }
-    setTableDetailLoading(false)
-  }
-
   const tab = TABS.find(t => t.key === activeTab)!
   const rows = rowsByTab[activeTab] || []
   const loc = located[activeTab]
@@ -570,16 +567,21 @@ export default function CodaPage() {
   const columns = collectColumns(rows)
 
   // Khusus tab Plan Pilot: SATU tabel isi semua baris (grouping by
-  // User/User Request DIBUANG, lihat catatan di PREVIEW_COLS), cuma
-  // difilter dropdown "Plan Pilot" (opsinya dari SEMUA baris).
+  // User/User Request DIBUANG, lihat catatan di PLAN_PILOT_PREVIEW_COLS),
+  // cuma difilter dropdown "Plan Pilot" (opsinya dari SEMUA baris, bisa
+  // di-search lewat SearchableSelect — jumlah batch bisa banyak banget
+  // sekarang nggak ada grouping kategori lagi).
   const planPilotAllRows = activeTab === "plan-pilot" ? rows : []
   const planPilotOptions = Array.from(new Set(planPilotAllRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
   const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
+  const { found: planPilotFoundCols, missing: planPilotMissingColumns } = activeTab === "plan-pilot" ? resolveColumns(planPilotRows, PLAN_PILOT_PREVIEW_COLS) : { found: [], missing: [] }
 
   // Chart persentase per "Status Dev" (diminta user) — warna bar-nya
   // dicocokin ke statusColor() yang SAMA dipakai buat badge status di
-  // tabel, biar konsisten (bukan skema warna baru).
-  const statusDevPercent = activeTab === "plan-pilot" ? (() => {
+  // tabel, biar konsisten (bukan skema warna baru). CUMA muncul kalau
+  // user udah milih 1 batch Plan Pilot spesifik (diminta user) — nggak
+  // berguna/terlalu berat buat ditampilin atas SEMUA ~9900 baris.
+  const statusDevPercent = activeTab === "plan-pilot" && planPilotFilter ? (() => {
     const counts = new Map<string, number>()
     for (const r of planPilotRows) {
       const v = getFieldValue(r.values, "Status Dev").trim() || "(kosong)"
@@ -651,96 +653,12 @@ export default function CodaPage() {
         ))}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 11, color: "var(--text3)" }}>
-          {loc ? (
-            <>
-              Sumber: <strong>{loc.docName}</strong> → <strong>{loc.tableName}</strong>
-              {loc.viaViewName ? (
-                <span style={{ color: "#166534", fontWeight: 700 }}> (base table, ketemu lewat view &quot;{loc.viaViewName}&quot; — nembus filter per-user)</span>
-              ) : loc.tableType ? <> ({loc.tableType})</> : null} · {rows.length} baris kebaca
-              {typeof loc.tableRowCount === "number" && (
-                <>
-                  {" "}· Coda lapor <strong>{loc.tableRowCount}</strong> baris di table ini
-                  {loc.tableRowCount !== rows.length && (
-                    <span style={{ color: "#DC2626", fontWeight: 700 }}> — BEDA! kemungkinan salah table/view yang ketemu</span>
-                  )}
-                </>
-              )}
-              {" "}· cache 5 menit, Refresh buat paksa fetch ulang
-            </>
-          ) : isLoading ? "Mencari table..." : "—"}
-        </span>
-        <div style={{ display: "flex", gap: 6 }}>
-          {loc && (
-            <button onClick={() => { setAllTables(allTables ? null : []); if (!allTables) loadAllTables() }}
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit" }}>
-              {allTables ? "Tutup daftar table" : "Lihat semua table"}
-            </button>
-          )}
-          {loc && (
-            <button onClick={() => { if (tableDetailRaw) { setTableDetailRaw(null) } else { loadTableDetail(loc.tableId) } }}
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit" }}>
-              {tableDetailRaw ? "Tutup detail" : "Lihat detail table (raw)"}
-            </button>
-          )}
-          <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
-            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
-            {isLoading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={12} />} Refresh
-          </button>
-        </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+        <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
+          style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+          {isLoading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={12} />} Refresh
+        </button>
       </div>
-
-      {tableDetailRaw !== null && (
-        <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 8 }}>
-            Raw response dari GET /tables/{loc?.tableId} (endpoint detail satuan, bukan list):
-          </div>
-          {tableDetailLoading ? (
-            <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p>
-          ) : (
-            <pre style={{ fontSize: 10, color: "var(--text2)", overflowX: "auto", background: "var(--surface2)", padding: 10, borderRadius: 8, maxHeight: 400, overflowY: "auto" }}>{tableDetailRaw}</pre>
-          )}
-        </div>
-      )}
-
-      {allTables !== null && (
-        <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 8 }}>
-            Semua table/view di doc <strong>{loc?.docName}</strong> — diurutin rowCount terbesar dulu. Yang dipakai tab ini: <strong>{loc?.tableName}</strong> (id: {loc?.tableId}).
-          </div>
-          {allTablesLoading ? (
-            <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p>
-          ) : allTables.length === 0 ? (
-            <p style={{ fontSize: 11, color: "var(--text3)" }}>Gagal ambil daftar table.</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)" }}>
-                    <th style={{ padding: "5px 8px" }}>Nama</th>
-                    <th style={{ padding: "5px 8px" }}>Tipe</th>
-                    <th style={{ padding: "5px 8px" }}>rowCount (Coda)</th>
-                    <th style={{ padding: "5px 8px" }}>Parent table (kalau view)</th>
-                    <th style={{ padding: "5px 8px" }}>ID</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...allTables].sort((a, b) => (b.rowCount || 0) - (a.rowCount || 0)).map(t => (
-                    <tr key={t.id} style={{ borderBottom: "1px solid var(--border)", background: t.id === loc?.tableId || t.parentTable?.id === loc?.tableId ? "#DBEAFE33" : undefined }}>
-                      <td style={{ padding: "5px 8px", fontWeight: t.id === loc?.tableId ? 800 : 400 }}>{t.name}</td>
-                      <td style={{ padding: "5px 8px" }}>{t.tableType || "—"}</td>
-                      <td style={{ padding: "5px 8px" }}>{typeof t.rowCount === "number" ? t.rowCount : "—"}</td>
-                      <td style={{ padding: "5px 8px" }}>{t.parentTable ? (t.parentTable.name || t.parentTable.id) : "—"}</td>
-                      <td style={{ padding: "5px 8px", color: "var(--text3)", fontFamily: "monospace", fontSize: 10 }}>{t.id}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
 
       {error && (
         <div style={{ background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 8, padding: "12px 14px", fontSize: 12, color: "#991B1B", display: "flex", alignItems: "flex-start", gap: 8 }}>
@@ -752,18 +670,22 @@ export default function CodaPage() {
         <p style={{ fontSize: 12, color: "var(--text3)" }}>Memuat data {tab.label}...</p>
       ) : !error && activeTab === "plan-pilot" ? (
         // Tab Plan Pilot — 1 TABEL isi semua baris (grouping by User
-        // dibuang, lihat catatan di PREVIEW_COLS), filter dropdown
-        // "Plan Pilot" + chart persentase Status Dev.
+        // dibuang, lihat catatan di PLAN_PILOT_PREVIEW_COLS), filter
+        // searchable "Plan Pilot" + chart persentase Status Dev (cuma
+        // muncul kalau udah difilter ke 1 batch).
         <>
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             {planPilotOptions.length > 0 && (
-              <select value={planPilotFilter} onChange={e => setPlanPilotFilter(e.target.value)}
-                style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
-                <option value="">— Semua Plan Pilot ({planPilotAllRows.length}) —</option>
-                {planPilotOptions.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <SearchableSelect value={planPilotFilter} onChange={setPlanPilotFilter} options={planPilotOptions}
+                placeholder={`— Semua Plan Pilot (${planPilotAllRows.length}) —`} />
             )}
           </div>
+
+          {planPilotMissingColumns.length > 0 && (
+            <p style={{ fontSize: 10, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "6px 10px" }}>
+              Kolom nggak ketemu di data: {planPilotMissingColumns.join(", ")} — kemungkinan nama aslinya beda di table &quot;{loc?.tableName}&quot;.
+            </p>
+          )}
 
           {statusDevPercent.length > 0 && (
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
@@ -786,7 +708,7 @@ export default function CodaPage() {
           )}
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-            <DynamicTable rows={planPilotRows} columns={PREVIEW_COLS} />
+            <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} />
           </div>
         </>
       ) : !error && activeTab === "adop" ? (
