@@ -226,7 +226,11 @@ const ADOP_SPRINT_COL_NAMES = ["Submit Sprint", "Review Sprint", "Dev Sprint", "
 function isSprintColumn(c: string): boolean {
   return ADOP_SPRINT_COL_NAMES.some(n => normKey(n) === normKey(c))
 }
-function sprintOverdueInfo(value: string): { overdue: boolean; weekEndLabel: string } | null {
+// "overdue" = minggunya udah LEWAT (merah) — "due-soon" = masih
+// minggu INI juga (mepet, belum lewat) tapi dikasih warna beda
+// (oranye) biar kebedain, diminta user. Selain itu (masih beberapa
+// minggu lagi) dianggap aman, null.
+function sprintOverdueInfo(value: string): { status: "overdue" | "due-soon"; weekEndLabel: string } | null {
   const yw = parseYearWeek(value)
   if (!yw) return null
   const start = isoWeekStart(yw.year, yw.week)
@@ -234,7 +238,11 @@ function sprintOverdueInfo(value: string): { overdue: boolean; weekEndLabel: str
   weekEnd.setDate(start.getDate() + 6)
   weekEnd.setHours(23, 59, 59, 999)
   const weekEndLabel = weekEnd.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
-  return { overdue: new Date() > weekEnd, weekEndLabel }
+  const now = new Date()
+  if (now > weekEnd) return { status: "overdue", weekEndLabel }
+  const cur = isoWeekInfo(now)
+  if (cur.year === yw.year && cur.week === yw.week) return { status: "due-soon", weekEndLabel }
+  return null
 }
 
 // Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
@@ -479,9 +487,12 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
         const overdueInfo = isSprintColumn(s.col) && rec.hasPending && rawText !== "—" ? sprintOverdueInfo(rawText) : null
         let content: ReactNode = rawText
         let cellStyle: CSSProperties = {}
-        if (overdueInfo?.overdue) {
+        if (overdueInfo?.status === "overdue") {
           content = <span title={`Harusnya kelar ${overdueInfo.weekEndLabel} — udah lewat`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#991B1B", fontWeight: 700 }}>⚠️ {rawText}</span>
           cellStyle = { background: "#FEE2E2" }
+        } else if (overdueInfo?.status === "due-soon") {
+          content = <span title={`Harus kelar ${overdueInfo.weekEndLabel} — minggu ini!`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#92400E", fontWeight: 700 }}>⏰ {rawText}</span>
+          cellStyle = { background: "#FEF3C7" }
         } else if (isStatusColumn(s.col) && rawText !== "—") {
           const { bg, fg } = statusColor(rawText)
           content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
