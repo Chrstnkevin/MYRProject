@@ -14,7 +14,8 @@ import { supabase } from "@/lib/supabase"
 import { featureKeyFromPath } from "@/lib/features"
 
 const NAV_ADMIN = [
-  { icon: Users, label: "User Management", path: "/dashboard/user-management", desc: "Verifikasi & atur akses user", badge: "Admin", badgeColor: "#7C3AED" },
+  { icon: Users,    label: "User Management", path: "/dashboard/user-management", desc: "Verifikasi & atur akses user",      badge: "Admin", badgeColor: "#7C3AED" },
+  { icon: Activity, label: "Log Aktivitas",    path: "/dashboard/activity-logs",   desc: "Siapa buka fitur apa, kapan, berapa lama", badge: "Admin", badgeColor: "#7C3AED" },
 ]
 
 const NAV_TOP = [

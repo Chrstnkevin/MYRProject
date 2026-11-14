@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import { createPortal } from "react-dom"
 import Sidebar from "@/components/layout/Sidebar"
 import Header from "@/components/layout/Header"
+import ActivityTracker from "@/components/layout/ActivityTracker"
 
 // Context so child pages can render modals at root level
 import { createContext, useContext } from "react"
@@ -25,6 +26,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <SidebarContext.Provider value={{ sidebarOpen }}>
+      <ActivityTracker />
       <div style={{ display: "flex", minHeight: "100vh", background: "var(--bg)" }}>
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
