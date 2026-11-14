@@ -76,7 +76,12 @@ const ADOP_CATEGORIES: { key: string; label: string; match: (v: string) => boole
 // TableLocation.viaViewName) yang kolomnya JAUH lebih banyak/generic
 // (dipakai bareng banyak page lain) — makanya dipersempit ke SET kolom
 // yang eksplisit diminta user, bukan nampilin semua kolom yang kebaca.
-const ADOP_PREVIEW_COLS = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "Status Dev", "PIC Apps", "PIC BR", "Request", "Deadline", "Doc. Ref."]
+// KPI & "Doc. Ref." di depan (diminta user) — "Doc. Ref." & "Status Dev"
+// dirender MERGED jadi 1 kolom (lihat AdopTable) soalnya keduanya array
+// PARALEL per baris (Doc. Ref. ke-i statusnya Status Dev ke-i), bukan 2
+// daftar independen — makanya ditaruh berdampingan sejajar per baris,
+// bukan 2 kolom terpisah yang kehilangan hubungannya.
+const ADOP_PREVIEW_COLS = ["KPI", "Doc. Ref.", "Status Dev", "Request", "Deadline", "Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "PIC Apps", "PIC BR"]
 
 // Cocokin `desired` (nama kolom yang KITA mau, longgar lewat normKey) ke
 // nama kolom ASLI yang beneran ada di `rows` — biar DynamicTable (yang
@@ -101,17 +106,29 @@ function resolveColumns(rows: CodaRowItem[], desired: string[]): { found: string
 // SEBELUMNYA pakai JSON.stringify(v) polos, jadi array kosong muncul
 // literal "[]" di tabel (ketauan dari screenshot user). Array
 // digabung jadi teks biasa, objek diambil `.name`-nya kalau ada.
+function cellItemText(x: unknown): string {
+  if (x == null) return ""
+  if (typeof x === "object" && "name" in x) return String((x as { name: unknown }).name)
+  return String(x)
+}
 function fmtCell(v: unknown): string {
   if (v == null) return "—"
   if (Array.isArray(v)) {
     if (v.length === 0) return "—"
-    return v.map(x => (x && typeof x === "object" && "name" in x ? String((x as { name: unknown }).name) : String(x))).join(", ")
+    return v.map(cellItemText).join(", ")
   }
   if (typeof v === "object") {
     if ("name" in (v as object)) return String((v as { name: unknown }).name)
     return JSON.stringify(v)
   }
   return String(v)
+}
+// Dipakai buat "Doc. Ref." + "Status Dev" yang array PARALEL (lihat
+// AdopTable) — nilai tunggal (bukan array) dibungkus jadi array 1
+// elemen biar logic zip-nya seragam.
+function toItemArray(v: unknown): unknown[] {
+  if (v == null) return []
+  return Array.isArray(v) ? v : [v]
 }
 
 // Badge warna buat kolom status (Status Dev, Status Project, dll) —
@@ -182,6 +199,75 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
               })}
             </tr>
           ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// Khusus tabel ADOP — "Doc. Ref." & "Status Dev" itu array PARALEL per
+// baris (doc ke-i -> status ke-i), BUKAN 2 list independen. DynamicTable
+// biasa bakal nampilin keduanya sebagai 1 baris teks panjang ke samping
+// (digabung koma) dan kehilangan hubungan doc<->status-nya — di sini
+// di-zip & ditumpuk ke bawah, 1 baris per pasangan, status-nya jadi
+// badge di sebelah teks doc-nya (diminta user).
+function AdopTable({ rows, kpiKey, docRefKey, statusKey, otherCols }: {
+  rows: CodaRowItem[]; kpiKey?: string; docRefKey?: string; statusKey?: string; otherCols: string[]
+}) {
+  if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
+            {kpiKey && <th style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>KPI</th>}
+            {docRefKey && <th style={{ padding: "8px 10px" }}>Doc. Ref. / Status Dev</th>}
+            {otherCols.map(c => <th key={c} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const docs = docRefKey ? toItemArray(r.values?.[docRefKey]) : []
+            const statuses = statusKey ? toItemArray(r.values?.[statusKey]) : []
+            const n = Math.max(docs.length, statuses.length)
+            return (
+              <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                {kpiKey && <td style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtCell(r.values?.[kpiKey])}</td>}
+                {docRefKey && (
+                  <td style={{ padding: "7px 10px", verticalAlign: "top", minWidth: 260 }}>
+                    {n === 0 ? <span style={{ color: "var(--text3)" }}>—</span> : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {Array.from({ length: n }).map((_, i) => {
+                          const docText = cellItemText(docs[i]) || "—"
+                          const statusText = cellItemText(statuses[i])
+                          const sc = statusText ? statusColor(statusText) : null
+                          return (
+                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ color: "var(--text2)" }}>{docText}</span>
+                              {sc && <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 9, fontWeight: 700, flexShrink: 0, background: sc.bg, color: sc.fg }}>{statusText}</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </td>
+                )}
+                {otherCols.map(c => {
+                  const raw = r.values?.[c]
+                  const rawText = fmtCell(raw)
+                  if (isStatusColumn(c) && rawText !== "—") {
+                    const { bg, fg } = statusColor(rawText)
+                    return (
+                      <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+                      </td>
+                    )
+                  }
+                  return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{rawText}</td>
+                })}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -421,8 +507,15 @@ export default function CodaPage() {
       if (ka !== kb) return ka.localeCompare(kb)
       return getFieldValue(a.values, "Request").localeCompare(getFieldValue(b.values, "Request"))
     })
-  const { found: adopColumns, missing: adopMissingColumns } = activeTab === "adop" ? resolveColumns(adopRows, ADOP_PREVIEW_COLS) : { found: [], missing: [] }
+  const { found: adopFoundCols, missing: adopMissingColumns } = activeTab === "adop" ? resolveColumns(adopRows, ADOP_PREVIEW_COLS) : { found: [], missing: [] }
   const adopAllColumns = activeTab === "adop" ? collectColumns(adopRows) : []
+  // KPI & "Doc. Ref."+"Status Dev" dirender khusus (lihat AdopTable) —
+  // sisanya tetap kolom biasa, urutannya ngikutin ADOP_PREVIEW_COLS
+  // (udah di-resolve ke nama asli lewat resolveColumns di atas).
+  const adopKpiKey = adopFoundCols.find(c => normKey(c) === normKey("KPI"))
+  const adopDocRefKey = adopFoundCols.find(c => normKey(c) === normKey("Doc. Ref."))
+  const adopStatusDevKey = adopFoundCols.find(c => normKey(c) === normKey("Status Dev"))
+  const adopOtherCols = adopFoundCols.filter(c => c !== adopKpiKey && c !== adopDocRefKey && c !== adopStatusDevKey)
 
   // Chart "jumlah item per periode Deadline" (diminta user) — dihitung
   // dari adopRows yang UDAH kena semua filter (sub-tab + Timeline + ADOP
@@ -676,7 +769,7 @@ export default function CodaPage() {
           )}
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
-            <DynamicTable rows={adopRows} columns={adopColumns} />
+            <AdopTable rows={adopRows} kpiKey={adopKpiKey} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} otherCols={adopOtherCols} />
           </div>
         </>
       ) : !error && (
