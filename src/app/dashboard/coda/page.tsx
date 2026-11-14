@@ -247,6 +247,13 @@ export default function CodaPage() {
   // base table-nya), biar bisa dicocokin mana yang punya baris lengkap.
   const [allTables, setAllTables] = useState<CodaTableItem[] | null>(null)
   const [allTablesLoading, setAllTablesLoading] = useState(false)
+  // Debug: raw response dari endpoint GET-single-table (beda dari /tables
+  // yang list semua) — dipakai buat cek field APA AJA yang beneran
+  // dikasih Coda buat table yang lagi dipakai tab ini (filter,
+  // parentTable, dll), soalnya endpoint list ternyata nggak ngasih
+  // field-field itu sama sekali.
+  const [tableDetailRaw, setTableDetailRaw] = useState<string | null>(null)
+  const [tableDetailLoading, setTableDetailLoading] = useState(false)
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -281,6 +288,22 @@ export default function CodaPage() {
       setAllTables([])
     }
     setAllTablesLoading(false)
+  }
+
+  // Debug: ambil raw detail dari ID View "ADOP BACKLOG" yang ASLI (bukan
+  // hasil redirect ke parentTable, karena parentTable-nya sendiri nggak
+  // ketemu) — butuh ID View aslinya buat ini, jadi dicari ulang dari
+  // allTables kalau ada, fallback ke loc.tableId.
+  async function loadTableDetail(tableId: string) {
+    if (!loc) return
+    setTableDetailLoading(true)
+    try {
+      const res = await fetch(`/api/superhuman-docs/table-detail?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(tableId)}&fresh=1`).then(r => r.json())
+      setTableDetailRaw(JSON.stringify(res, null, 2))
+    } catch (e) {
+      setTableDetailRaw(`Error: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    setTableDetailLoading(false)
   }
 
   const tab = TABS.find(t => t.key === activeTab)!
@@ -392,12 +415,31 @@ export default function CodaPage() {
               {allTables ? "Tutup daftar table" : "Lihat semua table"}
             </button>
           )}
+          {loc && (
+            <button onClick={() => { if (tableDetailRaw) { setTableDetailRaw(null) } else { loadTableDetail(loc.tableId) } }}
+              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit" }}>
+              {tableDetailRaw ? "Tutup detail" : "Lihat detail table (raw)"}
+            </button>
+          )}
           <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
             style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
             {isLoading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={12} />} Refresh
           </button>
         </div>
       </div>
+
+      {tableDetailRaw !== null && (
+        <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 8 }}>
+            Raw response dari GET /tables/{loc?.tableId} (endpoint detail satuan, bukan list):
+          </div>
+          {tableDetailLoading ? (
+            <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p>
+          ) : (
+            <pre style={{ fontSize: 10, color: "var(--text2)", overflowX: "auto", background: "var(--surface2)", padding: 10, borderRadius: 8, maxHeight: 400, overflowY: "auto" }}>{tableDetailRaw}</pre>
+          )}
+        </div>
+      )}
 
       {allTables !== null && (
         <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
