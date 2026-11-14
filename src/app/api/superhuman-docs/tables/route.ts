@@ -4,8 +4,13 @@ import { callSuperhumanDocsApiAllPages, SuperhumanDocsError, withSuperhumanDocsC
 // `rowCount`/`tableType` dipakai di halaman CODA buat diagnostik ADOP
 // (bandingin rowCount yang Coda sendiri lapor vs jumlah baris yang
 // kebaca lewat /rows — kalau beda jauh, berarti salah table/view yang
-// ketemu, bukan soal pagination/filter).
-interface TableItem { id: string; name: string; tableType?: string; rowCount?: number }
+// ketemu, bukan soal pagination/filter). `parentTable` cuma ada kalau
+// tableType="view" — ini REFERENSI KE BASE TABLE aslinya, yang nggak
+// kena filter View sama sekali (filter cuma nempel di View, bukan di
+// base table). Dipakai buat nembus View yang filternya "per-user" (mis.
+// kontrol dropdown Timeline di ADOP BACKLOG) yang nggak bisa kita ubah
+// karena token API read-only.
+interface TableItem { id: string; name: string; tableType?: string; rowCount?: number; parentTable?: { id: string; name?: string } }
 
 // Dipanggil halaman CODA buat nyari Table dalam sebuah Doc. Ambil SEMUA
 // halaman (bukan cuma 1 halaman pertama) — sama alasannya kayak /docs.

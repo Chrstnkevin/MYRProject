@@ -19,7 +19,7 @@ import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 interface CodaDocItem { id: string; name: string }
-interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number }
+interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number; parentTable?: { id: string; name?: string } }
 interface CodaRowItem { id: string; name?: string; values: Record<string, unknown> }
 // tableRowCount = rowCount yang DILAPORKAN Coda sendiri buat table ini
 // (metadata, bukan hasil fetch /rows kita) — dipakai buat diagnostik:
@@ -27,7 +27,13 @@ interface CodaRowItem { id: string; name?: string; values: Record<string, unknow
 // pagination/cache; kalau SAMA tapi user lihat lebih banyak di browser
 // Coda, berarti table yang ketemu BUKAN yang dimaksud (salah match, atau
 // yang dilihat user di Coda itu View lain/table lain).
-interface TableLocation { docId: string; docName: string; tableId: string; tableName: string; tableType?: string; tableRowCount?: number }
+// viaViewName: kalau keisi, berarti kita REDIRECT dari sebuah View ke
+// base table aslinya (lewat parentTable) — soalnya View (mis. "ADOP
+// BACKLOG") bisa punya filter kontrol "per-user" yang nggak pernah
+// match versi token API kita walau user udah ubah di browser-nya
+// sendiri; base table nggak kena filter apapun jadi aman dibaca apa
+// adanya. tableName di sini jadi nama BASE TABLE-nya, bukan View-nya.
+interface TableLocation { docId: string; docName: string; tableId: string; tableName: string; tableType?: string; tableRowCount?: number; viaViewName?: string }
 
 interface TabDef { key: string; label: string; matcher: (name: string) => boolean }
 
@@ -186,6 +192,20 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 // fallback nyari ke semua doc kalau ID ini ternyata salah/doc-nya pindah.
 const KNOWN_DOC_ID = "Rt3S4eDoOn"
 
+// Kalau match-nya View dan punya parentTable, pakai base table-nya
+// (lihat catatan viaViewName di TableLocation soal kenapa).
+function resolveLocation(docId: string, docName: string, match: CodaTableItem): TableLocation {
+  if (match.tableType === "view" && match.parentTable?.id) {
+    return {
+      docId, docName,
+      tableId: match.parentTable.id,
+      tableName: match.parentTable.name || match.parentTable.id,
+      viaViewName: match.name,
+    }
+  }
+  return { docId, docName, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
+}
+
 async function findTable(matcher: (name: string) => boolean, fresh = false): Promise<TableLocation | null> {
   const f = fresh ? "&fresh=1" : ""
   const docsRes = await fetch(`/api/superhuman-docs/docs${fresh ? "?fresh=1" : ""}`).then(r => r.json())
@@ -197,7 +217,7 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}${f}`).then(r => r.json())
     if (!tablesRes.error) {
       const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-      if (match) return { docId: knownDoc.id, docName: knownDoc.name, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
+      if (match) return resolveLocation(knownDoc.id, knownDoc.name, match)
     }
   }
 
@@ -206,7 +226,7 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}${f}`).then(r => r.json())
     if (tablesRes.error) continue
     const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-    if (match) return { docId: d.id, docName: d.name, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
+    if (match) return resolveLocation(d.id, d.name, match)
   }
   return null
 }
@@ -350,7 +370,9 @@ export default function CodaPage() {
           {loc ? (
             <>
               Sumber: <strong>{loc.docName}</strong> → <strong>{loc.tableName}</strong>
-              {loc.tableType ? <> ({loc.tableType})</> : null} · {rows.length} baris kebaca
+              {loc.viaViewName ? (
+                <span style={{ color: "#166534", fontWeight: 700 }}> (base table, ketemu lewat view &quot;{loc.viaViewName}&quot; — nembus filter per-user)</span>
+              ) : loc.tableType ? <> ({loc.tableType})</> : null} · {rows.length} baris kebaca
               {typeof loc.tableRowCount === "number" && (
                 <>
                   {" "}· Coda lapor <strong>{loc.tableRowCount}</strong> baris di table ini
@@ -394,15 +416,17 @@ export default function CodaPage() {
                     <th style={{ padding: "5px 8px" }}>Nama</th>
                     <th style={{ padding: "5px 8px" }}>Tipe</th>
                     <th style={{ padding: "5px 8px" }}>rowCount (Coda)</th>
+                    <th style={{ padding: "5px 8px" }}>Parent table (kalau view)</th>
                     <th style={{ padding: "5px 8px" }}>ID</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...allTables].sort((a, b) => (b.rowCount || 0) - (a.rowCount || 0)).map(t => (
-                    <tr key={t.id} style={{ borderBottom: "1px solid var(--border)", background: t.id === loc?.tableId ? "#DBEAFE33" : undefined }}>
+                    <tr key={t.id} style={{ borderBottom: "1px solid var(--border)", background: t.id === loc?.tableId || t.parentTable?.id === loc?.tableId ? "#DBEAFE33" : undefined }}>
                       <td style={{ padding: "5px 8px", fontWeight: t.id === loc?.tableId ? 800 : 400 }}>{t.name}</td>
                       <td style={{ padding: "5px 8px" }}>{t.tableType || "—"}</td>
                       <td style={{ padding: "5px 8px" }}>{typeof t.rowCount === "number" ? t.rowCount : "—"}</td>
+                      <td style={{ padding: "5px 8px" }}>{t.parentTable ? (t.parentTable.name || t.parentTable.id) : "—"}</td>
                       <td style={{ padding: "5px 8px", color: "var(--text3)", fontFamily: "monospace", fontSize: 10 }}>{t.id}</td>
                     </tr>
                   ))}
