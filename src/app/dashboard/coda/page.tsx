@@ -95,10 +95,34 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
   )
 }
 
+// Doc ID diekstrak dari link yang user kasih:
+// https://docs.superhuman.com/d/_dRt3S4eDoOn/Monitoring-Pilot_su3Vv_nP...
+// — "_d" itu penanda path di URL Coda/Superhuman Docs, BUKAN bagian dari
+// ID-nya sendiri, jadi ID aslinya "Rt3S4eDoOn" (10 karakter, format
+// standar doc ID Coda). "Plan Pilot" & "List Monitoring" dikonfirmasi
+// user SAMA-SAMA ada di doc ini. Dicoba DULUAN biar nggak ambigu kalau
+// kebetulan ada table lain yang namanya sama persis di doc yang beda
+// (ini beneran kejadian — "Plan Pilot" sempat ketemu duluan di doc
+// "Global System Support..." yang bukan dimaksud user). Tetap ada
+// fallback nyari ke semua doc kalau ID ini ternyata salah/doc-nya pindah.
+const KNOWN_DOC_ID = "Rt3S4eDoOn"
+
 async function findTable(matcher: (name: string) => boolean): Promise<TableLocation | null> {
   const docsRes = await fetch("/api/superhuman-docs/docs").then(r => r.json())
   if (docsRes.error) throw new Error(docsRes.error)
-  for (const d of (docsRes.items || []) as CodaDocItem[]) {
+  const allDocs = (docsRes.items || []) as CodaDocItem[]
+
+  const knownDoc = allDocs.find(d => d.id === KNOWN_DOC_ID)
+  if (knownDoc) {
+    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}`).then(r => r.json())
+    if (!tablesRes.error) {
+      const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+      if (match) return { docId: knownDoc.id, docName: knownDoc.name, tableId: match.id, tableName: match.name }
+    }
+  }
+
+  for (const d of allDocs) {
+    if (d.id === KNOWN_DOC_ID) continue
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}`).then(r => r.json())
     if (tablesRes.error) continue
     const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
