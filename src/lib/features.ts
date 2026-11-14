@@ -43,6 +43,7 @@ export const FEATURES: FeatureDef[] = [
   { key: "userflow",             label: "User Flow",           group: "Dokumen" },
   { key: "scenario-test",        label: "Scenario Test",       group: "Dokumen" },
   { key: "poster-gen",           label: "Poster Generator",    group: "Dokumen" },
+  { key: "review-document",      label: "Review Document",     group: "Dokumen" },
   { key: "coda",                 label: "CODA",                group: "Dokumen" },
 ]
 

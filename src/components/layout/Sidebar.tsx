@@ -79,6 +79,7 @@ const NAV_DOKUMEN = [
   { icon: GitBranch,     label: "User Flow",        path: "/dashboard/userflow",       desc: "AI Flowchart Generator",  ai: true  },
   { icon: ClipboardList, label: "Scenario Test",    path: "/dashboard/scenario-test",  desc: "Form Scenario Testing",   ai: false },
   { icon: ImageIcon,     label: "Poster Generator", path: "/dashboard/poster-gen",     desc: "AI Poster dari Dokumen",  ai: true  },
+  { icon: Sparkles,      label: "Review Document",  path: "/dashboard/review-document", desc: "AI QC & Developer review BR", ai: true },
     { icon: FolderOpen,    label: "CODA",             path: "/dashboard/coda",           desc: "Monitoring Plan Pilot, ADOP & semua dokumen", ai: false },
 ]
 
