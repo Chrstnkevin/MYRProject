@@ -59,3 +59,24 @@ export async function callSuperhumanDocsApi<T>(path: string, searchParams?: Reco
   }
   return res.json() as Promise<T>
 }
+
+interface PagedList<T> { items: T[]; nextPageToken?: string }
+
+// SEBELUMNYA: list Docs/Table/Row cuma ambil 1 halaman pertama (limit
+// 50-200), TIDAK ngikutin nextPageToken — ketauan jadi BUG NYATA: akun
+// user bisa buka doc "Monitoring Pilot" normal di browser, tapi nggak
+// pernah muncul di hasil GET /docs kita karena doc itu kebetulan nggak
+// masuk 50 doc pertama yang kebalik, BUKAN soal izin akses. Fix: ambil
+// SEMUA halaman sampai nextPageToken abis (dibatasi 20 halaman buat
+// jaga-jaga kalau ada loop aneh/respons rusak).
+export async function callSuperhumanDocsApiAllPages<T>(path: string, searchParams?: Record<string, string | number | boolean | undefined>): Promise<T[]> {
+  const allItems: T[] = []
+  let pageToken: string | undefined
+  for (let page = 0; page < 20; page++) {
+    const data = await callSuperhumanDocsApi<PagedList<T>>(path, { ...searchParams, pageToken })
+    allItems.push(...(data.items || []))
+    if (!data.nextPageToken) break
+    pageToken = data.nextPageToken
+  }
+  return allItems
+}
