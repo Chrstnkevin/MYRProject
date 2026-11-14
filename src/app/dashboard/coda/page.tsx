@@ -15,7 +15,7 @@
 // akun Superhuman Docs, bukan kode.
 
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
+import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 interface CodaDocItem { id: string; name: string }
@@ -58,13 +58,14 @@ const TABS: TabDef[] = [
 // "User Request" (dikonfirmasi user), biar kebaca sekaligus dalam 1 layar
 // tanpa perlu scroll nyari. "HSJ / PGD" digabung jadi 1 panel sesuai
 // permintaan (tetap 4 panel total, bukan 5).
+// Label "HSJ" tapi matching tetep nyakup HSJ & PGD (digabung 1 tab,
+// nggak dipisah) — "SCP" (bukan "SC") soalnya nilai asli di data itu
+// "SCP" persis (ketauan dari panel diagnostik nilai lain dulu).
 const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) => boolean; color: string }[] = [
   { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI", color: "#DC2626" },
-  { key: "hsj-pgd", label: "HSJ / PGD", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()), color: "#7C3AED" },
+  { key: "hsj", label: "HSJ", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()), color: "#7C3AED" },
   { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
-  // Nilai asli di data itu "SCP", bukan "SC" persis (ketauan dari panel
-  // diagnostik nilai lain) - makanya sebelumnya selalu 0.
-  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SCP", color: "#16A34A" },
+  { key: "scp", label: "SCP", match: v => v.trim().toUpperCase() === "SCP", color: "#16A34A" },
 ]
 // "Plan Pilot" (nama batch pilot-nya, mis. "Pilot Matrix 26.11.02")
 // ditambahin di preview sesuai request user — sebelumnya cuma
@@ -494,9 +495,9 @@ export default function CodaPage() {
   const [rowsByTab, setRowsByTab] = useState<Record<string, CodaRowItem[]>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
-  // Filter dropdown "Plan Pilot" PER panel — key = category key, value =
-  // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
+  const [planPilotSubTab, setPlanPilotSubTab] = useState(PLAN_PILOT_CATEGORIES[0].key)
+  // Filter dropdown "Plan Pilot" PER sub-tab — key = category key, value
+  // = nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
   const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
   // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
@@ -577,25 +578,21 @@ export default function CodaPage() {
 
   const columns = collectColumns(rows)
 
-  // Khusus tab Plan Pilot: pecah rows jadi 4 kategori berdasarkan "User
-  // Request". Dihitung tiap render (bukan state terpisah) biar selalu
-  // sinkron sama rowsByTab tanpa perlu useEffect tambahan.
-  const categorized = activeTab === "plan-pilot"
-    ? PLAN_PILOT_CATEGORIES.map(cat => {
-        const allRows = rows.filter(r => cat.match(getFieldValue(r.values, "User Request")))
-        const planPilotOptions = Array.from(new Set(allRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
-        const selected = planPilotFilter[cat.key] || ""
-        const filteredRows = selected ? allRows.filter(r => getFieldValue(r.values, "Plan Pilot") === selected) : allRows
-        return { ...cat, rows: filteredRows, totalCount: allRows.length, planPilotOptions, selected }
-      })
-    : null
-  const expandedCat = categorized?.find(c => c.key === expandedCategory) || null
+  // Khusus tab Plan Pilot: 4 SUB-TAB (sama pola kayak ADOP, bukan lagi 4
+  // panel sejajar+modal expand) — filter ke sub-tab (User Request) yang
+  // aktif dulu, baru dropdown "Plan Pilot" (opsinya dihitung dari baris
+  // sub-tab aktif), tampilin SEMUA baris (nggak dipotong 6 lagi).
+  const planPilotActive = PLAN_PILOT_CATEGORIES.find(c => c.key === planPilotSubTab)!
+  const planPilotCategoryRows = activeTab === "plan-pilot" ? rows.filter(r => planPilotActive.match(getFieldValue(r.values, "User Request"))) : []
+  const planPilotOptions = Array.from(new Set(planPilotCategoryRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
+  const planPilotSelected = planPilotFilter[planPilotSubTab] || ""
+  const planPilotRows = planPilotSelected ? planPilotCategoryRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotSelected) : planPilotCategoryRows
 
   // Diagnostik: baris yang User Request-nya BUKAN salah satu dari 4
   // kategori — biar kelihatan jelas kenapa jumlah per-kategori sedikit
   // (apakah emang mayoritas data punya User Request lain, atau ada
   // variasi penulisan yang kelewat kecocokannya, mis. "Phi " vs "PHI").
-  const otherValueCounts = categorized ? (() => {
+  const otherValueCounts = activeTab === "plan-pilot" ? (() => {
     const counts = new Map<string, number>()
     for (const r of rows) {
       const v = getFieldValue(r.values, "User Request").trim()
@@ -778,47 +775,38 @@ export default function CodaPage() {
 
       {isLoading ? (
         <p style={{ fontSize: 12, color: "var(--text3)" }}>Memuat data {tab.label}...</p>
-      ) : !error && categorized ? (
-        // Tab Plan Pilot — 4 panel sekaligus dalam 1 layar, masing-masing
-        // bisa di-expand buat lihat full table-nya.
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px,1fr))", gap: 12 }}>
-          {categorized.map(cat => (
-            <div key={cat.key} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${cat.color}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color, flexShrink: 0 }} />
-                  {cat.label}
-                  <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 800, background: cat.color + "1A", color: cat.color, flexShrink: 0 }}>
-                    {cat.rows.length}{cat.selected ? ` / ${cat.totalCount}` : ""}
-                  </span>
-                </span>
-                <button onClick={() => setExpandedCategory(cat.key)} title="Expand"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex", flexShrink: 0 }}>
-                  <Maximize2 size={13} />
-                </button>
-              </div>
-              {cat.planPilotOptions.length > 0 && (
-                <div style={{ padding: "8px 14px", borderBottom: "1px solid var(--border)" }}>
-                  <select value={cat.selected} onChange={e => setPlanPilotFilter(f => ({ ...f, [cat.key]: e.target.value }))}
-                    style={{ width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 10, fontFamily: "inherit" }}>
-                    <option value="">— Semua Plan Pilot ({cat.totalCount}) —</option>
-                    {cat.planPilotOptions.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                </div>
-              )}
-              <DynamicTable rows={cat.rows.slice(0, 6)} columns={PREVIEW_COLS} />
-              {cat.rows.length > 6 && (
-                <button onClick={() => setExpandedCategory(cat.key)}
-                  style={{ width: "100%", padding: "8px", border: "none", borderTop: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 10, color: cat.color, fontWeight: 700 }}>
-                  Lihat semua {cat.rows.length} baris →
-                </button>
-              )}
-            </div>
-          ))}
+      ) : !error && activeTab === "plan-pilot" ? (
+        // Tab Plan Pilot — 4 SUB-TAB (PHI/HSJ/MT/SCP), sama pola kayak
+        // ADOP (sebelumnya 4 panel sejajar + modal expand, diganti
+        // biar konsisten + nampilin SEMUA baris langsung, nggak perlu
+        // expand lagi). Dropdown "Plan Pilot" buat filter per sub-tab.
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {PLAN_PILOT_CATEGORIES.map(c => (
+              <button key={c.key} onClick={() => { setPlanPilotSubTab(c.key) }}
+                style={{
+                  padding: "7px 14px", borderRadius: 999, border: `1px solid ${planPilotSubTab === c.key ? c.color : "var(--border)"}`,
+                  background: planPilotSubTab === c.key ? c.color + "1A" : "var(--surface)", cursor: "pointer",
+                  fontSize: 11, fontWeight: 700, color: planPilotSubTab === c.key ? c.color : "var(--text2)", fontFamily: "inherit",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
+                {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User Request"))).length})</span>
+              </button>
+            ))}
+            {planPilotOptions.length > 0 && (
+              <select value={planPilotSelected} onChange={e => setPlanPilotFilter(f => ({ ...f, [planPilotSubTab]: e.target.value }))}
+                style={{ marginLeft: "auto", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
+                <option value="">— Semua Plan Pilot ({planPilotCategoryRows.length}) —</option>
+                {planPilotOptions.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            )}
+          </div>
+
           {otherValueCounts.length > 0 && (
-            <div style={{ gridColumn: "1/-1", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 6 }}>
-                {otherValueCounts.reduce((s, [, n]) => s + n, 0)} baris lain dengan &quot;User Request&quot; di luar PHI/HSJ/PGD/MT/SC:
+                {otherValueCounts.reduce((s, [, n]) => s + n, 0)} baris lain dengan &quot;User Request&quot; di luar PHI/HSJ/PGD/MT/SCP:
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {otherValueCounts.slice(0, 15).map(([val, n]) => (
@@ -828,7 +816,11 @@ export default function CodaPage() {
               </div>
             </div>
           )}
-        </div>
+
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${planPilotActive.color}`, borderRadius: 12, overflow: "hidden" }}>
+            <DynamicTable rows={planPilotRows} columns={PREVIEW_COLS} />
+          </div>
+        </>
       ) : !error && activeTab === "adop" ? (
         // Tab ADOP — 4 TAB terpisah (User: PHI/SCP/HSJ/MT), beda dari
         // Plan Pilot yang 4 panel sejajar. Baris diurutin KPI->Request,
@@ -894,21 +886,6 @@ export default function CodaPage() {
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
           <DynamicTable rows={rows} columns={columns} />
-        </div>
-      )}
-
-      {expandedCat && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
-          onClick={() => setExpandedCategory(null)}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 1100, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>{expandedCat.label} — {expandedCat.rows.length} baris</span>
-              <button onClick={() => setExpandedCategory(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}><X size={18} /></button>
-            </div>
-            <div style={{ overflowY: "auto" }}>
-              <DynamicTable rows={expandedCat.rows} columns={collectColumns(expandedCat.rows)} />
-            </div>
-          </div>
         </div>
       )}
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
   Home, FileText, LayoutGrid, GitBranch, ScrollText,
@@ -183,12 +184,12 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   }) => {
     const active = isActive(path)
     return (
-      <button onClick={() => { router.push(path); closeIfMobile() }}
+      <Link href={path} onClick={closeIfMobile}
         style={{
           display: "flex", alignItems: "center", gap: "10px",
           padding: "8px 10px 8px 34px", borderRadius: "var(--radius-sm)",
           border: "none", cursor: "pointer", width: "100%", textAlign: "left",
-          transition: "all 0.15s",
+          transition: "all 0.15s", textDecoration: "none",
           background: active ? "var(--accent-muted)" : "transparent",
           fontFamily: "'Plus Jakarta Sans', sans-serif",
         }}>
@@ -217,7 +218,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
           <div style={{ fontSize: "10px", color: "var(--text3)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</div>
         </div>
         {active && <div style={{ width: "4px", height: "4px", borderRadius: "50%", background: badgeColor || "var(--accent)", flexShrink: 0 }} />}
-      </button>
+      </Link>
     )
   }
 
@@ -306,8 +307,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
           {NAV_TOP.map(({ icon: Icon, label, path, desc }) => {
             const active = isActive(path)
             return (
-              <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
-                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <Link key={path} href={path} onClick={closeIfMobile}
+                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", textDecoration: "none", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                 <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
                   <Icon size={16} color={active ? "white" : "var(--text3)"} />
                 </div>
@@ -315,7 +316,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
                   <div style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)" }}>{label}</div>
                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
                 </div>
-              </button>
+              </Link>
             )
           })}
 
@@ -323,8 +324,8 @@ export default function Sidebar({ isOpen, onClose }: Props) {
           {isAdmin && NAV_ADMIN.map(({ icon: Icon, label, path, desc, badge, badgeColor }) => {
             const active = isActive(path)
             return (
-              <button key={path} onClick={() => { router.push(path); closeIfMobile() }}
-                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
+              <Link key={path} href={path} onClick={closeIfMobile}
+                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", textDecoration: "none", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                 <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
                   <Icon size={16} color={active ? "white" : "var(--text3)"} />
                 </div>
@@ -335,7 +336,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
                   </div>
                   <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
                 </div>
-              </button>
+              </Link>
             )
           })}
 
