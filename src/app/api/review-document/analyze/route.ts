@@ -51,27 +51,37 @@ export async function POST(req: NextRequest) {
     .map(s => `=== ${s.label} (key: ${s.key}) ===\n${s.text || "(kosong)"}`)
     .join("\n\n")}`
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 })
+  }
+
+  // Pakai Groq (model open-source gpt-oss-120b) — key yang sama dipakai
+  // fitur lain (/api/ai), nggak nambah biaya. Lihat catatan di route itu
+  // soal kenapa gpt-oss-120b (bukan llama-3.3 yang sekarang Enterprise-only).
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY!,
-      "anthropic-version": "2023-06-01",
+      "Authorization": `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5-20250929",
+      model: "openai/gpt-oss-120b",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
       max_tokens: 8192,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
     }),
   })
 
   const data = await res.json()
   if (!res.ok) {
-    return NextResponse.json({ error: data.error?.message || "Anthropic API error" }, { status: res.status })
+    return NextResponse.json({ error: data.error?.message || "Groq API error" }, { status: res.status })
   }
 
-  const text = data.content?.[0]?.text || "[]"
+  const text = data.choices?.[0]?.message?.content?.trim() || "[]"
   try {
     const parsed = extractJsonArray(text)
     const findings: Finding[] = (Array.isArray(parsed) ? parsed : [])
