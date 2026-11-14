@@ -37,18 +37,34 @@ const TABS: TabDef[] = [
 // "User Request" (dikonfirmasi user), biar kebaca sekaligus dalam 1 layar
 // tanpa perlu scroll nyari. "HSJ / PGD" digabung jadi 1 panel sesuai
 // permintaan (tetap 4 panel total, bukan 5).
-const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) => boolean }[] = [
-  { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI" },
-  { key: "hsj-pgd", label: "HSJ / PGD", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()) },
-  { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT" },
-  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SC" },
+const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) => boolean; color: string }[] = [
+  { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI", color: "#DC2626" },
+  { key: "hsj-pgd", label: "HSJ / PGD", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()), color: "#7C3AED" },
+  { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
+  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SC", color: "#16A34A" },
 ]
-const PREVIEW_COLS = ["Doc. No.", "Doc. Name", "Status Dev"]
+// "Plan Pilot" (nama batch pilot-nya, mis. "Pilot Matrix 26.11.02")
+// ditambahin di preview sesuai request user — sebelumnya cuma
+// Doc No/Doc Name/Status Dev, info batch pilot-nya nggak kelihatan.
+const PREVIEW_COLS = ["Plan Pilot", "Doc. No.", "Doc. Name", "Status Dev"]
 
 function fmtCell(v: unknown): string {
   if (v == null) return "—"
   if (typeof v === "object") return JSON.stringify(v)
   return String(v)
+}
+
+// Badge warna buat kolom status (Status Dev, Status Project, dll) —
+// sebelumnya semua kolom ditampilin plain text, kelihatan monoton
+// dibanding tampilan asli Coda yang warna-warni per status.
+function isStatusColumn(c: string): boolean { return /status/i.test(c) }
+function statusColor(v: string): { bg: string; fg: string } {
+  const s = v.trim().toUpperCase()
+  if (s.includes("READY")) return { bg: "#DCFCE7", fg: "#166534" }
+  if (s.includes("TEST")) return { bg: "#FEF3C7", fg: "#92400E" }
+  if (s.includes("DONE") || s.includes("RELEASE")) return { bg: "#DBEAFE", fg: "#1E40AF" }
+  if (s.includes("OPEN")) return { bg: "#E0F2FE", fg: "#075985" }
+  return { bg: "var(--surface2)", fg: "var(--text3)" }
 }
 
 // Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
@@ -86,7 +102,18 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
         <tbody>
           {rows.map(r => (
             <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-              {columns.map(c => <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{fmtCell(r.values?.[c])}</td>)}
+              {columns.map(c => {
+                const raw = r.values?.[c]
+                if (isStatusColumn(c) && raw != null && String(raw).trim() !== "") {
+                  const { bg, fg } = statusColor(String(raw))
+                  return (
+                    <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{fmtCell(raw)}</span>
+                    </td>
+                  )
+                }
+                return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{fmtCell(raw)}</td>
+              })}
             </tr>
           ))}
         </tbody>
@@ -95,10 +122,34 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
   )
 }
 
+// Doc ID diekstrak dari link yang user kasih:
+// https://docs.superhuman.com/d/_dRt3S4eDoOn/Monitoring-Pilot_su3Vv_nP...
+// — "_d" itu penanda path di URL Coda/Superhuman Docs, BUKAN bagian dari
+// ID-nya sendiri, jadi ID aslinya "Rt3S4eDoOn" (10 karakter, format
+// standar doc ID Coda). "Plan Pilot" & "List Monitoring" dikonfirmasi
+// user SAMA-SAMA ada di doc ini. Dicoba DULUAN biar nggak ambigu kalau
+// kebetulan ada table lain yang namanya sama persis di doc yang beda
+// (ini beneran kejadian — "Plan Pilot" sempat ketemu duluan di doc
+// "Global System Support..." yang bukan dimaksud user). Tetap ada
+// fallback nyari ke semua doc kalau ID ini ternyata salah/doc-nya pindah.
+const KNOWN_DOC_ID = "Rt3S4eDoOn"
+
 async function findTable(matcher: (name: string) => boolean): Promise<TableLocation | null> {
   const docsRes = await fetch("/api/superhuman-docs/docs").then(r => r.json())
   if (docsRes.error) throw new Error(docsRes.error)
-  for (const d of (docsRes.items || []) as CodaDocItem[]) {
+  const allDocs = (docsRes.items || []) as CodaDocItem[]
+
+  const knownDoc = allDocs.find(d => d.id === KNOWN_DOC_ID)
+  if (knownDoc) {
+    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}`).then(r => r.json())
+    if (!tablesRes.error) {
+      const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+      if (match) return { docId: knownDoc.id, docName: knownDoc.name, tableId: match.id, tableName: match.name }
+    }
+  }
+
+  for (const d of allDocs) {
+    if (d.id === KNOWN_DOC_ID) continue
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}`).then(r => r.json())
     if (tablesRes.error) continue
     const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
@@ -154,6 +205,23 @@ export default function CodaPage() {
     : null
   const expandedCat = categorized?.find(c => c.key === expandedCategory) || null
 
+  // Diagnostik: baris yang User Request-nya BUKAN salah satu dari 4
+  // kategori — biar kelihatan jelas kenapa jumlah per-kategori sedikit
+  // (apakah emang mayoritas data punya User Request lain, atau ada
+  // variasi penulisan yang kelewat kecocokannya, mis. "Phi " vs "PHI").
+  const otherValueCounts = categorized ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of rows) {
+      const v = getFieldValue(r.values, "User Request").trim()
+      const isCategorized = PLAN_PILOT_CATEGORIES.some(cat => cat.match(v))
+      if (!isCategorized) {
+        const key = v || "(kosong)"
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+  })() : []
+
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
@@ -206,9 +274,13 @@ export default function CodaPage() {
         // bisa di-expand buat lihat full table-nya.
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px,1fr))", gap: 12 }}>
           {categorized.map(cat => (
-            <div key={cat.key} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+            <div key={cat.key} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${cat.color}`, borderRadius: 12, overflow: "hidden" }}>
               <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)" }}>{cat.label} <span style={{ fontWeight: 600, color: "var(--text3)" }}>({cat.rows.length})</span></span>
+                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", display: "flex", alignItems: "center", gap: 7 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color, flexShrink: 0 }} />
+                  {cat.label}
+                  <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 800, background: cat.color + "1A", color: cat.color }}>{cat.rows.length}</span>
+                </span>
                 <button onClick={() => setExpandedCategory(cat.key)} title="Expand"
                   style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}>
                   <Maximize2 size={13} />
@@ -217,12 +289,25 @@ export default function CodaPage() {
               <DynamicTable rows={cat.rows.slice(0, 6)} columns={PREVIEW_COLS} />
               {cat.rows.length > 6 && (
                 <button onClick={() => setExpandedCategory(cat.key)}
-                  style={{ width: "100%", padding: "8px", border: "none", borderTop: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 10, color: "#0891B2", fontWeight: 700 }}>
+                  style={{ width: "100%", padding: "8px", border: "none", borderTop: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 10, color: cat.color, fontWeight: 700 }}>
                   Lihat semua {cat.rows.length} baris →
                 </button>
               )}
             </div>
           ))}
+          {otherValueCounts.length > 0 && (
+            <div style={{ gridColumn: "1/-1", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 6 }}>
+                {otherValueCounts.reduce((s, [, n]) => s + n, 0)} baris lain dengan &quot;User Request&quot; di luar PHI/HSJ/PGD/MT/SC:
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {otherValueCounts.slice(0, 15).map(([val, n]) => (
+                  <span key={val} style={{ padding: "3px 9px", borderRadius: 999, fontSize: 10, background: "var(--surface2)", color: "var(--text2)" }}>{val} ({n})</span>
+                ))}
+                {otherValueCounts.length > 15 && <span style={{ fontSize: 10, color: "var(--text3)", alignSelf: "center" }}>+{otherValueCounts.length - 15} nilai lain</span>}
+              </div>
+            </div>
+          )}
         </div>
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>

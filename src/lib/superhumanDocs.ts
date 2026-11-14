@@ -19,7 +19,6 @@ function getToken(): string {
 }
 
 export async function callSuperhumanDocsApi<T>(path: string, searchParams?: Record<string, string | number | boolean | undefined>): Promise<T> {
-  const token = getToken()
   const qs = new URLSearchParams()
   if (searchParams) {
     for (const [k, v] of Object.entries(searchParams)) {
@@ -27,6 +26,14 @@ export async function callSuperhumanDocsApi<T>(path: string, searchParams?: Reco
     }
   }
   const url = `${SUPERHUMAN_DOCS_BASE_URL}${path}${qs.toString() ? `?${qs.toString()}` : ""}`
+  return fetchSuperhumanDocsUrl<T>(url)
+}
+
+// Fetch pakai URL LENGKAP (dipakai juga buat ngikutin nextPageLink pas
+// pagination — nextPageLink dari Coda itu udah URL jadi siap pakai,
+// nggak perlu/boleh dibangun ulang dari path+query manual).
+async function fetchSuperhumanDocsUrl<T>(url: string): Promise<T> {
+  const token = getToken()
 
   // SEBELUMNYA: request bisa nyangkut 100+ detik sebelum akhirnya gagal
   // dengan pesan generik "fetch failed" doang (ketauan pas dites user di
@@ -58,4 +65,33 @@ export async function callSuperhumanDocsApi<T>(path: string, searchParams?: Reco
     throw new SuperhumanDocsError(`Superhuman Docs API error (HTTP ${res.status}): ${body.slice(0, 300)}`)
   }
   return res.json() as Promise<T>
+}
+
+interface PagedList<T> { items: T[]; nextPageToken?: string; nextPageLink?: string }
+
+// SEBELUMNYA: list Docs/Table/Row cuma ambil 1 halaman pertama, TIDAK
+// ngikutin halaman berikutnya — ketauan jadi BUG NYATA 2x: (1) doc
+// "Monitoring Pilot" nggak ketemu bukan soal izin akses, (2) table
+// "Plan Pilot" yang aslinya 6000+ baris di Coda cuma kebaca 200 di app
+// kita. Root cause pagination-nya: kode SEBELUMNYA cuma ngecek field
+// `nextPageToken` buat nentuin ada halaman lagi atau nggak — ternyata
+// Coda balikin `nextPageLink` (URL LENGKAP siap pakai), BUKAN token
+// polos, jadi `nextPageToken` SELALU kosong dan loop berhenti di
+// halaman pertama terus walau sebenernya masih ada ribuan baris lagi.
+// Fix: prioritaskan ngikutin nextPageLink (fetch langsung ke URL itu,
+// JANGAN dibangun ulang dari path+searchParams), fallback ke
+// nextPageToken kalau nextPageLink nggak ada. Dibatasi 100 halaman
+// (bukan 20 lagi, karena 1 table aja bisa 6000+ baris / limit 200 per
+// halaman = perlu 30+ halaman) buat jaga-jaga loop aneh/respons rusak.
+export async function callSuperhumanDocsApiAllPages<T>(path: string, searchParams?: Record<string, string | number | boolean | undefined>): Promise<T[]> {
+  const allItems: T[] = []
+  let data = await callSuperhumanDocsApi<PagedList<T>>(path, searchParams)
+  allItems.push(...(data.items || []))
+  for (let page = 1; page < 100 && (data.nextPageLink || data.nextPageToken); page++) {
+    data = data.nextPageLink
+      ? await fetchSuperhumanDocsUrl<PagedList<T>>(data.nextPageLink)
+      : await callSuperhumanDocsApi<PagedList<T>>(path, { ...searchParams, pageToken: data.nextPageToken })
+    allItems.push(...(data.items || []))
+  }
+  return allItems
 }
