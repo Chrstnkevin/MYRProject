@@ -14,13 +14,20 @@ Yang harus dicek per section:
 - Acceptance Criteria yang nggak measurable/testable (nggak jelas gimana ngukur "selesai"-nya).
 - Potensi kesulitan teknis atau resiko implementasi yang kelihatan dari requirement-nya.
 
+GAYA REVIEW: jangan cuma kasih 1 kalimat ringkasan permukaan — gali SEDALAM review QA+Dev beneran yang bakal dipakai developer buat kerja. Tiap temuan yang substantif HARUS punya struktur ini (lewatin bagian yang nggak relevan buat temuan kecil/ringan):
+1. Jelasin masalahnya + KENAPA itu bikin developer bingung atau nggak bisa mulai kerja.
+2. Kalau relevan, kasih CONTOH SKENARIO KONKRET pakai data/kondisi dari domain dokumen itu sendiri (bukan contoh generik) buat nunjukin ambiguitasnya — misal kalau dokumennya soal kalkulasi salfo bulanan, kasih contoh angka bulan/periode yang konkret.
+3. Daftar PERTANYAAN KLARIFIKASI spesifik yang perlu dijawab business requirement team (bullet list, boleh lebih dari satu kalau memang ada beberapa pertanyaan berbeda).
+4. Tutup dengan 1 baris rekomendasi konkret, mulai dengan "**Rekomendasi:**".
+Boleh pakai **teks tebal** buat istilah penting/label, dan bullet "- " buat list — pisahkan tiap bagian pakai newline (\n).
+
 ATURAN JAWAB:
-- Balas HANYA JSON array valid, TANPA markdown code fence, TANPA teks lain di luar JSON.
+- Balas HANYA JSON array valid, TANPA markdown code fence, TANPA teks lain di luar JSON. "comment" adalah STRING JSON biasa (newline di-escape \\n sesuai standar JSON, bukan markdown code fence).
 - Format tiap item: {"sectionKey": "...", "severity": "low"|"medium"|"high", "comment": "..."}
 - "sectionKey" WAJIB salah satu dari: ${VALID_KEYS.join(", ")}. Kalau temuan soal inkonsistensi ANTAR section (termasuk sama header), pakai sectionKey dari section narasi yang paling relevan buat jadi tempat nempel comment-nya, dan sebutkan section lain yang dibandingkan di teks comment-nya.
-- "comment" ditulis dalam Bahasa Indonesia yang natural (bukan kaku/robotik), singkat tapi jelas kenapa itu masalah dan apa yang perlu diperjelas/diperbaiki.
+- "comment" ditulis dalam Bahasa Indonesia yang natural (bukan kaku/robotik), ikuti struktur GAYA REVIEW di atas buat temuan yang substantif.
 - Kalau suatu section nggak ada masalah berarti, JANGAN masukin section itu ke hasil sama sekali.
-- Boleh lebih dari 1 temuan untuk 1 section kalau memang ada beberapa masalah berbeda.
+- Boleh lebih dari 1 temuan untuk 1 section kalau memang ada beberapa masalah berbeda — tiap temuan harus tentang masalah yang BEDA, jangan dipecah-pecah kalau sebenarnya 1 masalah yang sama.
 - Jangan muji-muji bagian yang udah bagus kecuali itu relevan buat ngejelasin kontras sama bagian yang bermasalah.`
 
 function extractJsonArray(text: string): unknown {
@@ -44,27 +51,37 @@ export async function POST(req: NextRequest) {
     .map(s => `=== ${s.label} (key: ${s.key}) ===\n${s.text || "(kosong)"}`)
     .join("\n\n")}`
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const apiKey = process.env.GROQ_API_KEY
+  if (!apiKey) {
+    return NextResponse.json({ error: "GROQ_API_KEY not configured" }, { status: 500 })
+  }
+
+  // Pakai Groq (model open-source gpt-oss-120b) — key yang sama dipakai
+  // fitur lain (/api/ai), nggak nambah biaya. Lihat catatan di route itu
+  // soal kenapa gpt-oss-120b (bukan llama-3.3 yang sekarang Enterprise-only).
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY!,
-      "anthropic-version": "2023-06-01",
+      "Authorization": `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+      model: "openai/gpt-oss-120b",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 8192,
     }),
   })
 
   const data = await res.json()
   if (!res.ok) {
-    return NextResponse.json({ error: data.error?.message || "Anthropic API error" }, { status: res.status })
+    return NextResponse.json({ error: data.error?.message || "Groq API error" }, { status: res.status })
   }
 
-  const text = data.content?.[0]?.text || "[]"
+  const text = data.choices?.[0]?.message?.content?.trim() || "[]"
   try {
     const parsed = extractJsonArray(text)
     const findings: Finding[] = (Array.isArray(parsed) ? parsed : [])

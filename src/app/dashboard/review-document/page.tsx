@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Upload, FileText, Sparkles, Loader2, Check, X, MessageSquarePlus,
   Download, AlertTriangle, Trash2, RotateCcw,
@@ -41,6 +41,50 @@ function anchorTextForSection(key: string, sections: DocSection[]): string {
   if (section) return section.heading
   if (key === "header") return sections.find(s => s.key === "header")?.text.split("\n")[0]?.trim() || ""
   return ""
+}
+
+// Render ringan buat teks temuan AI yang sekarang lebih terstruktur
+// (**bold**, bullet "- ", numbered "1. ", per-baris) — tanpa nambah
+// dependency markdown library, cukup cover pola yang diminta di system
+// prompt analyze/route.ts.
+function renderInline(s: string, keyPrefix: string) {
+  const parts = s.split(/(\*\*[^*]+\*\*)/g).filter(p => p.length > 0)
+  return parts.map((p, idx) =>
+    p.startsWith("**") && p.endsWith("**")
+      ? <strong key={`${keyPrefix}-${idx}`}>{p.slice(2, -2)}</strong>
+      : <span key={`${keyPrefix}-${idx}`}>{p}</span>
+  )
+}
+
+function renderFindingText(text: string) {
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0)
+  const blocks: ReactNode[] = []
+  let i = 0
+  let key = 0
+  while (i < lines.length) {
+    const line = lines[i]
+    if (/^[-•]\s+/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^[-•]\s+/.test(lines[i])) { items.push(lines[i].replace(/^[-•]\s+/, "")); i++ }
+      blocks.push(
+        <ul key={key++} style={{ margin: "2px 0 8px", paddingLeft: "18px" }}>
+          {items.map((it, idx) => <li key={idx} style={{ marginBottom: "3px" }}>{renderInline(it, `${key}-${idx}`)}</li>)}
+        </ul>
+      )
+    } else if (/^\d+[.)]\s+/.test(line)) {
+      const items: string[] = []
+      while (i < lines.length && /^\d+[.)]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\d+[.)]\s+/, "")); i++ }
+      blocks.push(
+        <ol key={key++} style={{ margin: "2px 0 8px", paddingLeft: "18px" }}>
+          {items.map((it, idx) => <li key={idx} style={{ marginBottom: "3px" }}>{renderInline(it, `${key}-${idx}`)}</li>)}
+        </ol>
+      )
+    } else {
+      blocks.push(<p key={key++} style={{ margin: "0 0 7px" }}>{renderInline(line, `${key}`)}</p>)
+      i++
+    }
+  }
+  return blocks
 }
 
 // ── Highlight di preview: cari teks target di dalam text node (TreeWalker,
@@ -123,6 +167,39 @@ export default function ReviewDocumentPage() {
     return () => document.removeEventListener("mousedown", handler)
   }, [])
 
+  // Deteksi select teks pakai event "selectionchange" bawaan browser —
+  // jauh lebih reliable daripada onMouseUp: kebaca buat semua cara select
+  // (mouse drag, shift+klik, keyboard), dan nggak kena race timing kayak
+  // mouseup. PENTING: pas selection COLLAPSE (mis. abis klik tombol
+  // "Komentar" sendiri, yang natural ngilangin selection) kita SENGAJA
+  // nggak nutup popovernya di sini — ini yang kemarin bikin bug "komentar
+  // kedua dst nggak kesave" (popover kena tutup sendiri duluan sebelum
+  // sempet ke-klik). Popover cuma ditutup eksplisit lewat Simpan/X, atau
+  // kalau user mulai bikin selection BARU di tempat lain.
+  useEffect(() => {
+    const handler = () => {
+      if (composerOpen) return
+      const sel = window.getSelection()
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
+      if (!previewRef.current || !previewWrapRef.current) return
+      const range = sel.getRangeAt(0)
+      if (!previewRef.current.contains(range.commonAncestorContainer)) return
+      const text = sel.toString().trim()
+      if (!text) return
+      const rect = range.getBoundingClientRect()
+      const wrapRect = previewWrapRef.current.getBoundingClientRect()
+      setSelection({
+        text,
+        top: rect.top - wrapRect.top + previewWrapRef.current.scrollTop,
+        left: Math.max(0, rect.left - wrapRect.left),
+      })
+      setComposerOpen(false)
+      setComposerText("")
+    }
+    document.addEventListener("selectionchange", handler)
+    return () => document.removeEventListener("selectionchange", handler)
+  }, [composerOpen])
+
   // Re-apply highlight tiap kali dokumen/temuan/komentar berubah. Aman
   // dipanggil berkali-kali karena dangerouslySetInnerHTML cuma re-render
   // kalau string `html`-nya sendiri berubah — manipulasi DOM manual di sini
@@ -201,24 +278,6 @@ export default function ReviewDocumentPage() {
 
   const setFindingStatus = (id: string, status: Finding["status"]) =>
     setFindings(prev => prev.map(f => (f.id === id ? { ...f, status } : f)))
-
-  const handlePreviewMouseUp = () => {
-    const sel = window.getSelection()
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !previewRef.current || !previewWrapRef.current) { setSelection(null); return }
-    const range = sel.getRangeAt(0)
-    if (!previewRef.current.contains(range.commonAncestorContainer)) { setSelection(null); return }
-    const text = sel.toString().trim()
-    if (!text) { setSelection(null); return }
-    const rect = range.getBoundingClientRect()
-    const wrapRect = previewWrapRef.current.getBoundingClientRect()
-    setSelection({
-      text,
-      top: rect.top - wrapRect.top + previewWrapRef.current.scrollTop,
-      left: Math.max(0, rect.left - wrapRect.left),
-    })
-    setComposerOpen(false)
-    setComposerText("")
-  }
 
   const submitComposer = () => {
     if (!selection || !composerText.trim()) return
@@ -357,11 +416,11 @@ export default function ReviewDocumentPage() {
 
               <div
                 ref={previewWrapRef}
-                onMouseUp={handlePreviewMouseUp}
                 style={{ position: "relative", maxHeight: "72vh", overflowY: "auto", padding: "32px 20px", background: "var(--surface3)" }}
               >
                 <div
                   ref={previewRef}
+                  className="docpreview"
                   style={{
                     background: "#ffffff", maxWidth: "720px", margin: "0 auto", padding: "56px 60px",
                     minHeight: "500px", borderRadius: "2px", fontSize: "13.5px", lineHeight: 1.75,
@@ -372,8 +431,6 @@ export default function ReviewDocumentPage() {
 
                 {selection && (
                   <div
-                    onMouseDown={e => e.stopPropagation()}
-                    onMouseUp={e => e.stopPropagation()}
                     style={{ position: "absolute", top: Math.max(4, selection.top - 42), left: selection.left, zIndex: 20 }}
                   >
                     {!composerOpen ? (
@@ -443,7 +500,7 @@ export default function ReviewDocumentPage() {
                               </button>
                             </div>
                           </div>
-                          <div style={{ fontSize: "13px", color: "var(--text)", marginTop: "7px", lineHeight: 1.55 }}>{f.comment}</div>
+                          <div style={{ fontSize: "13px", color: "var(--text)", marginTop: "7px", lineHeight: 1.55 }}>{renderFindingText(f.comment)}</div>
                         </div>
                       )
                     })}
@@ -489,7 +546,27 @@ export default function ReviewDocumentPage() {
           </div>
         </>
       )}
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .docpreview p{margin:0 0 11px}
+        .docpreview a:empty{display:none}
+        /* Heading section (Background/Product Scope/dst) dari Word keluar
+           sebagai <li><strong>...</strong></li> di outline list bernomor,
+           BUKAN <p> biasa — jadi target-nya <li>, dan khusus yang di luar
+           tabel (:not(td *)) biar label tabel metadata nggak ikut ke-style. */
+        .docpreview li:has(> strong:only-child):not(td *){
+          margin:22px 0 10px; padding-bottom:6px; font-size:16px; font-weight:800;
+          color:var(--accent); letter-spacing:.01em; border-bottom:2px solid var(--accent-light);
+          list-style:none;
+        }
+        .docpreview ol:has(> li:has(> strong:only-child):not(td *)){ padding-left:0 }
+        .docpreview table{ width:100%; border-collapse:collapse; margin:14px 0 20px; font-size:13px }
+        .docpreview table td{ border:1px solid var(--border2); padding:9px 13px; vertical-align:top }
+        .docpreview table td p{ margin:0 }
+        .docpreview table tr td:first-child{ background:var(--surface2); width:28%; font-weight:600 }
+        .docpreview ul, .docpreview ol{ margin:0 0 12px; padding-left:22px }
+        .docpreview li{ margin-bottom:5px }
+      `}</style>
     </div>
   )
 }
