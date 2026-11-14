@@ -103,6 +103,28 @@ function resolveColumns(rows: CodaRowItem[], desired: string[]): { found: string
   return { found, missing }
 }
 
+// Generate teks ringkasan siap-paste (diminta user, formatnya persis
+// contoh yang dikasih) — Doc. Name di-group per Status Dev. Doc. Name
+// di data udah termasuk kode dokumennya sendiri (mis. "S26-132-WMD_..."),
+// jadi nggak perlu digabung manual sama Doc. No. lagi.
+function buildReportText(batchName: string, rows: CodaRowItem[]): string {
+  const order: string[] = []
+  const groups = new Map<string, string[]>()
+  for (const r of rows) {
+    const status = getFieldValue(r.values, "Status Dev").trim() || "(Tanpa Status)"
+    const docName = getFieldValue(r.values, "Doc. Name").trim() || getFieldValue(r.values, "Doc. No.").trim() || "(tanpa nama)"
+    if (!groups.has(status)) { groups.set(status, []); order.push(status) }
+    groups.get(status)!.push(docName)
+  }
+  order.sort((a, b) => groups.get(b)!.length - groups.get(a)!.length)
+  const lines = [`Berikut adalah plan release ${batchName} dengan status sebagai berikut`]
+  for (const status of order) {
+    lines.push(`${status}:`)
+    for (const d of groups.get(status)!) lines.push(`- ${d}`)
+  }
+  return lines.join("\n")
+}
+
 // Kolom multi-select/person-reference (mis. "Status Dev", "Plan Pilot",
 // "PIC Apps") balik dari Coda bukan string biasa — bisa array (kosong
 // kalau belum keisi) atau objek {name: ...} (kolom orang/row lain).
@@ -225,6 +247,44 @@ function SortableHeader({ label, col, sortCol, sortDir, onSort }: { label: strin
     <th onClick={() => onSort(col)} style={{ padding: "8px 10px", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--text3)" }}>
       {label} <span style={{ opacity: active ? 1 : 0.35 }}>{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
     </th>
+  )
+}
+
+// Chart breakdown status — vertical bar, rounded, warna dari
+// statusColor() yang sama dipakai badge status di tabel (biar identitas
+// warnanya konsisten, bukan skema warna baru). Label count+persen DI
+// ATAS tiap bar + nama status di bawahnya (direct label, nggak perlu
+// legend terpisah). Dipakai bareng Plan Pilot & ADOP (diminta user).
+function StatusBarChart({ title, subtitle, data }: { title: string; subtitle?: string; data: { status: string; n: number }[] }) {
+  if (data.length === 0) return null
+  const max = Math.max(1, ...data.map(d => d.n))
+  const total = data.reduce((s, d) => s + d.n, 0) || 1
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{title}</div>
+      {subtitle && <div style={{ fontSize: 10, color: "var(--text3)", marginBottom: 14 }}>{subtitle}</div>}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, paddingTop: 22, overflowX: "auto" }}>
+        {data.map(({ status, n }) => {
+          const sc = statusColor(status)
+          const pct = (n / total) * 100
+          const h = Math.max(6, (n / max) * 100)
+          return (
+            <div key={status} title={`${status}: ${n} baris (${pct.toFixed(1)}%)`}
+              style={{ flex: "1 0 54px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 54 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{n}</span>
+              <div style={{
+                width: "100%", maxWidth: 46, height: h, borderRadius: "10px 10px 3px 3px",
+                background: `linear-gradient(180deg, ${sc.fg}, ${sc.fg}B3)`,
+                boxShadow: `0 6px 12px -4px ${sc.fg}66`,
+                transition: "height 0.35s cubic-bezier(0.22,1,0.36,1)",
+              }} />
+              <span style={{ fontSize: 9, color: "var(--text3)", textAlign: "center", lineHeight: 1.25, wordBreak: "break-word" }}>{status}</span>
+              <span style={{ fontSize: 9, fontWeight: 700, color: sc.fg }}>{pct.toFixed(0)}%</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -398,13 +458,13 @@ function SearchableSelect({ value, onChange, options, placeholder }: { value: st
   return (
     <div style={{ position: "relative" }}>
       <button onClick={() => { setOpen(o => !o); setQuery("") }}
-        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: value ? "var(--text)" : "var(--text3)", fontSize: 11, fontFamily: "inherit", cursor: "pointer", minWidth: 200, textAlign: "left" }}>
+        style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: value ? "var(--text)" : "var(--text3)", fontSize: 12, fontFamily: "inherit", cursor: "pointer", textAlign: "left" }}>
         {value || placeholder}
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
-          <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 6, minWidth: 260, maxHeight: 320, display: "flex", flexDirection: "column", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
+          <div style={{ position: "absolute", top: "110%", left: 0, right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 6, maxHeight: 320, display: "flex", flexDirection: "column", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
             <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Cari..."
               style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", marginBottom: 4, outline: "none" }} />
             <div style={{ overflowY: "auto", maxHeight: 250 }}>
@@ -527,6 +587,7 @@ export default function CodaPage() {
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
   // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
   const [planPilotFilter, setPlanPilotFilter] = useState("")
+  const [planPilotReportText, setPlanPilotReportText] = useState<string | null>(null)
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
   // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
   // user) — array kosong = "semua" (nggak difilter). Perlu di-update
@@ -587,10 +648,7 @@ export default function CodaPage() {
       const v = getFieldValue(r.values, "Status Dev").trim() || "(kosong)"
       counts.set(v, (counts.get(v) || 0) + 1)
     }
-    const total = planPilotRows.length || 1
-    return Array.from(counts.entries())
-      .map(([status, n]) => ({ status, n, pct: (n / total) * 100 }))
-      .sort((a, b) => b.n - a.n)
+    return Array.from(counts.entries()).map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
   })() : []
 
   // Khusus tab ADOP: filter ke sub-tab (User) yang aktif dulu, baru dropdown
@@ -635,6 +693,22 @@ export default function CodaPage() {
   })() : []
   const deadlineMax = Math.max(1, ...deadlineCounts.map(([, n]) => n))
 
+  // Chart breakdown Status Dev buat ADOP (diminta user, chart yang
+  // sama kayak Plan Pilot) — "Status Dev" ADOP itu ARRAY per-doc
+  // (paralel sama Doc. Ref., lihat toStatusArray), jadi dihitung per
+  // ITEM dokumen, bukan per baris Coda (1 baris bisa punya banyak doc).
+  const adopStatusDevPercent = activeTab === "adop" && adopStatusDevKey ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of adopRows) {
+      const statuses = toStatusArray(r.values?.[adopStatusDevKey])
+      for (const s of statuses) {
+        const v = cellItemText(s).trim() || "(kosong)"
+        counts.set(v, (counts.get(v) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
+  })() : []
+
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
@@ -674,11 +748,18 @@ export default function CodaPage() {
         // searchable "Plan Pilot" + chart persentase Status Dev (cuma
         // muncul kalau udah difilter ke 1 batch).
         <>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {planPilotOptions.length > 0 && (
-              <SearchableSelect value={planPilotFilter} onChange={setPlanPilotFilter} options={planPilotOptions}
-                placeholder={`— Semua Plan Pilot (${planPilotAllRows.length}) —`} />
+              <div style={{ flex: 1 }}>
+                <SearchableSelect value={planPilotFilter} onChange={setPlanPilotFilter} options={planPilotOptions}
+                  placeholder={`— Semua Plan Pilot (${planPilotAllRows.length}) —`} />
+              </div>
             )}
+            <button onClick={() => setPlanPilotReportText(buildReportText(planPilotFilter, planPilotRows))}
+              disabled={!planPilotFilter || planPilotRows.length === 0}
+              style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, border: "none", background: planPilotFilter ? "var(--accent)" : "var(--surface2)", cursor: planPilotFilter ? "pointer" : "not-allowed", opacity: planPilotFilter ? 1 : 0.5, fontSize: 12, color: planPilotFilter ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700 }}>
+              📋 Buat Report
+            </button>
           </div>
 
           {planPilotMissingColumns.length > 0 && (
@@ -687,25 +768,7 @@ export default function CodaPage() {
             </p>
           )}
 
-          {statusDevPercent.length > 0 && (
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Persentase Status Dev ({planPilotRows.length} baris{planPilotFilter ? ` · ${planPilotFilter}` : ""})</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {statusDevPercent.map(({ status, n, pct }) => {
-                  const sc = statusColor(status)
-                  return (
-                    <div key={status} style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${status}: ${n} baris (${pct.toFixed(1)}%)`}>
-                      <span style={{ width: 110, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{status}</span>
-                      <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 16, position: "relative" }}>
-                        <div style={{ width: `${Math.max(2, pct)}%`, height: "100%", borderRadius: 4, background: sc.fg }} />
-                      </div>
-                      <span style={{ width: 66, flexShrink: 0, fontSize: 10, fontWeight: 700, color: "var(--text)" }}>{pct.toFixed(1)}% ({n})</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+          <StatusBarChart title={`Breakdown Status Dev${planPilotFilter ? ` — ${planPilotFilter}` : ""}`} subtitle={`${planPilotRows.length} baris`} data={statusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
             <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} />
@@ -769,6 +832,8 @@ export default function CodaPage() {
             </div>
           )}
 
+          <StatusBarChart title={`Breakdown Status Dev (${adopActive.label})`} subtitle={`${adopRows.length} baris`} data={adopStatusDevPercent} />
+
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
             <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} />
           </div>
@@ -776,6 +841,26 @@ export default function CodaPage() {
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
           <DynamicTable rows={rows} columns={columns} />
+        </div>
+      )}
+
+      {planPilotReportText !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setPlanPilotReportText(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📋 Report Plan Release</span>
+              <button onClick={() => setPlanPilotReportText(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <textarea readOnly value={planPilotReportText}
+              style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => navigator.clipboard.writeText(planPilotReportText)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Copy ke Clipboard
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
