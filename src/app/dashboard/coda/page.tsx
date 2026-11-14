@@ -41,7 +41,9 @@ const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) =>
   { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI", color: "#DC2626" },
   { key: "hsj-pgd", label: "HSJ / PGD", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()), color: "#7C3AED" },
   { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
-  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SC", color: "#16A34A" },
+  // Nilai asli di data itu "SCP", bukan "SC" persis (ketauan dari panel
+  // diagnostik nilai lain) - makanya sebelumnya selalu 0.
+  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SCP", color: "#16A34A" },
 ]
 // "Plan Pilot" (nama batch pilot-nya, mis. "Pilot Matrix 26.11.02")
 // ditambahin di preview sesuai request user — sebelumnya cuma
@@ -165,6 +167,9 @@ export default function CodaPage() {
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
+  // Filter dropdown "Plan Pilot" PER panel — key = category key, value =
+  // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
+  const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -201,7 +206,13 @@ export default function CodaPage() {
   // Request". Dihitung tiap render (bukan state terpisah) biar selalu
   // sinkron sama rowsByTab tanpa perlu useEffect tambahan.
   const categorized = activeTab === "plan-pilot"
-    ? PLAN_PILOT_CATEGORIES.map(cat => ({ ...cat, rows: rows.filter(r => cat.match(getFieldValue(r.values, "User Request"))) }))
+    ? PLAN_PILOT_CATEGORIES.map(cat => {
+        const allRows = rows.filter(r => cat.match(getFieldValue(r.values, "User Request")))
+        const planPilotOptions = Array.from(new Set(allRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
+        const selected = planPilotFilter[cat.key] || ""
+        const filteredRows = selected ? allRows.filter(r => getFieldValue(r.values, "Plan Pilot") === selected) : allRows
+        return { ...cat, rows: filteredRows, totalCount: allRows.length, planPilotOptions, selected }
+      })
     : null
   const expandedCat = categorized?.find(c => c.key === expandedCategory) || null
 
@@ -275,17 +286,28 @@ export default function CodaPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px,1fr))", gap: 12 }}>
           {categorized.map(cat => (
             <div key={cat.key} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${cat.color}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", display: "flex", alignItems: "center", gap: 7 }}>
+              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: cat.color, flexShrink: 0 }} />
                   {cat.label}
-                  <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 800, background: cat.color + "1A", color: cat.color }}>{cat.rows.length}</span>
+                  <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 10, fontWeight: 800, background: cat.color + "1A", color: cat.color, flexShrink: 0 }}>
+                    {cat.rows.length}{cat.selected ? ` / ${cat.totalCount}` : ""}
+                  </span>
                 </span>
                 <button onClick={() => setExpandedCategory(cat.key)} title="Expand"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}>
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex", flexShrink: 0 }}>
                   <Maximize2 size={13} />
                 </button>
               </div>
+              {cat.planPilotOptions.length > 0 && (
+                <div style={{ padding: "8px 14px", borderBottom: "1px solid var(--border)" }}>
+                  <select value={cat.selected} onChange={e => setPlanPilotFilter(f => ({ ...f, [cat.key]: e.target.value }))}
+                    style={{ width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 10, fontFamily: "inherit" }}>
+                    <option value="">— Semua Plan Pilot ({cat.totalCount}) —</option>
+                    {cat.planPilotOptions.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              )}
               <DynamicTable rows={cat.rows.slice(0, 6)} columns={PREVIEW_COLS} />
               {cat.rows.length > 6 && (
                 <button onClick={() => setExpandedCategory(cat.key)}
