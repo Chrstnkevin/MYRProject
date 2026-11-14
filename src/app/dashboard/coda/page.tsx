@@ -50,6 +50,45 @@ const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) =>
 // Doc No/Doc Name/Status Dev, info batch pilot-nya nggak kelihatan.
 const PREVIEW_COLS = ["Plan Pilot", "Doc. No.", "Doc. Name", "Status Dev"]
 
+// Khusus tab "ADOP" — 4 TAB terpisah (beda dari Plan Pilot yang 4 panel
+// sejajar) berdasarkan kolom "User" (bukan "User Request" — table ini
+// nggak punya kolom itu). Nggak digabung kayak "HSJ/PGD" di Plan Pilot,
+// user eksplisit minta 4 tab berdiri sendiri-sendiri.
+const ADOP_CATEGORIES: { key: string; label: string; match: (v: string) => boolean; color: string }[] = [
+  { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI", color: "#DC2626" },
+  { key: "scp", label: "SCP", match: v => v.trim().toUpperCase() === "SCP", color: "#16A34A" },
+  { key: "hsj", label: "HSJ", match: v => v.trim().toUpperCase() === "HSJ", color: "#7C3AED" },
+  { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
+]
+// Urutan kolom sprint yang diminta user (Submit->Review->Dev->Test) —
+// raw API Coda ngasih kolom dalam urutan nggak tentu, jadi dipaksa rapi.
+const ADOP_SPRINT_ORDER = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint"]
+
+// Taruh kolom-kolom di `priority` (yang beneran ADA di `columns`) jadi
+// satu kelompok berurutan persis sesuai urutan `priority`, posisinya di
+// tempat kemunculan PERTAMA salah satu dari mereka di `columns` asli.
+// Kolom lain di luar `priority` tetap di urutan aslinya.
+function reorderColumns(columns: string[], priority: string[]): string[] {
+  const priorityNorm = priority.map(normKey)
+  const isPriority = (c: string) => priorityNorm.includes(normKey(c))
+  const result: string[] = []
+  let inserted = false
+  for (const c of columns) {
+    if (isPriority(c)) {
+      if (!inserted) {
+        for (const p of priority) {
+          const match = columns.find(col => normKey(col) === normKey(p))
+          if (match) result.push(match)
+        }
+        inserted = true
+      }
+      continue
+    }
+    result.push(c)
+  }
+  return result
+}
+
 function fmtCell(v: unknown): string {
   if (v == null) return "—"
   if (typeof v === "object") return JSON.stringify(v)
@@ -175,6 +214,7 @@ export default function CodaPage() {
   // Filter dropdown "Plan Pilot" PER panel — key = category key, value =
   // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
   const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
+  const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -237,6 +277,20 @@ export default function CodaPage() {
     }
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
   })() : []
+
+  // Khusus tab ADOP: filter ke sub-tab (User) yang aktif, urutin baris
+  // by KPI dulu baru Request, kolom sprint dirapihin urutannya.
+  const adopActive = ADOP_CATEGORIES.find(c => c.key === adopSubTab)!
+  const adopRows = activeTab === "adop"
+    ? rows
+        .filter(r => adopActive.match(getFieldValue(r.values, "User")))
+        .sort((a, b) => {
+          const ka = getFieldValue(a.values, "KPI"), kb = getFieldValue(b.values, "KPI")
+          if (ka !== kb) return ka.localeCompare(kb)
+          return getFieldValue(a.values, "Request").localeCompare(getFieldValue(b.values, "Request"))
+        })
+    : []
+  const adopColumns = activeTab === "adop" ? reorderColumns(collectColumns(adopRows), ADOP_SPRINT_ORDER) : []
 
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -336,6 +390,29 @@ export default function CodaPage() {
             </div>
           )}
         </div>
+      ) : !error && activeTab === "adop" ? (
+        // Tab ADOP — 4 TAB terpisah (User: PHI/SCP/HSJ/MT), beda dari
+        // Plan Pilot yang 4 panel sejajar. Baris diurutin KPI->Request,
+        // kolom sprint dirapihin Submit->Review->Dev->Test.
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {ADOP_CATEGORIES.map(c => (
+              <button key={c.key} onClick={() => setAdopSubTab(c.key)}
+                style={{
+                  padding: "7px 14px", borderRadius: 999, border: `1px solid ${adopSubTab === c.key ? c.color : "var(--border)"}`,
+                  background: adopSubTab === c.key ? c.color + "1A" : "var(--surface)", cursor: "pointer",
+                  fontSize: 11, fontWeight: 700, color: adopSubTab === c.key ? c.color : "var(--text2)", fontFamily: "inherit",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
+                {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User"))).length})</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
+            <DynamicTable rows={adopRows} columns={adopColumns} />
+          </div>
+        </>
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
           <DynamicTable rows={rows} columns={columns} />
