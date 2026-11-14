@@ -14,9 +14,10 @@
 // tab di sini bakal nunjukin error "table nggak ketemu". Itu soal akses di
 // akun Superhuman Docs, bukan kode.
 
-import { Fragment, useEffect, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react"
 import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
+import { isoWeekInfo, isoWeekStart, parseYearWeek } from "@/lib/isoWeek"
 
 interface CodaDocItem { id: string; name: string }
 interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number; parentTable?: { id: string; name?: string } }
@@ -199,6 +200,33 @@ function statusColor(v: string): { bg: string; fg: string } {
   if (s.includes("PROGRESS") || s.includes("OPEN") || s.includes("DEV") || s.includes("DR")) return { bg: "#E0F2FE", fg: "#075985" }
   return { bg: "var(--surface2)", fg: "var(--text3)" }
 }
+// "Udah kelar" kalau masuk bucket pertama statusColor() di atas (ijo) —
+// dipakai buat nentuin apakah masih relevan dicek telat/nggaknya (item
+// yang udah DONE/RELEASE/PILOT nggak perlu diingetin lagi).
+function isDoneStatusText(v: string): boolean {
+  const s = v.trim().toUpperCase()
+  return s.includes("READY") || s.includes("DONE") || s.includes("RELEASE") || s.includes("PILOT")
+}
+
+// Reminder "sprint telat" ADOP (diminta user, berdasarkan Operation
+// Calendar Mayora Group yang nomor minggunya SAMA PERSIS sama ISO 8601
+// — lihat src/lib/isoWeek.ts) — value Submit/Review/Dev/Test Sprint
+// formatnya "2026.45" dkk (tahun.minggu); kalau minggu itu udah lewat
+// (hari ini > Minggu/akhir minggu tsb), dianggap telat.
+const ADOP_SPRINT_COL_NAMES = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint"]
+function isSprintColumn(c: string): boolean {
+  return ADOP_SPRINT_COL_NAMES.some(n => normKey(n) === normKey(c))
+}
+function sprintOverdueInfo(value: string): { overdue: boolean; weekEndLabel: string } | null {
+  const yw = parseYearWeek(value)
+  if (!yw) return null
+  const start = isoWeekStart(yw.year, yw.week)
+  const weekEnd = new Date(start)
+  weekEnd.setDate(start.getDate() + 6)
+  weekEnd.setHours(23, 59, 59, 999)
+  const weekEndLabel = weekEnd.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
+  return { overdue: new Date() > weekEnd, weekEndLabel }
+}
 
 // Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
 // field nggak kejebak beda format kecil ("Doc. No." vs "Doc No" vs "doc_no").
@@ -241,6 +269,29 @@ function sortByColumn(rows: CodaRowItem[], col: string | null, dir: SortDir): Co
   })
   return copy
 }
+// Widget "hari ini tanggal berapa, week berapa" — diminta user KHUSUS
+// buat page CODA (bukan semua halaman dashboard). Dihitung client-side
+// di useEffect biar nggak mismatch hydration jam server vs browser.
+function DayWeekBadge() {
+  const [now, setNow] = useState<Date | null>(null)
+  useEffect(() => {
+    setNow(new Date())
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  if (!now) return null
+  const { week } = isoWeekInfo(now)
+  const dayName = now.toLocaleDateString("id-ID", { weekday: "long" })
+  const dateStr = now.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 999, background: "linear-gradient(135deg,#0E4D64,#0891B2)", alignSelf: "flex-start" }}>
+      <span style={{ fontSize: 15 }}>📅</span>
+      <span style={{ fontSize: 12, fontWeight: 700, color: "white", whiteSpace: "nowrap" }}>{dayName}, {dateStr}</span>
+      <span style={{ fontSize: 10, fontWeight: 800, color: "#0891B2", background: "white", padding: "2px 8px", borderRadius: 999 }}>Week {week}</span>
+    </div>
+  )
+}
+
 function SortableHeader({ label, col, sortCol, sortDir, onSort }: { label: string; col: string; sortCol: string | null; sortDir: SortDir; onSort: (col: string) => void }) {
   const active = sortCol === col
   return (
@@ -374,7 +425,10 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
     const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
     const n = Math.max(1, docs.length, statuses.length)
     const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
-    return { r, n, pairs }
+    // Masih "aktif" (belum semua doc-nya DONE/RELEASE/PILOT) — reminder
+    // telat cuma relevan buat baris yang masih ada kerjaan jalan.
+    const hasPending = pairs.some(p => p.status && !isDoneStatusText(p.status))
+    return { r, n, pairs, hasPending }
   })
 
   const cellBase = { padding: "7px 10px", fontSize: 11, whiteSpace: "nowrap" as const }
@@ -409,12 +463,22 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
       } else {
         const raw = rec.r.values?.[s.col]
         const rawText = fmtCell(raw)
-        const content = isStatusColumn(s.col) && rawText !== "—" ? (() => {
+        // Reminder sprint telat — cuma dicek buat kolom Submit/Review/
+        // Dev/Test Sprint, cuma kalau baris ini masih ada doc yang
+        // belum kelar (hasPending), biar item yang udah DONE nggak
+        // terus-terusan "diingetin telat" walau emang udah lewat.
+        const overdueInfo = isSprintColumn(s.col) && rec.hasPending && rawText !== "—" ? sprintOverdueInfo(rawText) : null
+        let content: ReactNode = rawText
+        let cellStyle: CSSProperties = {}
+        if (overdueInfo?.overdue) {
+          content = <span title={`Harusnya kelar ${overdueInfo.weekEndLabel} — udah lewat`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#991B1B", fontWeight: 700 }}>⚠️ {rawText}</span>
+          cellStyle = { background: "#FEE2E2" }
+        } else if (isStatusColumn(s.col) && rawText !== "—") {
           const { bg, fg } = statusColor(rawText)
-          return <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
-        })() : rawText
+          content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+        }
         bodyCells.push(
-          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
         )
       }
     })
@@ -712,6 +776,7 @@ export default function CodaPage() {
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
+      <DayWeekBadge />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 6, borderBottom: "1px solid var(--border)" }}>
