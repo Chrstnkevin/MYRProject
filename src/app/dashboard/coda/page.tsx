@@ -14,9 +14,11 @@
 // tab di sini bakal nunjukin error "table nggak ketemu". Itu soal akses di
 // akun Superhuman Docs, bukan kode.
 
-import { Fragment, useEffect, useState, type ReactNode } from "react"
+import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react"
 import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
+import { isoWeekInfo, isoWeekStart, parseYearWeek } from "@/lib/isoWeek"
+import type { DocRow as ReportDocRow, SubdistRow as ReportSubdistRow, PlanPilotReportData } from "@/lib/planPilotExcelTemplate"
 
 interface CodaDocItem { id: string; name: string }
 interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number; parentTable?: { id: string; name?: string } }
@@ -38,7 +40,12 @@ interface TableLocation { docId: string; docName: string; tableId: string; table
 // richValues: minta rows TANPA valueFormat=simple (lihat catatan di
 // rows/route.ts) — dibutuhin ADOP biar kolom multi-value (Doc. Ref.,
 // Status Dev) tetep array asli, nggak digabung jadi 1 string koma.
-interface TabDef { key: string; label: string; matcher: (name: string) => boolean; richValues?: boolean }
+// pageNameHint: dipakai kalau `matcher` bisa cocok ke LEBIH DARI 1
+// table (mis. "semua-dokumen" cocok ke "List Monitoring 2/4/5/6/7/10/
+// dst") — disambiguasi dengan ngecek page INDUK tiap table kandidat
+// (field `parent.name` dari Coda, cuma kebaca lewat endpoint detail
+// satuan) dan ambil yang page-nya mengandung teks ini (case-insensitive).
+interface TabDef { key: string; label: string; matcher: (name: string) => boolean; richValues?: boolean; pageNameHint?: string }
 
 // Nama table dicocokkan longgar (bukan exact match ketat) biar tetep
 // jalan walau ada sedikit variasi penamaan di Coda-nya nanti.
@@ -51,7 +58,10 @@ const TABS: TabDef[] = [
   // splitDocRefText/splitStatusText, jadi nggak perlu ambil resiko
   // ganti format buat kolom lain (PIC Apps dst) yang udah jalan bener.
   { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n) },
-  { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
+  // "List Monitoring" cocok ke BELASAN table (2/4/5/6/7/10/Afif/APPS/
+  // dst) — pageNameHint "yona" buat disambiguasi, dikonfirmasi user
+  // page-nya namanya "Yona Monitoring Doc".
+  { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring"), pageNameHint: "yona" },
 ]
 
 // Grouping Plan Pilot by "User"/"User Request" DIBUANG — 1 batch
@@ -101,6 +111,28 @@ function resolveColumns(rows: CodaRowItem[], desired: string[]): { found: string
     else missing.push(d)
   }
   return { found, missing }
+}
+
+// Generate teks ringkasan siap-paste (diminta user, formatnya persis
+// contoh yang dikasih) — Doc. Name di-group per Status Dev. Doc. Name
+// di data udah termasuk kode dokumennya sendiri (mis. "S26-132-WMD_..."),
+// jadi nggak perlu digabung manual sama Doc. No. lagi.
+function buildReportText(batchName: string, rows: CodaRowItem[]): string {
+  const order: string[] = []
+  const groups = new Map<string, string[]>()
+  for (const r of rows) {
+    const status = getFieldValue(r.values, "Status Dev").trim() || "(Tanpa Status)"
+    const docName = getFieldValue(r.values, "Doc. Name").trim() || getFieldValue(r.values, "Doc. No.").trim() || "(tanpa nama)"
+    if (!groups.has(status)) { groups.set(status, []); order.push(status) }
+    groups.get(status)!.push(docName)
+  }
+  order.sort((a, b) => groups.get(b)!.length - groups.get(a)!.length)
+  const lines = [`Berikut adalah plan release ${batchName} dengan status sebagai berikut`]
+  for (const status of order) {
+    lines.push(`${status}:`)
+    for (const d of groups.get(status)!) lines.push(`- ${d}`)
+  }
+  return lines.join("\n")
 }
 
 // Kolom multi-select/person-reference (mis. "Status Dev", "Plan Pilot",
@@ -177,6 +209,33 @@ function statusColor(v: string): { bg: string; fg: string } {
   if (s.includes("PROGRESS") || s.includes("OPEN") || s.includes("DEV") || s.includes("DR")) return { bg: "#E0F2FE", fg: "#075985" }
   return { bg: "var(--surface2)", fg: "var(--text3)" }
 }
+// "Udah kelar" kalau masuk bucket pertama statusColor() di atas (ijo) —
+// dipakai buat nentuin apakah masih relevan dicek telat/nggaknya (item
+// yang udah DONE/RELEASE/PILOT nggak perlu diingetin lagi).
+function isDoneStatusText(v: string): boolean {
+  const s = v.trim().toUpperCase()
+  return s.includes("READY") || s.includes("DONE") || s.includes("RELEASE") || s.includes("PILOT")
+}
+
+// Reminder "sprint telat" ADOP (diminta user, berdasarkan Operation
+// Calendar Mayora Group yang nomor minggunya SAMA PERSIS sama ISO 8601
+// — lihat src/lib/isoWeek.ts) — value Submit/Review/Dev/Test Sprint
+// formatnya "2026.45" dkk (tahun.minggu); kalau minggu itu udah lewat
+// (hari ini > Minggu/akhir minggu tsb), dianggap telat.
+const ADOP_SPRINT_COL_NAMES = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint"]
+function isSprintColumn(c: string): boolean {
+  return ADOP_SPRINT_COL_NAMES.some(n => normKey(n) === normKey(c))
+}
+function sprintOverdueInfo(value: string): { overdue: boolean; weekEndLabel: string } | null {
+  const yw = parseYearWeek(value)
+  if (!yw) return null
+  const start = isoWeekStart(yw.year, yw.week)
+  const weekEnd = new Date(start)
+  weekEnd.setDate(start.getDate() + 6)
+  weekEnd.setHours(23, 59, 59, 999)
+  const weekEndLabel = weekEnd.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
+  return { overdue: new Date() > weekEnd, weekEndLabel }
+}
 
 // Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
 // field nggak kejebak beda format kecil ("Doc. No." vs "Doc No" vs "doc_no").
@@ -219,12 +278,73 @@ function sortByColumn(rows: CodaRowItem[], col: string | null, dir: SortDir): Co
   })
   return copy
 }
+// Widget "hari ini tanggal berapa, week berapa" — diminta user KHUSUS
+// buat page CODA (bukan semua halaman dashboard). Dihitung client-side
+// di useEffect biar nggak mismatch hydration jam server vs browser.
+function DayWeekBadge() {
+  const [now, setNow] = useState<Date | null>(null)
+  useEffect(() => {
+    setNow(new Date())
+    const t = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+  if (!now) return null
+  const { week } = isoWeekInfo(now)
+  const dayName = now.toLocaleDateString("id-ID", { weekday: "long" })
+  const dateStr = now.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 999, background: "linear-gradient(135deg,#0E4D64,#0891B2)", alignSelf: "flex-start" }}>
+      <span style={{ fontSize: 15 }}>📅</span>
+      <span style={{ fontSize: 12, fontWeight: 700, color: "white", whiteSpace: "nowrap" }}>{dayName}, {dateStr}</span>
+      <span style={{ fontSize: 10, fontWeight: 800, color: "#0891B2", background: "white", padding: "2px 8px", borderRadius: 999 }}>Week {week}</span>
+    </div>
+  )
+}
+
 function SortableHeader({ label, col, sortCol, sortDir, onSort }: { label: string; col: string; sortCol: string | null; sortDir: SortDir; onSort: (col: string) => void }) {
   const active = sortCol === col
   return (
     <th onClick={() => onSort(col)} style={{ padding: "8px 10px", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--text3)" }}>
       {label} <span style={{ opacity: active ? 1 : 0.35 }}>{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
     </th>
+  )
+}
+
+// Chart breakdown status — vertical bar, rounded, warna dari
+// statusColor() yang sama dipakai badge status di tabel (biar identitas
+// warnanya konsisten, bukan skema warna baru). Label count+persen DI
+// ATAS tiap bar + nama status di bawahnya (direct label, nggak perlu
+// legend terpisah). Dipakai bareng Plan Pilot & ADOP (diminta user).
+function StatusBarChart({ title, subtitle, data }: { title: string; subtitle?: string; data: { status: string; n: number }[] }) {
+  if (data.length === 0) return null
+  const max = Math.max(1, ...data.map(d => d.n))
+  const total = data.reduce((s, d) => s + d.n, 0) || 1
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{title}</div>
+      {subtitle && <div style={{ fontSize: 10, color: "var(--text3)", marginBottom: 14 }}>{subtitle}</div>}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 150, paddingTop: 22, overflowX: "auto" }}>
+        {data.map(({ status, n }) => {
+          const sc = statusColor(status)
+          const pct = (n / total) * 100
+          const h = Math.max(6, (n / max) * 100)
+          return (
+            <div key={status} title={`${status}: ${n} baris (${pct.toFixed(1)}%)`}
+              style={{ flex: "1 0 54px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 54 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: "var(--text)" }}>{n}</span>
+              <div style={{
+                width: "100%", maxWidth: 46, height: h, borderRadius: "10px 10px 3px 3px",
+                background: `linear-gradient(180deg, ${sc.fg}, ${sc.fg}B3)`,
+                boxShadow: `0 6px 12px -4px ${sc.fg}66`,
+                transition: "height 0.35s cubic-bezier(0.22,1,0.36,1)",
+              }} />
+              <span style={{ fontSize: 9, color: "var(--text3)", textAlign: "center", lineHeight: 1.25, wordBreak: "break-word" }}>{status}</span>
+              <span style={{ fontSize: 9, fontWeight: 700, color: sc.fg }}>{pct.toFixed(0)}%</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 
@@ -314,7 +434,10 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
     const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
     const n = Math.max(1, docs.length, statuses.length)
     const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
-    return { r, n, pairs }
+    // Masih "aktif" (belum semua doc-nya DONE/RELEASE/PILOT) — reminder
+    // telat cuma relevan buat baris yang masih ada kerjaan jalan.
+    const hasPending = pairs.some(p => p.status && !isDoneStatusText(p.status))
+    return { r, n, pairs, hasPending }
   })
 
   const cellBase = { padding: "7px 10px", fontSize: 11, whiteSpace: "nowrap" as const }
@@ -349,12 +472,22 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
       } else {
         const raw = rec.r.values?.[s.col]
         const rawText = fmtCell(raw)
-        const content = isStatusColumn(s.col) && rawText !== "—" ? (() => {
+        // Reminder sprint telat — cuma dicek buat kolom Submit/Review/
+        // Dev/Test Sprint, cuma kalau baris ini masih ada doc yang
+        // belum kelar (hasPending), biar item yang udah DONE nggak
+        // terus-terusan "diingetin telat" walau emang udah lewat.
+        const overdueInfo = isSprintColumn(s.col) && rec.hasPending && rawText !== "—" ? sprintOverdueInfo(rawText) : null
+        let content: ReactNode = rawText
+        let cellStyle: CSSProperties = {}
+        if (overdueInfo?.overdue) {
+          content = <span title={`Harusnya kelar ${overdueInfo.weekEndLabel} — udah lewat`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#991B1B", fontWeight: 700 }}>⚠️ {rawText}</span>
+          cellStyle = { background: "#FEE2E2" }
+        } else if (isStatusColumn(s.col) && rawText !== "—") {
           const { bg, fg } = statusColor(rawText)
-          return <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
-        })() : rawText
+          content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+        }
         bodyCells.push(
-          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
         )
       }
     })
@@ -398,13 +531,13 @@ function SearchableSelect({ value, onChange, options, placeholder }: { value: st
   return (
     <div style={{ position: "relative" }}>
       <button onClick={() => { setOpen(o => !o); setQuery("") }}
-        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: value ? "var(--text)" : "var(--text3)", fontSize: 11, fontFamily: "inherit", cursor: "pointer", minWidth: 200, textAlign: "left" }}>
+        style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: value ? "var(--text)" : "var(--text3)", fontSize: 12, fontFamily: "inherit", cursor: "pointer", textAlign: "left" }}>
         {value || placeholder}
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
-          <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 6, minWidth: 260, maxHeight: 320, display: "flex", flexDirection: "column", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
+          <div style={{ position: "absolute", top: "110%", left: 0, right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 6, maxHeight: 320, display: "flex", flexDirection: "column", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
             <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Cari..."
               style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", marginBottom: 4, outline: "none" }} />
             <div style={{ overflowY: "auto", maxHeight: 250 }}>
@@ -494,7 +627,34 @@ async function resolveLocation(docId: string, docName: string, match: CodaTableI
   return { docId, docName, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
 }
 
-async function findTable(matcher: (name: string) => boolean, fresh = false): Promise<TableLocation | null> {
+// Fetch parent page suatu table (cuma kebaca lewat endpoint detail
+// satuan, bukan /tables list) — dipakai buat disambiguasi kalau
+// `matcher` cocok ke lebih dari 1 table.
+async function pageNameOfTable(docId: string, tableId: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/superhuman-docs/table-detail?docId=${encodeURIComponent(docId)}&tableId=${encodeURIComponent(tableId)}`).then(r => r.json())
+    return (res?.parent?.name as string | undefined) || ""
+  } catch {
+    return ""
+  }
+}
+
+// Dari SEMUA kandidat yang cocok matcher, pilih satu: kalau cuma 1
+// kandidat ya itu aja (nggak perlu cek apa-apa lagi, hemat request);
+// kalau lebih dari 1, cek page induk tiap kandidat SATU-SATU, ambil
+// yang page-nya mengandung `pageNameHint`. Nggak ketemu yang cocok ->
+// fallback ke kandidat pertama (lebih baik salah satu daripada error).
+async function pickBestMatch(docId: string, candidates: CodaTableItem[], pageNameHint?: string): Promise<CodaTableItem | null> {
+  if (candidates.length === 0) return null
+  if (candidates.length === 1 || !pageNameHint) return candidates[0]
+  for (const c of candidates) {
+    const pageName = await pageNameOfTable(docId, c.id)
+    if (pageName.toLowerCase().includes(pageNameHint.toLowerCase())) return c
+  }
+  return candidates[0]
+}
+
+async function findTable(matcher: (name: string) => boolean, fresh = false, pageNameHint?: string): Promise<TableLocation | null> {
   const f = fresh ? "&fresh=1" : ""
   const docsRes = await fetch(`/api/superhuman-docs/docs${fresh ? "?fresh=1" : ""}`).then(r => r.json())
   if (docsRes.error) throw new Error(docsRes.error)
@@ -504,7 +664,8 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
   if (knownDoc) {
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}${f}`).then(r => r.json())
     if (!tablesRes.error) {
-      const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+      const candidates = ((tablesRes.items || []) as CodaTableItem[]).filter(t => matcher(t.name))
+      const match = await pickBestMatch(knownDoc.id, candidates, pageNameHint)
       if (match) return resolveLocation(knownDoc.id, knownDoc.name, match, fresh)
     }
   }
@@ -513,7 +674,8 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     if (d.id === KNOWN_DOC_ID) continue
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}${f}`).then(r => r.json())
     if (tablesRes.error) continue
-    const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+    const candidates = ((tablesRes.items || []) as CodaTableItem[]).filter(t => matcher(t.name))
+    const match = await pickBestMatch(d.id, candidates, pageNameHint)
     if (match) return resolveLocation(d.id, d.name, match, fresh)
   }
   return null
@@ -527,6 +689,18 @@ export default function CodaPage() {
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
   // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
   const [planPilotFilter, setPlanPilotFilter] = useState("")
+  const [planPilotReportText, setPlanPilotReportText] = useState<string | null>(null)
+  // Popup "Form Release (Excel)" — data di sini SELALU diprefill dari
+  // Coda (lihat openReportExcelModal), tapi semuanya EDITABLE sebelum
+  // di-generate (diminta user: "saya bisa edit valuenya terus klik
+  // generate"). Field yang nggak ada sumbernya di Coda (Kode/Nama
+  // Subdist, tanda tangan) dibiarin kosong buat diisi manual.
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportGenerating, setReportGenerating] = useState(false)
+  const [reportReleaseName, setReportReleaseName] = useState("")
+  const [reportSubdist, setReportSubdist] = useState<ReportSubdistRow[]>([])
+  const [reportDocs, setReportDocs] = useState<ReportDocRow[]>([])
+  const [reportSignatures, setReportSignatures] = useState({ mengajukan: "", mengCompile: "", mengetahui: "", menyetujui: "" })
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
   // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
   // user) — array kosong = "semua" (nggak difilter). Perlu di-update
@@ -545,7 +719,7 @@ export default function CodaPage() {
     try {
       let loc = located[tabKey]
       if (!loc || force) {
-        loc = await findTable(tab.matcher, force)
+        loc = await findTable(tab.matcher, force, tab.pageNameHint)
         if (!loc) throw new Error(`Table buat "${tab.label}" nggak ketemu di Doc manapun yang kebaca token ini — cek apakah token SUPERHUMAN_DOCS_API_TOKEN sudah bisa akses doc yang bersangkutan.`)
         setLocated(l => ({ ...l, [tabKey]: loc }))
       }
@@ -576,6 +750,52 @@ export default function CodaPage() {
   const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
   const { found: planPilotFoundCols, missing: planPilotMissingColumns } = activeTab === "plan-pilot" ? resolveColumns(planPilotRows, PLAN_PILOT_PREVIEW_COLS) : { found: [], missing: [] }
 
+  // Prefill popup "Form Release (Excel)" dari baris Plan Pilot yang
+  // lagi difilter — "modul"/"testBy" nebak dari kolom "Application"/
+  // "Testing PIC 1" (nama kolom asli di Coda, dari dropdown filter yang
+  // pernah user tunjukin), "status" default "OK" (sama kayak contoh
+  // Excel asli). SEMUA field ini tetap bisa diedit user di popup
+  // sebelum generate, jadi kalau tebakannya meleset user bisa benerin.
+  function openReportExcelModal() {
+    setReportReleaseName(planPilotFilter)
+    setReportDocs(planPilotRows.map((r, i) => ({
+      no: i + 1,
+      modul: getFieldValue(r.values, "Application"),
+      docName: getFieldValue(r.values, "Doc. Name"),
+      keterangan: "",
+      onVersion: getFieldValue(r.values, "Plan Pilot") || planPilotFilter,
+      reqBy: getFieldValue(r.values, "User"),
+      testBy: getFieldValue(r.values, "Testing PIC 1"),
+      status: "OK",
+    })))
+    setReportSubdist([{ no: 1, kodeSubdist: "", namaSubdist: "", keterangan: "", pilotBy: "" }])
+    setReportSignatures({ mengajukan: "", mengCompile: "", mengetahui: "", menyetujui: "" })
+    setReportModalOpen(true)
+  }
+
+  async function generateReportExcel() {
+    setReportGenerating(true)
+    try {
+      const payload: PlanPilotReportData = { releaseName: reportReleaseName, subdist: reportSubdist, docs: reportDocs, signatures: reportSignatures }
+      const res = await fetch("/api/coda/plan-pilot-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.error || "Gagal generate Excel")
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `Form_Request_Pilot_${reportReleaseName.replace(/[^\w.-]+/g, "_")}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      setReportModalOpen(false)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+    }
+    setReportGenerating(false)
+  }
+
   // Chart persentase per "Status Dev" (diminta user) — warna bar-nya
   // dicocokin ke statusColor() yang SAMA dipakai buat badge status di
   // tabel, biar konsisten (bukan skema warna baru). CUMA muncul kalau
@@ -587,10 +807,7 @@ export default function CodaPage() {
       const v = getFieldValue(r.values, "Status Dev").trim() || "(kosong)"
       counts.set(v, (counts.get(v) || 0) + 1)
     }
-    const total = planPilotRows.length || 1
-    return Array.from(counts.entries())
-      .map(([status, n]) => ({ status, n, pct: (n / total) * 100 }))
-      .sort((a, b) => b.n - a.n)
+    return Array.from(counts.entries()).map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
   })() : []
 
   // Khusus tab ADOP: filter ke sub-tab (User) yang aktif dulu, baru dropdown
@@ -635,9 +852,26 @@ export default function CodaPage() {
   })() : []
   const deadlineMax = Math.max(1, ...deadlineCounts.map(([, n]) => n))
 
+  // Chart breakdown Status Dev buat ADOP (diminta user, chart yang
+  // sama kayak Plan Pilot) — "Status Dev" ADOP itu ARRAY per-doc
+  // (paralel sama Doc. Ref., lihat toStatusArray), jadi dihitung per
+  // ITEM dokumen, bukan per baris Coda (1 baris bisa punya banyak doc).
+  const adopStatusDevPercent = activeTab === "adop" && adopStatusDevKey ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of adopRows) {
+      const statuses = toStatusArray(r.values?.[adopStatusDevKey])
+      for (const s of statuses) {
+        const v = cellItemText(s).trim() || "(kosong)"
+        counts.set(v, (counts.get(v) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries()).map(([status, n]) => ({ status, n })).sort((a, b) => b.n - a.n)
+  })() : []
+
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
+      <DayWeekBadge />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 6, borderBottom: "1px solid var(--border)" }}>
@@ -674,11 +908,23 @@ export default function CodaPage() {
         // searchable "Plan Pilot" + chart persentase Status Dev (cuma
         // muncul kalau udah difilter ke 1 batch).
         <>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {planPilotOptions.length > 0 && (
-              <SearchableSelect value={planPilotFilter} onChange={setPlanPilotFilter} options={planPilotOptions}
-                placeholder={`— Semua Plan Pilot (${planPilotAllRows.length}) —`} />
+              <div style={{ flex: 1 }}>
+                <SearchableSelect value={planPilotFilter} onChange={setPlanPilotFilter} options={planPilotOptions}
+                  placeholder={`— Semua Plan Pilot (${planPilotAllRows.length}) —`} />
+              </div>
             )}
+            <button onClick={() => setPlanPilotReportText(buildReportText(planPilotFilter, planPilotRows))}
+              disabled={!planPilotFilter || planPilotRows.length === 0}
+              style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, border: "none", background: planPilotFilter ? "var(--accent)" : "var(--surface2)", cursor: planPilotFilter ? "pointer" : "not-allowed", opacity: planPilotFilter ? 1 : 0.5, fontSize: 12, color: planPilotFilter ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700 }}>
+              📋 Buat Report
+            </button>
+            <button onClick={openReportExcelModal}
+              disabled={!planPilotFilter || planPilotRows.length === 0}
+              style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, border: "none", background: planPilotFilter ? "#16A34A" : "var(--surface2)", cursor: planPilotFilter ? "pointer" : "not-allowed", opacity: planPilotFilter ? 1 : 0.5, fontSize: 12, color: planPilotFilter ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap" }}>
+              📥 Form Release (Excel)
+            </button>
           </div>
 
           {planPilotMissingColumns.length > 0 && (
@@ -687,25 +933,7 @@ export default function CodaPage() {
             </p>
           )}
 
-          {statusDevPercent.length > 0 && (
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Persentase Status Dev ({planPilotRows.length} baris{planPilotFilter ? ` · ${planPilotFilter}` : ""})</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {statusDevPercent.map(({ status, n, pct }) => {
-                  const sc = statusColor(status)
-                  return (
-                    <div key={status} style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${status}: ${n} baris (${pct.toFixed(1)}%)`}>
-                      <span style={{ width: 110, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{status}</span>
-                      <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 16, position: "relative" }}>
-                        <div style={{ width: `${Math.max(2, pct)}%`, height: "100%", borderRadius: 4, background: sc.fg }} />
-                      </div>
-                      <span style={{ width: 66, flexShrink: 0, fontSize: 10, fontWeight: 700, color: "var(--text)" }}>{pct.toFixed(1)}% ({n})</span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
+          <StatusBarChart title={`Breakdown Status Dev${planPilotFilter ? ` — ${planPilotFilter}` : ""}`} subtitle={`${planPilotRows.length} baris`} data={statusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
             <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} />
@@ -769,6 +997,8 @@ export default function CodaPage() {
             </div>
           )}
 
+          <StatusBarChart title={`Breakdown Status Dev (${adopActive.label})`} subtitle={`${adopRows.length} baris`} data={adopStatusDevPercent} />
+
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
             <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} />
           </div>
@@ -776,6 +1006,136 @@ export default function CodaPage() {
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
           <DynamicTable rows={rows} columns={columns} />
+        </div>
+      )}
+
+      {planPilotReportText !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setPlanPilotReportText(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📋 Report Plan Release</span>
+              <button onClick={() => setPlanPilotReportText(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <textarea readOnly value={planPilotReportText}
+              style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => navigator.clipboard.writeText(planPilotReportText)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Copy ke Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportModalOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setReportModalOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 1100, maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📥 Form Release (Excel) — validasi dulu sebelum generate</span>
+              <button onClick={() => setReportModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+              <div>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)" }}>Nama Release (judul form)</label>
+                <input value={reportReleaseName} onChange={e => setReportReleaseName(e.target.value)}
+                  style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" }} />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Pilot Implementation (Subdist)</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "var(--text3)", background: "var(--surface2)" }}>
+                        <th style={{ padding: 6 }}>No</th><th style={{ padding: 6 }}>Kode Subdist</th><th style={{ padding: 6 }}>Nama Subdist</th><th style={{ padding: 6 }}>Keterangan</th><th style={{ padding: 6 }}>Pilot By</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportSubdist.map((s, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: 4, textAlign: "center" }}>{s.no}</td>
+                          {(["kodeSubdist", "namaSubdist", "keterangan", "pilotBy"] as const).map(f => (
+                            <td key={f} style={{ padding: 4 }}>
+                              <input value={s[f]} onChange={e => setReportSubdist(arr => arr.map((row, j) => j === i ? { ...row, [f]: e.target.value } : row))}
+                                style={{ width: "100%", padding: "5px 7px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                            </td>
+                          ))}
+                          <td style={{ padding: 4 }}>
+                            <button onClick={() => setReportSubdist(arr => arr.filter((_, j) => j !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626" }}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={() => setReportSubdist(arr => [...arr, { no: arr.length + 1, kodeSubdist: "", namaSubdist: "", keterangan: "", pilotBy: "" }])}
+                  style={{ marginTop: 6, padding: "5px 10px", borderRadius: 6, border: "1px dashed var(--border)", background: "none", cursor: "pointer", fontSize: 10, color: "var(--text3)", fontFamily: "inherit" }}>
+                  + Tambah baris subdist
+                </button>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>List Dokumen ({reportDocs.length})</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "var(--text3)", background: "var(--surface2)" }}>
+                        <th style={{ padding: 6 }}>No</th><th style={{ padding: 6, minWidth: 110 }}>Modul</th><th style={{ padding: 6, minWidth: 260 }}>No. DR/ST Nama Dokumen</th>
+                        <th style={{ padding: 6, minWidth: 100 }}>Keterangan</th><th style={{ padding: 6, minWidth: 110 }}>On Version</th>
+                        <th style={{ padding: 6 }}>Req By</th><th style={{ padding: 6, minWidth: 100 }}>Test By</th><th style={{ padding: 6 }}>Status</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportDocs.map((d, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: 4, textAlign: "center" }}>{d.no}</td>
+                          {(["modul", "docName", "keterangan", "onVersion", "reqBy", "testBy", "status"] as const).map(f => (
+                            <td key={f} style={{ padding: 4 }}>
+                              <input value={d[f]} onChange={e => setReportDocs(arr => arr.map((row, j) => j === i ? { ...row, [f]: e.target.value } : row))}
+                                style={{ width: "100%", padding: "5px 7px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                            </td>
+                          ))}
+                          <td style={{ padding: 4 }}>
+                            <button onClick={() => setReportDocs(arr => arr.filter((_, j) => j !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626" }}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={() => setReportDocs(arr => [...arr, { no: arr.length + 1, modul: "", docName: "", keterangan: "", onVersion: reportReleaseName, reqBy: "", testBy: "", status: "OK" }])}
+                  style={{ marginTop: 6, padding: "5px 10px", borderRadius: 6, border: "1px dashed var(--border)", background: "none", cursor: "pointer", fontSize: 10, color: "var(--text3)", fontFamily: "inherit" }}>
+                  + Tambah baris dokumen
+                </button>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Tanda Tangan</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 8 }}>
+                  {([["mengajukan", "Mengajukan"], ["mengCompile", "Meng-compile"], ["mengetahui", "Mengetahui"], ["menyetujui", "Menyetujui"]] as const).map(([key, label]) => (
+                    <div key={key}>
+                      <label style={{ fontSize: 10, color: "var(--text3)" }}>{label}</label>
+                      <input value={reportSignatures[key]} onChange={e => setReportSignatures(s => ({ ...s, [key]: e.target.value }))}
+                        style={{ display: "block", width: "100%", marginTop: 3, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => setReportModalOpen(false)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text2)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                Batal
+              </button>
+              <button onClick={generateReportExcel} disabled={reportGenerating || !reportReleaseName}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "white", fontSize: 12, fontWeight: 700, cursor: reportGenerating ? "default" : "pointer", opacity: reportGenerating ? 0.7 : 1, fontFamily: "inherit" }}>
+                {reportGenerating ? "Generating..." : "Generate & Download"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
