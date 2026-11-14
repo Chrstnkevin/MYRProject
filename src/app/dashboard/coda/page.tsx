@@ -193,14 +193,22 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 const KNOWN_DOC_ID = "Rt3S4eDoOn"
 
 // Kalau match-nya View dan punya parentTable, pakai base table-nya
-// (lihat catatan viaViewName di TableLocation soal kenapa).
-function resolveLocation(docId: string, docName: string, match: CodaTableItem): TableLocation {
-  if (match.tableType === "view" && match.parentTable?.id) {
-    return {
-      docId, docName,
-      tableId: match.parentTable.id,
-      tableName: match.parentTable.name || match.parentTable.id,
-      viaViewName: match.name,
+// (lihat catatan viaViewName di TableLocation soal kenapa). parentTable
+// CUMA kebaca lewat endpoint detail satuan (/table-detail), BUKAN lewat
+// endpoint list (/tables) — ketauan dari raw response GET-single-table
+// yang user kasih: field itu ada di sana, tapi di endpoint list semua
+// field begini kosong ("—") buat SEMUA table, bukan cuma ADOP BACKLOG.
+async function resolveLocation(docId: string, docName: string, match: CodaTableItem, fresh: boolean): Promise<TableLocation> {
+  if (match.tableType === "view") {
+    const detailRes = await fetch(`/api/superhuman-docs/table-detail?docId=${encodeURIComponent(docId)}&tableId=${encodeURIComponent(match.id)}${fresh ? "&fresh=1" : ""}`).then(r => r.json())
+    const parentTable = detailRes?.parentTable as { id?: string; name?: string } | undefined
+    if (parentTable?.id) {
+      return {
+        docId, docName,
+        tableId: parentTable.id,
+        tableName: parentTable.name || parentTable.id,
+        viaViewName: match.name,
+      }
     }
   }
   return { docId, docName, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
@@ -217,7 +225,7 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}${f}`).then(r => r.json())
     if (!tablesRes.error) {
       const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-      if (match) return resolveLocation(knownDoc.id, knownDoc.name, match)
+      if (match) return resolveLocation(knownDoc.id, knownDoc.name, match, fresh)
     }
   }
 
@@ -226,7 +234,7 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}${f}`).then(r => r.json())
     if (tablesRes.error) continue
     const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-    if (match) return resolveLocation(d.id, d.name, match)
+    if (match) return resolveLocation(d.id, d.name, match, fresh)
   }
   return null
 }
