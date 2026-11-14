@@ -24,8 +24,11 @@ const FONT11 = { name: "Calibri", size: 11 }
 // (header), oranye/gold (section "Pilot Implementation"), ijo pucat
 // ("List"), kuning (highlight No/Req By/Test By), merah (teks
 // "Confidential"), hitam (teks biasa di atas fill kuning).
+// "Pilot Implementation" itu UNGU & "List" itu ORANYE (dari screenshot
+// file asli user - sebelumnya kebalik, "Pilot Implementation" sempat
+// dikasih oranye & "List" ijo pucat).
 const CLR = {
-  green: "FF92D050", orange: "FFFFC000", paleGreen: "FFC6E0B4",
+  green: "FF92D050", purple: "FFCC99FF", orange: "FFFFC000",
   yellow: "FFFFFF00", red: "FFFF0000", black: "FF000000", statusBlue: "FF00B0F0",
 }
 const FILL = (hex: string): ExcelJS.Fill => ({ type: "pattern", pattern: "solid", fgColor: { argb: hex } })
@@ -67,7 +70,7 @@ export function buildPlanPilotReportWorkbook(data: PlanPilotReportData): ExcelJS
   set(3, 2, `Release ${data.releaseName}`, { font: { bold: true, italic: true, size: 14 } })
   set(3, 9, "Confidential Knowledge untuk Kalangan Terbatas", { font: { italic: true, size: 8, color: { argb: CLR.red } }, align: { horizontal: "right" } })
   set(4, 9, "Application Support Global - 2025", { font: { italic: true, size: 8 }, align: { horizontal: "right" } })
-  set(5, 2, "Pilot Implementation", { font: { bold: true, italic: true }, fill: FILL(CLR.orange) })
+  set(5, 2, "Pilot Implementation", { font: { bold: true, italic: true }, fill: FILL(CLR.purple) })
 
   // ── Tabel Subdist ───────────────────────────────────────────
   const subHeaderBorder = { top: MED, bottom: THIN }
@@ -101,7 +104,7 @@ export function buildPlanPilotReportWorkbook(data: PlanPilotReportData): ExcelJS
 
   // ── Section "List" + tabel dokumen ──────────────────────────
   const listRow = 7 + subRows.length + 2
-  set(listRow, 2, "List", { font: { bold: true, italic: true }, fill: FILL(CLR.paleGreen), border: { left: MED, top: MED } })
+  set(listRow, 2, "List", { font: { bold: true, italic: true }, fill: FILL(CLR.orange), border: { left: MED, top: MED } })
 
   const docHeaderRow = listRow + 1
   const docHeaders: [number, string, Partial<ExcelJS.Alignment> | undefined][] = [
