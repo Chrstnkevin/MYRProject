@@ -47,7 +47,15 @@ async function fetchSuperhumanDocsUrl<T>(url: string): Promise<T> {
   const timeout = setTimeout(() => controller.abort(), 15000)
   let res: Response
   try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal })
+    // cache: "no-store" WAJIB — tanpa ini Next.js nge-cache fetch() server
+    // ini SENDIRI secara default (terpisah dari cache kita sendiri di
+    // withSuperhumanDocsCache), nggak ada TTL otomatis. Ini kemungkinan
+    // besar PENYEBAB ASLI kenapa tombol Refresh di tab ADOP sempat
+    // kelihatan "nggak ngaruh" (data lama ke-serve dari cache Next.js,
+    // bukan beneran nembus ke Coda). Sekarang satu-satunya lapisan cache
+    // yang ada cuma withSuperhumanDocsCache, yang bisa di-bypass jelas
+    // lewat fresh=1.
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal, cache: "no-store" })
   } catch (e) {
     if (e instanceof Error && e.name === "AbortError") {
       throw new SuperhumanDocsError(`Request ke Superhuman Docs timeout (>15 detik) — kemungkinan jaringan lokal/kantor kamu lambat atau diblokir ke coda.io. Coba cek koneksi internet/VPN/firewall, atau tes lagi dari jaringan lain.`)
