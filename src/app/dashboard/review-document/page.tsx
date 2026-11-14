@@ -16,7 +16,9 @@ interface Finding {
   status: "pending" | "accepted" | "rejected"
 }
 
-interface UserComment { id: string; sectionKey: string; text: string }
+interface UserComment { id: string; anchorText: string; text: string }
+
+interface SelectionState { text: string; top: number; left: number }
 
 const SEVERITY_CFG = {
   high:   { label: "Tinggi", color: "var(--danger)",  bg: "var(--danger-bg)" },
@@ -24,12 +26,10 @@ const SEVERITY_CFG = {
   low:    { label: "Rendah", color: "var(--text2)",   bg: "var(--surface3)" },
 } as const
 
-function sectionLabel(key: string, sections: DocSection[]): string {
-  const found = sections.find(s => s.key === key)
-  if (found) return found.label
-  if (key === "general") return "Umum / Keseluruhan Dokumen"
-  return key
-}
+// Warna highlight komentar milik user sendiri — SENGAJA beda dari ke-3
+// warna severity AI (merah/oranye/abu) biar langsung keliatan "ini
+// komentar saya" vs "ini temuan AI" cuma dari warnanya aja.
+const USER_HL = { bg: "#DBEAFE", border: "#2563EB" }
 
 // Anchor comment Word ke paragraf heading section-nya. "header" dianchor
 // ke baris pertama teks sebelum heading pertama (biasanya judul dokumen).
@@ -41,6 +41,47 @@ function anchorTextForSection(key: string, sections: DocSection[]): string {
   if (section) return section.heading
   if (key === "header") return sections.find(s => s.key === "header")?.text.split("\n")[0]?.trim() || ""
   return ""
+}
+
+// ── Highlight di preview: cari teks target di dalam text node (TreeWalker,
+// nggak nyentuh atribut/tag sama sekali), split node-nya, bungkus match-nya
+// pakai <mark>. Dipanggil ulang tiap findings/userComments berubah — makanya
+// SELALU unwrap mark lama dulu sebelum apply ulang, biar idempotent & nggak
+// numpuk mark bersarang berkali-kali.
+function unwrapMarks(root: HTMLElement) {
+  root.querySelectorAll("mark[data-review-mark]").forEach(mark => {
+    const parent = mark.parentNode
+    if (!parent) return
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark)
+    parent.removeChild(mark)
+    parent.normalize()
+  })
+}
+
+function highlightOne(root: HTMLElement, text: string, bg: string, border: string, onClick: () => void) {
+  const target = text.trim()
+  if (!target) return
+  const lower = target.toLowerCase()
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode() as Text | null
+  while (node) {
+    const idx = node.data.toLowerCase().indexOf(lower)
+    if (idx === -1) { node = walker.nextNode() as Text | null; continue }
+    const matchNode = node.splitText(idx)
+    matchNode.splitText(target.length)
+    const mark = document.createElement("mark")
+    mark.setAttribute("data-review-mark", "1")
+    mark.style.background = bg
+    mark.style.boxShadow = `inset 0 -2px 0 ${border}`
+    mark.style.borderRadius = "3px"
+    mark.style.padding = "0 1px"
+    mark.style.cursor = "pointer"
+    mark.title = "Lihat komentar"
+    mark.addEventListener("click", onClick)
+    matchNode.parentNode?.insertBefore(mark, matchNode)
+    mark.appendChild(matchNode)
+    return
+  }
 }
 
 export default function ReviewDocumentPage() {
@@ -55,9 +96,12 @@ export default function ReviewDocumentPage() {
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState("")
   const [dragOver, setDragOver] = useState(false)
-  const [newCommentSection, setNewCommentSection] = useState("")
-  const [newCommentText, setNewCommentText] = useState("")
+  const [selection, setSelection] = useState<SelectionState | null>(null)
+  const [composerOpen, setComposerOpen] = useState(false)
+  const [composerText, setComposerText] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const previewWrapRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     (async () => {
@@ -68,8 +112,49 @@ export default function ReviewDocumentPage() {
     })()
   }, [])
 
+  // Klik di luar area preview → tutup popover komentar yang lagi kebuka.
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (previewWrapRef.current && !previewWrapRef.current.contains(e.target as Node)) {
+        setSelection(null); setComposerOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [])
+
+  // Re-apply highlight tiap kali dokumen/temuan/komentar berubah. Aman
+  // dipanggil berkali-kali karena dangerouslySetInnerHTML cuma re-render
+  // kalau string `html`-nya sendiri berubah — manipulasi DOM manual di sini
+  // nggak bakal ketimpa React selama itu.
+  useEffect(() => {
+    const root = previewRef.current
+    if (!root) return
+    unwrapMarks(root)
+    for (const f of findings) {
+      if (f.status === "rejected") continue
+      const anchor = anchorTextForSection(f.sectionKey, sections)
+      const sev = SEVERITY_CFG[f.severity]
+      highlightOne(root, anchor, sev.bg, sev.color, () => scrollToCard(`finding-${f.id}`))
+    }
+    for (const c of userComments) {
+      highlightOne(root, c.anchorText, USER_HL.bg, USER_HL.border, () => scrollToCard(`usercomment-${c.id}`))
+    }
+  }, [html, findings, userComments, sections])
+
+  const scrollToCard = (domId: string) => {
+    const el = document.getElementById(domId)
+    if (!el) return
+    el.scrollIntoView({ behavior: "smooth", block: "center" })
+    el.style.transition = "background 0.25s"
+    const prevBg = el.style.background
+    el.style.background = "var(--accent-light)"
+    setTimeout(() => { el.style.background = prevBg }, 900)
+  }
+
   const reset = () => {
     setFile(null); setHtml(""); setSections([]); setFindings([]); setUserComments([]); setError("")
+    setSelection(null); setComposerOpen(false)
   }
 
   const handleUpload = async (f: File) => {
@@ -117,11 +202,31 @@ export default function ReviewDocumentPage() {
   const setFindingStatus = (id: string, status: Finding["status"]) =>
     setFindings(prev => prev.map(f => (f.id === id ? { ...f, status } : f)))
 
-  const addUserComment = () => {
-    if (!newCommentSection || !newCommentText.trim()) return
-    setUserComments(prev => [...prev, { id: crypto.randomUUID(), sectionKey: newCommentSection, text: newCommentText.trim() }])
-    setNewCommentText("")
+  const handlePreviewMouseUp = () => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !previewRef.current || !previewWrapRef.current) { setSelection(null); return }
+    const range = sel.getRangeAt(0)
+    if (!previewRef.current.contains(range.commonAncestorContainer)) { setSelection(null); return }
+    const text = sel.toString().trim()
+    if (!text) { setSelection(null); return }
+    const rect = range.getBoundingClientRect()
+    const wrapRect = previewWrapRef.current.getBoundingClientRect()
+    setSelection({
+      text,
+      top: rect.top - wrapRect.top + previewWrapRef.current.scrollTop,
+      left: Math.max(0, rect.left - wrapRect.left),
+    })
+    setComposerOpen(false)
+    setComposerText("")
   }
+
+  const submitComposer = () => {
+    if (!selection || !composerText.trim()) return
+    setUserComments(prev => [...prev, { id: crypto.randomUUID(), anchorText: selection.text, text: composerText.trim() }])
+    setSelection(null); setComposerOpen(false); setComposerText("")
+    window.getSelection()?.removeAllRanges()
+  }
+
   const removeUserComment = (id: string) => setUserComments(prev => prev.filter(c => c.id !== id))
 
   const acceptedFindings = findings.filter(f => f.status === "accepted")
@@ -134,7 +239,7 @@ export default function ReviewDocumentPage() {
     try {
       const comments = [
         ...acceptedFindings.map(f => ({ anchorText: anchorTextForSection(f.sectionKey, sections), author: "AI Reviewer", text: f.comment })),
-        ...userComments.map(c => ({ anchorText: anchorTextForSection(c.sectionKey, sections), author: authorName, text: c.text })),
+        ...userComments.map(c => ({ anchorText: c.anchorText, author: authorName, text: c.text })),
       ]
       const form = new FormData()
       form.append("file", file)
@@ -174,7 +279,7 @@ export default function ReviewDocumentPage() {
           <Sparkles size={22} style={{ color: "var(--accent2)" }} /> Review Document
         </h1>
         <p style={{ fontSize: "13.5px", color: "var(--text2)", marginTop: "4px" }}>
-          Upload dokumen Business Requirement (.docx) — AI bakal bertindak sebagai QC + Developer buat nyari hal yang ambigu, nggak konsisten, atau kurang jelas. Pilih temuan mana yang mau disetujui, baru di-download dengan comment Word asli, format dokumen nggak berubah.
+          Upload dokumen Business Requirement (.docx) — AI bakal bertindak sebagai QC + Developer buat nyari hal yang ambigu, nggak konsisten, atau kurang jelas. Blok/select teks di dokumen buat nambah komentar sendiri. Pilih temuan mana yang mau disetujui, baru di-download dengan comment Word asli, format dokumen nggak berubah.
         </p>
       </div>
 
@@ -236,15 +341,67 @@ export default function ReviewDocumentPage() {
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: "20px", alignItems: "start" }}>
-            {/* ── Preview dokumen ── */}
+            {/* ── Preview dokumen (mockup kertas) ── */}
             <div className="card" style={{ padding: "0", overflow: "hidden" }}>
-              <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--border)", fontSize: "12px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                Preview Dokumen
+              <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text3)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Preview Dokumen
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "10.5px", color: "var(--text3)", fontWeight: 600 }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: SEVERITY_CFG.high.color, display: "inline-block" }} /> Tinggi</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: SEVERITY_CFG.medium.color, display: "inline-block" }} /> Sedang</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: SEVERITY_CFG.low.color, display: "inline-block" }} /> Rendah</span>
+                  <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: USER_HL.border, display: "inline-block" }} /> Komentar kamu</span>
+                </div>
               </div>
+
               <div
-                style={{ padding: "22px 26px", maxHeight: "72vh", overflowY: "auto", fontSize: "13.5px", lineHeight: 1.65, color: "var(--text)" }}
-                dangerouslySetInnerHTML={{ __html: html }}
-              />
+                ref={previewWrapRef}
+                onMouseUp={handlePreviewMouseUp}
+                style={{ position: "relative", maxHeight: "72vh", overflowY: "auto", padding: "32px 20px", background: "var(--surface3)" }}
+              >
+                <div
+                  ref={previewRef}
+                  style={{
+                    background: "#ffffff", maxWidth: "720px", margin: "0 auto", padding: "56px 60px",
+                    minHeight: "500px", borderRadius: "2px", fontSize: "13.5px", lineHeight: 1.75,
+                    color: "#1a1a1a", boxShadow: "0 1px 2px rgba(0,0,0,0.06), 0 10px 28px rgba(0,0,0,0.08)",
+                  }}
+                  dangerouslySetInnerHTML={{ __html: html }}
+                />
+
+                {selection && (
+                  <div
+                    onMouseDown={e => e.stopPropagation()}
+                    onMouseUp={e => e.stopPropagation()}
+                    style={{ position: "absolute", top: Math.max(4, selection.top - 42), left: selection.left, zIndex: 20 }}
+                  >
+                    {!composerOpen ? (
+                      <button
+                        onClick={() => setComposerOpen(true)}
+                        style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--accent)", color: "white", border: "none", borderRadius: "999px", padding: "7px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer", boxShadow: "var(--shadow-lg, 0 6px 18px rgba(0,0,0,0.18))" }}
+                      >
+                        <MessageSquarePlus size={13} /> Komentar
+                      </button>
+                    ) : (
+                      <div className="card" style={{ padding: "11px", width: "270px", boxShadow: "0 8px 24px rgba(0,0,0,0.18)" }}>
+                        <div style={{ fontSize: "11px", color: "var(--text3)", marginBottom: "7px", fontStyle: "italic", borderLeft: `3px solid ${USER_HL.border}`, paddingLeft: "8px" }}>
+                          &ldquo;{selection.text.length > 70 ? selection.text.slice(0, 70) + "…" : selection.text}&rdquo;
+                        </div>
+                        <textarea
+                          className="input" rows={2} autoFocus placeholder="Tulis komentar kamu..."
+                          value={composerText} onChange={e => setComposerText(e.target.value)}
+                          style={{ marginBottom: "7px", resize: "vertical" }}
+                        />
+                        <div style={{ display: "flex", gap: "6px" }}>
+                          <button className="btn btn-primary" onClick={submitComposer} disabled={!composerText.trim()} style={{ flex: 1, justifyContent: "center", padding: "7px" }}>Simpan</button>
+                          <button className="btn btn-ghost" onClick={() => { setSelection(null); setComposerOpen(false) }} style={{ padding: "7px 10px" }}><X size={13} /></button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* ── Panel review ── */}
@@ -264,7 +421,7 @@ export default function ReviewDocumentPage() {
                     {items.map(f => {
                       const sev = SEVERITY_CFG[f.severity]
                       return (
-                        <div key={f.id} style={{
+                        <div key={f.id} id={`finding-${f.id}`} style={{
                           border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "11px 13px",
                           opacity: f.status === "rejected" ? 0.45 : 1,
                           background: f.status === "accepted" ? "var(--accent-muted)" : "var(--surface2)",
@@ -294,28 +451,24 @@ export default function ReviewDocumentPage() {
                 </div>
               ))}
 
-              {/* ── Tambah comment sendiri ── */}
+              {/* ── Komentar kamu (hasil select teks di preview) ── */}
               {sections.length > 0 && (
                 <div className="card" style={{ padding: "14px 16px" }}>
                   <div style={{ fontSize: "12.5px", fontWeight: 800, color: "var(--text2)", marginBottom: "10px", display: "flex", alignItems: "center", gap: "6px" }}>
-                    <MessageSquarePlus size={14} /> Tambah Komentar Sendiri
+                    <MessageSquarePlus size={14} /> Komentar Kamu
                   </div>
-                  <select className="input" value={newCommentSection} onChange={e => setNewCommentSection(e.target.value)} style={{ marginBottom: "8px" }}>
-                    <option value="">Pilih section...</option>
-                    {sectionOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-                  </select>
-                  <textarea className="input" rows={2} placeholder="Tulis komentar kamu..." value={newCommentText}
-                    onChange={e => setNewCommentText(e.target.value)} style={{ marginBottom: "8px", resize: "vertical" }} />
-                  <button className="btn btn-secondary" onClick={addUserComment} disabled={!newCommentSection || !newCommentText.trim()} style={{ width: "100%", justifyContent: "center" }}>
-                    <MessageSquarePlus size={14} /> Tambah
-                  </button>
-
-                  {userComments.length > 0 && (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
+                  {userComments.length === 0 ? (
+                    <div style={{ fontSize: "12.5px", color: "var(--text3)" }}>
+                      💡 Blok/select kalimat di dokumen sebelah kiri, lalu klik tombol <strong>Komentar</strong> yang muncul buat nambahin komentar kamu sendiri.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                       {userComments.map(c => (
-                        <div key={c.id} style={{ display: "flex", justifyContent: "space-between", gap: "8px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "9px 11px", background: "var(--accent-muted)" }}>
+                        <div key={c.id} id={`usercomment-${c.id}`} style={{ display: "flex", justifyContent: "space-between", gap: "8px", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "9px 11px", background: "#EFF6FF" }}>
                           <div>
-                            <div style={{ fontSize: "10.5px", fontWeight: 700, color: "var(--accent)", marginBottom: "3px" }}>{sectionLabel(c.sectionKey, sections)}</div>
+                            <div style={{ fontSize: "11px", color: "var(--text3)", fontStyle: "italic", marginBottom: "3px" }}>
+                              &ldquo;{c.anchorText.length > 60 ? c.anchorText.slice(0, 60) + "…" : c.anchorText}&rdquo;
+                            </div>
                             <div style={{ fontSize: "12.5px", color: "var(--text)" }}>{c.text}</div>
                           </div>
                           <button onClick={() => removeUserComment(c.id)} style={{ border: "none", background: "transparent", color: "var(--text3)", cursor: "pointer", flexShrink: 0 }}>
