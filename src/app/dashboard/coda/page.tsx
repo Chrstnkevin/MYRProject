@@ -14,7 +14,7 @@
 // tab di sini bakal nunjukin error "table nggak ketemu". Itu soal akses di
 // akun Superhuman Docs, bukan kode.
 
-import { Fragment, useEffect, useState } from "react"
+import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
@@ -273,14 +273,17 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 }
 
 // Khusus tabel ADOP — "Doc. Ref." & "Status Dev" itu pasangan PARALEL
-// per baris (doc ke-i -> status ke-i). SEBELUMNYA dirender sebagai 2
-// <td> terpisah yang masing2 nge-stack <div> independen — keliatan
-// sejajar kalau teksnya pendek, tapi begitu salah satu doc wrap ke 2+
-// baris, tinggi div-nya nggak match sama pasangan status-nya lagi
-// (ketauan dari screenshot user, baris jadi geser). Fix: gabung jadi 1
-// <td colSpan={2}> isinya CSS GRID 2 kolom (doc | status) — baris grid
-// otomatis nyesuain tinggi ke KEDUA sel di baris itu, jadi PASTI sejajar
-// nggak peduli berapa panjang teksnya.
+// per baris (doc ke-i -> status ke-i). SEBELUMNYA pakai <table> biasa
+// dengan header 2x<th> terpisah tapi body 1x<td colSpan={2}> yang isinya
+// grid sendiri — browser ngitung lebar kolom header vs body itu dengan
+// ATURAN BEDA (header murni dari lebar teks "Doc. Ref."/"Status Dev",
+// body dari grid internal 3fr/1fr), jadi header & body nggak pernah
+// align sempurna, apalagi pas kolom lain (Deadline dst) ikut kegeser
+// (ketauan dari screenshot user). FIX TOTAL: buang <table> sepenuhnya,
+// pakai SATU CSS Grid gede yang nampung header DAN semua baris+pasangan
+// sekaligus, dengan grid-column/grid-row di-set EKSPLISIT per sel lewat
+// JS — jadi SEMUA sel (header ataupun body, row manapun) WAJIB nempel
+// ke grid-line yang SAMA persis, nggak ada ambiguitas tabel HTML lagi.
 // `columnOrder` = urutan SEMUA kolom (dari resolveColumns, termasuk
 // docRefKey/statusKey) — dipakai nentuin DI POSISI MANA pasangan
 // Doc.Ref/Status Dev nongol relatif ke kolom lain (mis. biar "Request"
@@ -304,76 +307,89 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
     if (statusKey && c === statusKey) continue
     slots.push({ type: "plain", col: c })
   }
+  // Posisi grid-column (1-based) tiap slot — docstatus makan 2 kolom
+  // grid (doc + status), slot lain makan 1.
+  const colStart: number[] = []
+  let cc = 1
+  for (const s of slots) { colStart.push(cc); cc += s.type === "docstatus" ? 2 : 1 }
+  const totalCols = cc - 1
+  const gridTemplateColumns = slots.map(s => s.type === "docstatus" ? "minmax(170px,3fr) minmax(90px,1fr)" : "max-content").join(" ")
+
+  const records = sortedRows.map(r => {
+    const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
+    const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
+    const n = Math.max(1, docs.length, statuses.length)
+    const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
+    return { r, n, pairs }
+  })
+
+  const cellBase = { padding: "7px 10px", fontSize: 11, whiteSpace: "nowrap" as const }
+  const headerCell = { ...cellBase, color: "var(--text3)", background: "var(--surface2)", fontWeight: 700, borderBottom: "1px solid var(--border)" }
+
+  let rowCursor = 2 // baris grid 1 = header
+  const bodyCells: ReactNode[] = []
+  records.forEach((rec, recIdx) => {
+    const rowStart = rowCursor
+    // Selang-seling per BARIS CODA (bukan per pasangan) — biar kelihatan
+    // jelas batas 1 "blok" (KPI/Request/dst itu 1 nilai buat 1 blok
+    // penuh, bukan per pasangan Doc Ref/Status Dev).
+    const rowBg = recIdx % 2 === 1 ? "var(--surface2)" : "var(--surface)"
+    bodyCells.push(
+      <div key={`bg-${recIdx}`} style={{ gridColumn: `1 / ${totalCols + 1}`, gridRow: `${rowStart} / span ${rec.n}`, background: rowBg, borderBottom: "2px solid var(--border)" }} />
+    )
+    slots.forEach((s, slotIdx) => {
+      const col = colStart[slotIdx]
+      if (s.type === "docstatus") {
+        rec.pairs.forEach((p, j) => {
+          const sc = p.status ? statusColor(p.status) : null
+          const bb = j < rec.n - 1 ? "1px dashed var(--border)" : "none"
+          bodyCells.push(
+            <div key={`d-${recIdx}-${j}`} style={{ ...cellBase, whiteSpace: "normal", gridColumn: col, gridRow: rowStart + j, color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word" }}>{p.doc}</div>
+          )
+          bodyCells.push(
+            <div key={`s-${recIdx}-${j}`} style={{ ...cellBase, gridColumn: col + 1, gridRow: rowStart + j, borderBottom: bb }}>
+              {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
+            </div>
+          )
+        })
+      } else {
+        const raw = rec.r.values?.[s.col]
+        const rawText = fmtCell(raw)
+        const content = isStatusColumn(s.col) && rawText !== "—" ? (() => {
+          const { bg, fg } = statusColor(rawText)
+          return <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+        })() : rawText
+        bodyCells.push(
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+        )
+      }
+    })
+    rowCursor += rec.n
+  })
 
   return (
     <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-        <thead>
-          <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
-            {slots.map((s, i) => s.type === "docstatus"
-              ? <Fragment key={i}><th style={{ padding: "8px 10px" }}>Doc. Ref.</th><th style={{ padding: "8px 10px" }}>Status Dev</th></Fragment>
-              : <SortableHeader key={i} label={s.col} col={s.col} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {sortedRows.map((r, rowIdx) => {
-            const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
-            const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
-            const n = Math.max(docs.length, statuses.length)
-            const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
-            // Selang-seling per BARIS CODA (bukan per pasangan) — biar
-            // kelihatan jelas batas 1 "blok" (KPI/Request/dst itu 1
-            // nilai buat 1 blok penuh, bukan per pasangan Doc Ref).
-            const rowBg = rowIdx % 2 === 1 ? "var(--surface2)" : undefined
+      <div style={{ display: "grid", gridTemplateColumns }}>
+        {slots.map((s, i) => {
+          const col = colStart[i]
+          if (s.type === "docstatus") {
             return (
-              <tr key={r.id} style={{ borderBottom: "2px solid var(--border)", background: rowBg }}>
-                {slots.map((s, i) => {
-                  if (s.type === "docstatus") {
-                    return (
-                      <td key={i} colSpan={2} style={{ padding: 0, verticalAlign: "top", minWidth: 320 }}>
-                        {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : (
-                          // minmax(0, Nfr) WAJIB — "3fr 1fr" polos punya batas
-                          // bawah "auto" (ngikutin ukuran konten), jadi teks
-                          // Doc. Ref. yang panjang/nggak mau wrap bisa maksa
-                          // kolomnya lebih lebar dari jatah & nabrak ke Status
-                          // Dev (ketauan dari screenshot user). minmax(0,..)
-                          // + overflowWrap maksa teks wrap di DALAM jatahnya.
-                          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}>
-                            {pairs.map((p, j) => {
-                              const sc = p.status ? statusColor(p.status) : null
-                              const bb = j < n - 1 ? "1px dashed var(--border)" : "none"
-                              return (
-                                <Fragment key={j}>
-                                  <div style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word", minWidth: 0 }}>{p.doc}</div>
-                                  <div style={{ padding: "7px 10px", borderBottom: bb, whiteSpace: "nowrap", minWidth: 0 }}>
-                                    {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
-                                  </div>
-                                </Fragment>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </td>
-                    )
-                  }
-                  const raw = r.values?.[s.col]
-                  const rawText = fmtCell(raw)
-                  if (isStatusColumn(s.col) && rawText !== "—") {
-                    const { bg, fg } = statusColor(rawText)
-                    return (
-                      <td key={i} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "middle" }}>
-                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
-                      </td>
-                    )
-                  }
-                  return <td key={i} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "middle" }}>{rawText}</td>
-                })}
-              </tr>
+              <Fragment key={`h${i}`}>
+                <div style={{ ...headerCell, gridColumn: col, gridRow: 1 }}>Doc. Ref.</div>
+                <div style={{ ...headerCell, gridColumn: col + 1, gridRow: 1 }}>Status Dev</div>
+              </Fragment>
             )
-          })}
-        </tbody>
-      </table>
+          }
+          const active = sortCol === s.col
+          return (
+            <div key={`h${i}`} onClick={() => onSort(s.col)}
+              style={{ ...headerCell, gridColumn: col, gridRow: 1, cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--text3)" }}>
+              {s.col} <span style={{ opacity: active ? 1 : 0.35 }}>{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
+            </div>
+          )
+        })}
+        {bodyCells}
+      </div>
     </div>
   )
 }
