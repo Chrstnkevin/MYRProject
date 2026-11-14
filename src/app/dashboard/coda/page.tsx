@@ -14,7 +14,7 @@
 // tab di sini bakal nunjukin error "table nggak ketemu". Itu soal akses di
 // akun Superhuman Docs, bukan kode.
 
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
 import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
@@ -90,7 +90,7 @@ const ADOP_CATEGORIES: { key: string; label: string; match: (v: string) => boole
 // PARALEL per baris (Doc. Ref. ke-i statusnya Status Dev ke-i), bukan 2
 // daftar independen — makanya ditaruh berdampingan sejajar per baris,
 // bukan 2 kolom terpisah yang kehilangan hubungannya.
-const ADOP_PREVIEW_COLS = ["KPI", "Doc. Ref.", "Status Dev", "Request", "Deadline", "Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "PIC Apps", "PIC BR"]
+const ADOP_PREVIEW_COLS = ["KPI", "Request", "Doc. Ref.", "Status Dev", "Deadline", "Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "PIC Apps", "PIC BR"]
 
 // Cocokin `desired` (nama kolom yang KITA mau, longgar lewat normKey) ke
 // nama kolom ASLI yang beneran ada di `rows` — biar DynamicTable (yang
@@ -269,32 +269,48 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
   )
 }
 
-// Khusus tabel ADOP — "Doc. Ref." & "Status Dev" itu array PARALEL per
-// baris (doc ke-i -> status ke-i), BUKAN 2 list independen, tapi tetep
-// ditampilin sebagai 2 KOLOM sejajar (diminta user) — pasangan ke-i di
-// kedua kolom itu ditumpuk ke bawah di ketinggian yang SAMA (pakai grid
-// baris yang sama persis di kedua td, bukan div bebas), biar jelas
-// Doc. Ref. baris ke-2 itu pasangannya Status Dev baris ke-2 juga.
-// Butuh rows HASIL FETCH TANPA valueFormat=simple (lihat
-// TabDef.richValues) biar array aslinya nggak digabung Coda jadi 1
-// string koma duluan.
-function AdopTable({ rows, kpiKey, docRefKey, statusKey, otherCols }: {
-  rows: CodaRowItem[]; kpiKey?: string; docRefKey?: string; statusKey?: string; otherCols: string[]
+// Khusus tabel ADOP — "Doc. Ref." & "Status Dev" itu pasangan PARALEL
+// per baris (doc ke-i -> status ke-i). SEBELUMNYA dirender sebagai 2
+// <td> terpisah yang masing2 nge-stack <div> independen — keliatan
+// sejajar kalau teksnya pendek, tapi begitu salah satu doc wrap ke 2+
+// baris, tinggi div-nya nggak match sama pasangan status-nya lagi
+// (ketauan dari screenshot user, baris jadi geser). Fix: gabung jadi 1
+// <td colSpan={2}> isinya CSS GRID 2 kolom (doc | status) — baris grid
+// otomatis nyesuain tinggi ke KEDUA sel di baris itu, jadi PASTI sejajar
+// nggak peduli berapa panjang teksnya.
+// `columnOrder` = urutan SEMUA kolom (dari resolveColumns, termasuk
+// docRefKey/statusKey) — dipakai nentuin DI POSISI MANA pasangan
+// Doc.Ref/Status Dev nongol relatif ke kolom lain (mis. biar "Request"
+// bisa ditaruh SEBELUM Doc.Ref, cukup urutin ADOP_PREVIEW_COLS).
+function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
+  rows: CodaRowItem[]; columnOrder: string[]; docRefKey?: string; statusKey?: string
 }) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("asc")
   if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
   const sortedRows = sortByColumn(rows, sortCol, sortDir)
   const onSort = (c: string) => { if (sortCol === c) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortCol(c); setSortDir("asc") } }
+
+  const slots: ({ type: "plain"; col: string } | { type: "docstatus" })[] = []
+  let docstatusInserted = false
+  for (const c of columnOrder) {
+    if (docRefKey && c === docRefKey) {
+      if (!docstatusInserted) { slots.push({ type: "docstatus" }); docstatusInserted = true }
+      continue
+    }
+    if (statusKey && c === statusKey) continue
+    slots.push({ type: "plain", col: c })
+  }
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
         <thead>
           <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
-            {kpiKey && <SortableHeader label="KPI" col={kpiKey} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />}
-            {docRefKey && <th style={{ padding: "8px 10px" }}>Doc. Ref.</th>}
-            {statusKey && <th style={{ padding: "8px 10px" }}>Status Dev</th>}
-            {otherCols.map(c => <SortableHeader key={c} label={c} col={c} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />)}
+            {slots.map((s, i) => s.type === "docstatus"
+              ? <Fragment key={i}><th style={{ padding: "8px 10px" }}>Doc. Ref.</th><th style={{ padding: "8px 10px" }}>Status Dev</th></Fragment>
+              : <SortableHeader key={i} label={s.col} col={s.col} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />
+            )}
           </tr>
         </thead>
         <tbody>
@@ -305,38 +321,40 @@ function AdopTable({ rows, kpiKey, docRefKey, statusKey, otherCols }: {
             const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
             return (
               <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                {kpiKey && <td style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtCell(r.values?.[kpiKey])}</td>}
-                {docRefKey && (
-                  <td style={{ padding: 0, verticalAlign: "top", minWidth: 260 }}>
-                    {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : pairs.map((p, i) => (
-                      <div key={i} style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: i < n - 1 ? "1px dashed var(--border)" : "none" }}>{p.doc}</div>
-                    ))}
-                  </td>
-                )}
-                {statusKey && (
-                  <td style={{ padding: 0, verticalAlign: "top" }}>
-                    {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : pairs.map((p, i) => {
-                      const sc = p.status ? statusColor(p.status) : null
-                      return (
-                        <div key={i} style={{ padding: "7px 10px", borderBottom: i < n - 1 ? "1px dashed var(--border)" : "none", whiteSpace: "nowrap" }}>
-                          {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
-                        </div>
-                      )
-                    })}
-                  </td>
-                )}
-                {otherCols.map(c => {
-                  const raw = r.values?.[c]
+                {slots.map((s, i) => {
+                  if (s.type === "docstatus") {
+                    return (
+                      <td key={i} colSpan={2} style={{ padding: 0, verticalAlign: "top", minWidth: 320 }}>
+                        {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : (
+                          <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr" }}>
+                            {pairs.map((p, j) => {
+                              const sc = p.status ? statusColor(p.status) : null
+                              const bb = j < n - 1 ? "1px dashed var(--border)" : "none"
+                              return (
+                                <Fragment key={j}>
+                                  <div style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)" }}>{p.doc}</div>
+                                  <div style={{ padding: "7px 10px", borderBottom: bb, whiteSpace: "nowrap" }}>
+                                    {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
+                                  </div>
+                                </Fragment>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </td>
+                    )
+                  }
+                  const raw = r.values?.[s.col]
                   const rawText = fmtCell(raw)
-                  if (isStatusColumn(c) && rawText !== "—") {
+                  if (isStatusColumn(s.col) && rawText !== "—") {
                     const { bg, fg } = statusColor(rawText)
                     return (
-                      <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                      <td key={i} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "top" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
                       </td>
                     )
                   }
-                  return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{rawText}</td>
+                  return <td key={i} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{rawText}</td>
                 })}
               </tr>
             )
@@ -582,13 +600,12 @@ export default function CodaPage() {
     })
   const { found: adopFoundCols, missing: adopMissingColumns } = activeTab === "adop" ? resolveColumns(adopRows, ADOP_PREVIEW_COLS) : { found: [], missing: [] }
   const adopAllColumns = activeTab === "adop" ? collectColumns(adopRows) : []
-  // KPI & "Doc. Ref."+"Status Dev" dirender khusus (lihat AdopTable) —
-  // sisanya tetap kolom biasa, urutannya ngikutin ADOP_PREVIEW_COLS
-  // (udah di-resolve ke nama asli lewat resolveColumns di atas).
-  const adopKpiKey = adopFoundCols.find(c => normKey(c) === normKey("KPI"))
+  // "Doc. Ref." & "Status Dev" dirender MERGED (lihat AdopTable), di
+  // POSISI aslinya di adopFoundCols (ngikutin urutan ADOP_PREVIEW_COLS
+  // yang udah di-resolve ke nama asli) — kolom lain (termasuk KPI &
+  // Request) tetep kolom biasa, urutannya ngikutin posisi masing2.
   const adopDocRefKey = adopFoundCols.find(c => normKey(c) === normKey("Doc. Ref."))
   const adopStatusDevKey = adopFoundCols.find(c => normKey(c) === normKey("Status Dev"))
-  const adopOtherCols = adopFoundCols.filter(c => c !== adopKpiKey && c !== adopDocRefKey && c !== adopStatusDevKey)
 
   // Chart "jumlah item per periode Deadline" (diminta user) — dihitung
   // dari adopRows yang UDAH kena semua filter (sub-tab + Timeline + ADOP
@@ -842,7 +859,7 @@ export default function CodaPage() {
           )}
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
-            <AdopTable rows={adopRows} kpiKey={adopKpiKey} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} otherCols={adopOtherCols} />
+            <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} />
           </div>
         </>
       ) : !error && (
