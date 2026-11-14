@@ -19,9 +19,15 @@ import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 interface CodaDocItem { id: string; name: string }
-interface CodaTableItem { id: string; name: string }
+interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number }
 interface CodaRowItem { id: string; name?: string; values: Record<string, unknown> }
-interface TableLocation { docId: string; docName: string; tableId: string; tableName: string }
+// tableRowCount = rowCount yang DILAPORKAN Coda sendiri buat table ini
+// (metadata, bukan hasil fetch /rows kita) — dipakai buat diagnostik:
+// kalau beda jauh dari rows.length yang kebaca, berarti ada masalah
+// pagination/cache; kalau SAMA tapi user lihat lebih banyak di browser
+// Coda, berarti table yang ketemu BUKAN yang dimaksud (salah match, atau
+// yang dilihat user di Coda itu View lain/table lain).
+interface TableLocation { docId: string; docName: string; tableId: string; tableName: string; tableType?: string; tableRowCount?: number }
 
 interface TabDef { key: string; label: string; matcher: (name: string) => boolean }
 
@@ -180,26 +186,27 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 // fallback nyari ke semua doc kalau ID ini ternyata salah/doc-nya pindah.
 const KNOWN_DOC_ID = "Rt3S4eDoOn"
 
-async function findTable(matcher: (name: string) => boolean): Promise<TableLocation | null> {
-  const docsRes = await fetch("/api/superhuman-docs/docs").then(r => r.json())
+async function findTable(matcher: (name: string) => boolean, fresh = false): Promise<TableLocation | null> {
+  const f = fresh ? "&fresh=1" : ""
+  const docsRes = await fetch(`/api/superhuman-docs/docs${fresh ? "?fresh=1" : ""}`).then(r => r.json())
   if (docsRes.error) throw new Error(docsRes.error)
   const allDocs = (docsRes.items || []) as CodaDocItem[]
 
   const knownDoc = allDocs.find(d => d.id === KNOWN_DOC_ID)
   if (knownDoc) {
-    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}`).then(r => r.json())
+    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}${f}`).then(r => r.json())
     if (!tablesRes.error) {
       const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-      if (match) return { docId: knownDoc.id, docName: knownDoc.name, tableId: match.id, tableName: match.name }
+      if (match) return { docId: knownDoc.id, docName: knownDoc.name, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
     }
   }
 
   for (const d of allDocs) {
     if (d.id === KNOWN_DOC_ID) continue
-    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}`).then(r => r.json())
+    const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}${f}`).then(r => r.json())
     if (tablesRes.error) continue
     const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
-    if (match) return { docId: d.id, docName: d.name, tableId: match.id, tableName: match.name }
+    if (match) return { docId: d.id, docName: d.name, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
   }
   return null
 }
@@ -226,11 +233,11 @@ export default function CodaPage() {
     try {
       let loc = located[tabKey]
       if (!loc || force) {
-        loc = await findTable(tab.matcher)
+        loc = await findTable(tab.matcher, force)
         if (!loc) throw new Error(`Table buat "${tab.label}" nggak ketemu di Doc manapun yang kebaca token ini — cek apakah token SUPERHUMAN_DOCS_API_TOKEN sudah bisa akses doc yang bersangkutan.`)
         setLocated(l => ({ ...l, [tabKey]: loc }))
       }
-      const res = await fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(loc.tableId)}`).then(r => r.json())
+      const res = await fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(loc.tableId)}${force ? "&fresh=1" : ""}`).then(r => r.json())
       if (res.error) throw new Error(res.error)
       setRowsByTab(r => ({ ...r, [tabKey]: res.items || [] }))
     } catch (e) {
@@ -323,7 +330,21 @@ export default function CodaPage() {
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 11, color: "var(--text3)" }}>
-          {loc ? <>Sumber: <strong>{loc.docName}</strong> → <strong>{loc.tableName}</strong> · {rows.length} baris</> : isLoading ? "Mencari table..." : "—"}
+          {loc ? (
+            <>
+              Sumber: <strong>{loc.docName}</strong> → <strong>{loc.tableName}</strong>
+              {loc.tableType ? <> ({loc.tableType})</> : null} · {rows.length} baris kebaca
+              {typeof loc.tableRowCount === "number" && (
+                <>
+                  {" "}· Coda lapor <strong>{loc.tableRowCount}</strong> baris di table ini
+                  {loc.tableRowCount !== rows.length && (
+                    <span style={{ color: "#DC2626", fontWeight: 700 }}> — BEDA! kemungkinan salah table/view yang ketemu</span>
+                  )}
+                </>
+              )}
+              {" "}· cache 5 menit, Refresh buat paksa fetch ulang
+            </>
+          ) : isLoading ? "Mencari table..." : "—"}
         </span>
         <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
           style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>

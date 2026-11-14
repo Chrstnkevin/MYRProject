@@ -67,6 +67,25 @@ async function fetchSuperhumanDocsUrl<T>(url: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// Cache in-memory sederhana per-instance server (TTL, bukan persistent —
+// reset kalau cold start/instance baru) — dipakai buat ngurangin keluhan
+// "lamaa" pas buka tab yang sama berkali-kali dalam rentang waktu deket
+// (docs/tables jarang berubah, rows juga nggak realtime-critical buat
+// dashboard monitoring ini). Lewat `fresh=true` buat BYPASS cache (dipakai
+// tombol Refresh di UI).
+const memCache = new Map<string, { data: unknown; expires: number }>()
+
+export async function withSuperhumanDocsCache<T>(key: string, ttlMs: number, fresh: boolean, fn: () => Promise<T>): Promise<T> {
+  const now = Date.now()
+  if (!fresh) {
+    const hit = memCache.get(key)
+    if (hit && hit.expires > now) return hit.data as T
+  }
+  const data = await fn()
+  memCache.set(key, { data, expires: now + ttlMs })
+  return data
+}
+
 interface PagedList<T> { items: T[]; nextPageToken?: string; nextPageLink?: string }
 
 // SEBELUMNYA: list Docs/Table/Row cuma ambil 1 halaman pertama, TIDAK
