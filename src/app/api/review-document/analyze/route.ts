@@ -14,13 +14,20 @@ Yang harus dicek per section:
 - Acceptance Criteria yang nggak measurable/testable (nggak jelas gimana ngukur "selesai"-nya).
 - Potensi kesulitan teknis atau resiko implementasi yang kelihatan dari requirement-nya.
 
+GAYA REVIEW: jangan cuma kasih 1 kalimat ringkasan permukaan — gali SEDALAM review QA+Dev beneran yang bakal dipakai developer buat kerja. Tiap temuan yang substantif HARUS punya struktur ini (lewatin bagian yang nggak relevan buat temuan kecil/ringan):
+1. Jelasin masalahnya + KENAPA itu bikin developer bingung atau nggak bisa mulai kerja.
+2. Kalau relevan, kasih CONTOH SKENARIO KONKRET pakai data/kondisi dari domain dokumen itu sendiri (bukan contoh generik) buat nunjukin ambiguitasnya — misal kalau dokumennya soal kalkulasi salfo bulanan, kasih contoh angka bulan/periode yang konkret.
+3. Daftar PERTANYAAN KLARIFIKASI spesifik yang perlu dijawab business requirement team (bullet list, boleh lebih dari satu kalau memang ada beberapa pertanyaan berbeda).
+4. Tutup dengan 1 baris rekomendasi konkret, mulai dengan "**Rekomendasi:**".
+Boleh pakai **teks tebal** buat istilah penting/label, dan bullet "- " buat list — pisahkan tiap bagian pakai newline (\n).
+
 ATURAN JAWAB:
-- Balas HANYA JSON array valid, TANPA markdown code fence, TANPA teks lain di luar JSON.
+- Balas HANYA JSON array valid, TANPA markdown code fence, TANPA teks lain di luar JSON. "comment" adalah STRING JSON biasa (newline di-escape \\n sesuai standar JSON, bukan markdown code fence).
 - Format tiap item: {"sectionKey": "...", "severity": "low"|"medium"|"high", "comment": "..."}
 - "sectionKey" WAJIB salah satu dari: ${VALID_KEYS.join(", ")}. Kalau temuan soal inkonsistensi ANTAR section (termasuk sama header), pakai sectionKey dari section narasi yang paling relevan buat jadi tempat nempel comment-nya, dan sebutkan section lain yang dibandingkan di teks comment-nya.
-- "comment" ditulis dalam Bahasa Indonesia yang natural (bukan kaku/robotik), singkat tapi jelas kenapa itu masalah dan apa yang perlu diperjelas/diperbaiki.
+- "comment" ditulis dalam Bahasa Indonesia yang natural (bukan kaku/robotik), ikuti struktur GAYA REVIEW di atas buat temuan yang substantif.
 - Kalau suatu section nggak ada masalah berarti, JANGAN masukin section itu ke hasil sama sekali.
-- Boleh lebih dari 1 temuan untuk 1 section kalau memang ada beberapa masalah berbeda.
+- Boleh lebih dari 1 temuan untuk 1 section kalau memang ada beberapa masalah berbeda — tiap temuan harus tentang masalah yang BEDA, jangan dipecah-pecah kalau sebenarnya 1 masalah yang sama.
 - Jangan muji-muji bagian yang udah bagus kecuali itu relevan buat ngejelasin kontras sama bagian yang bermasalah.`
 
 function extractJsonArray(text: string): unknown {
@@ -53,7 +60,7 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
+      max_tokens: 8192,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userPrompt }],
     }),
