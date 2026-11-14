@@ -62,10 +62,15 @@ function fmtCell(v: unknown): string {
 function isStatusColumn(c: string): boolean { return /status/i.test(c) }
 function statusColor(v: string): { bg: string; fg: string } {
   const s = v.trim().toUpperCase()
-  if (s.includes("READY")) return { bg: "#DCFCE7", fg: "#166534" }
+  // Diperluas pas ketemu kosakata status table "ADOP BACKLOG" (ON
+  // PROGRESS/HOLD/OPG DR/OPG TEST/PILOT/DONE) yang beda dari table
+  // "Plan Pilot" (OPEN DEV/READY TO PILOT/OPEN TEST) — urutan cek ini
+  // PENTING (dari paling spesifik/final ke paling umum) karena beberapa
+  // value bisa cocok ke lebih dari 1 aturan.
+  if (s.includes("READY") || s.includes("DONE") || s.includes("RELEASE") || s.includes("PILOT")) return { bg: "#DCFCE7", fg: "#166534" }
+  if (s.includes("HOLD")) return { bg: "#EDE9FE", fg: "#5B21B6" }
   if (s.includes("TEST")) return { bg: "#FEF3C7", fg: "#92400E" }
-  if (s.includes("DONE") || s.includes("RELEASE")) return { bg: "#DBEAFE", fg: "#1E40AF" }
-  if (s.includes("OPEN")) return { bg: "#E0F2FE", fg: "#075985" }
+  if (s.includes("PROGRESS") || s.includes("OPEN") || s.includes("DEV") || s.includes("DR")) return { bg: "#E0F2FE", fg: "#075985" }
   return { bg: "var(--surface2)", fg: "var(--text3)" }
 }
 
