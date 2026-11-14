@@ -35,13 +35,16 @@ interface CodaRowItem { id: string; name?: string; values: Record<string, unknow
 // adanya. tableName di sini jadi nama BASE TABLE-nya, bukan View-nya.
 interface TableLocation { docId: string; docName: string; tableId: string; tableName: string; tableType?: string; tableRowCount?: number; viaViewName?: string }
 
-interface TabDef { key: string; label: string; matcher: (name: string) => boolean }
+// richValues: minta rows TANPA valueFormat=simple (lihat catatan di
+// rows/route.ts) — dibutuhin ADOP biar kolom multi-value (Doc. Ref.,
+// Status Dev) tetep array asli, nggak digabung jadi 1 string koma.
+interface TabDef { key: string; label: string; matcher: (name: string) => boolean; richValues?: boolean }
 
 // Nama table dicocokkan longgar (bukan exact match ketat) biar tetep
 // jalan walau ada sedikit variasi penamaan di Coda-nya nanti.
 const TABS: TabDef[] = [
   { key: "plan-pilot", label: "Plan Pilot", matcher: n => n.trim().toLowerCase() === "plan pilot" },
-  { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n) },
+  { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n), richValues: true },
   { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
 ]
 
@@ -152,10 +155,14 @@ function statusColor(v: string): { bg: string; fg: string } {
 // Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
 // field nggak kejebak beda format kecil ("Doc. No." vs "Doc No" vs "doc_no").
 function normKey(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]/g, "") }
+// Pakai fmtCell (bukan String(v) polos) biar robust ke array/objek
+// {name} yang muncul pas rows di-fetch tanpa valueFormat=simple (lihat
+// TabDef.richValues) — String(v) buat array of objects bakal jadi
+// "[object Object]" yang salah buat filter/sort.
 function getFieldValue(values: Record<string, unknown>, fieldName: string): string {
   const target = normKey(fieldName)
   for (const [k, v] of Object.entries(values)) {
-    if (normKey(k) === target) return v == null ? "" : String(v)
+    if (normKey(k) === target) { const t = fmtCell(v); return t === "—" ? "" : t }
   }
   return ""
 }
@@ -171,18 +178,46 @@ function collectColumns(rows: CodaRowItem[]): string[] {
   return columns
 }
 
+// Sort generik by nilai kolom (angka kalau keduanya numerik, teks
+// kalau nggak) — dipakai DynamicTable & AdopTable, diminta user biar
+// tiap kolom bisa diurutin naik/turun lewat klik header.
+type SortDir = "asc" | "desc"
+function sortByColumn(rows: CodaRowItem[], col: string | null, dir: SortDir): CodaRowItem[] {
+  if (!col) return rows
+  const copy = [...rows]
+  copy.sort((a, b) => {
+    const av = fmtCell(a.values?.[col]).trim(), bv = fmtCell(b.values?.[col]).trim()
+    const an = Number(av), bn = Number(bv)
+    const cmp = av !== "" && bv !== "" && !isNaN(an) && !isNaN(bn) ? an - bn : av.localeCompare(bv)
+    return dir === "asc" ? cmp : -cmp
+  })
+  return copy
+}
+function SortableHeader({ label, col, sortCol, sortDir, onSort }: { label: string; col: string; sortCol: string | null; sortDir: SortDir; onSort: (col: string) => void }) {
+  const active = sortCol === col
+  return (
+    <th onClick={() => onSort(col)} style={{ padding: "8px 10px", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--text3)" }}>
+      {label} <span style={{ opacity: active ? 1 : 0.35 }}>{active ? (sortDir === "asc" ? "▲" : "▼") : "⇅"}</span>
+    </th>
+  )
+}
+
 function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[] }) {
+  const [sortCol, setSortCol] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>("asc")
   if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
+  const sortedRows = sortByColumn(rows, sortCol, sortDir)
+  const onSort = (c: string) => { if (sortCol === c) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortCol(c); setSortDir("asc") } }
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
         <thead>
           <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
-            {columns.map(c => <th key={c} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{c}</th>)}
+            {columns.map(c => <SortableHeader key={c} label={c} col={c} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />)}
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => (
+          {sortedRows.map(r => (
             <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
               {columns.map(c => {
                 const raw = r.values?.[c]
@@ -206,50 +241,59 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 }
 
 // Khusus tabel ADOP — "Doc. Ref." & "Status Dev" itu array PARALEL per
-// baris (doc ke-i -> status ke-i), BUKAN 2 list independen. DynamicTable
-// biasa bakal nampilin keduanya sebagai 1 baris teks panjang ke samping
-// (digabung koma) dan kehilangan hubungan doc<->status-nya — di sini
-// di-zip & ditumpuk ke bawah, 1 baris per pasangan, status-nya jadi
-// badge di sebelah teks doc-nya (diminta user).
+// baris (doc ke-i -> status ke-i), BUKAN 2 list independen, tapi tetep
+// ditampilin sebagai 2 KOLOM sejajar (diminta user) — pasangan ke-i di
+// kedua kolom itu ditumpuk ke bawah di ketinggian yang SAMA (pakai grid
+// baris yang sama persis di kedua td, bukan div bebas), biar jelas
+// Doc. Ref. baris ke-2 itu pasangannya Status Dev baris ke-2 juga.
+// Butuh rows HASIL FETCH TANPA valueFormat=simple (lihat
+// TabDef.richValues) biar array aslinya nggak digabung Coda jadi 1
+// string koma duluan.
 function AdopTable({ rows, kpiKey, docRefKey, statusKey, otherCols }: {
   rows: CodaRowItem[]; kpiKey?: string; docRefKey?: string; statusKey?: string; otherCols: string[]
 }) {
+  const [sortCol, setSortCol] = useState<string | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>("asc")
   if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
+  const sortedRows = sortByColumn(rows, sortCol, sortDir)
+  const onSort = (c: string) => { if (sortCol === c) setSortDir(d => d === "asc" ? "desc" : "asc"); else { setSortCol(c); setSortDir("asc") } }
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
         <thead>
           <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
-            {kpiKey && <th style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>KPI</th>}
-            {docRefKey && <th style={{ padding: "8px 10px" }}>Doc. Ref. / Status Dev</th>}
-            {otherCols.map(c => <th key={c} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{c}</th>)}
+            {kpiKey && <SortableHeader label="KPI" col={kpiKey} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />}
+            {docRefKey && <th style={{ padding: "8px 10px" }}>Doc. Ref.</th>}
+            {statusKey && <th style={{ padding: "8px 10px" }}>Status Dev</th>}
+            {otherCols.map(c => <SortableHeader key={c} label={c} col={c} sortCol={sortCol} sortDir={sortDir} onSort={onSort} />)}
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => {
+          {sortedRows.map(r => {
             const docs = docRefKey ? toItemArray(r.values?.[docRefKey]) : []
             const statuses = statusKey ? toItemArray(r.values?.[statusKey]) : []
             const n = Math.max(docs.length, statuses.length)
+            const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
             return (
               <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                 {kpiKey && <td style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{fmtCell(r.values?.[kpiKey])}</td>}
                 {docRefKey && (
-                  <td style={{ padding: "7px 10px", verticalAlign: "top", minWidth: 260 }}>
-                    {n === 0 ? <span style={{ color: "var(--text3)" }}>—</span> : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                        {Array.from({ length: n }).map((_, i) => {
-                          const docText = cellItemText(docs[i]) || "—"
-                          const statusText = cellItemText(statuses[i])
-                          const sc = statusText ? statusColor(statusText) : null
-                          return (
-                            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 6, flexWrap: "wrap" }}>
-                              <span style={{ color: "var(--text2)" }}>{docText}</span>
-                              {sc && <span style={{ padding: "1px 7px", borderRadius: 999, fontSize: 9, fontWeight: 700, flexShrink: 0, background: sc.bg, color: sc.fg }}>{statusText}</span>}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
+                  <td style={{ padding: 0, verticalAlign: "top", minWidth: 260 }}>
+                    {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : pairs.map((p, i) => (
+                      <div key={i} style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: i < n - 1 ? "1px dashed var(--border)" : "none" }}>{p.doc}</div>
+                    ))}
+                  </td>
+                )}
+                {statusKey && (
+                  <td style={{ padding: 0, verticalAlign: "top" }}>
+                    {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : pairs.map((p, i) => {
+                      const sc = p.status ? statusColor(p.status) : null
+                      return (
+                        <div key={i} style={{ padding: "7px 10px", borderBottom: i < n - 1 ? "1px dashed var(--border)" : "none", whiteSpace: "nowrap" }}>
+                          {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
+                        </div>
+                      )
+                    })}
                   </td>
                 )}
                 {otherCols.map(c => {
@@ -412,7 +456,7 @@ export default function CodaPage() {
         if (!loc) throw new Error(`Table buat "${tab.label}" nggak ketemu di Doc manapun yang kebaca token ini — cek apakah token SUPERHUMAN_DOCS_API_TOKEN sudah bisa akses doc yang bersangkutan.`)
         setLocated(l => ({ ...l, [tabKey]: loc }))
       }
-      const res = await fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(loc.tableId)}${force ? "&fresh=1" : ""}`).then(r => r.json())
+      const res = await fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(loc.docId)}&tableId=${encodeURIComponent(loc.tableId)}${force ? "&fresh=1" : ""}${tab.richValues ? "&simple=0" : ""}`).then(r => r.json())
       if (res.error) throw new Error(res.error)
       setRowsByTab(r => ({ ...r, [tabKey]: res.items || [] }))
     } catch (e) {
