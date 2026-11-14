@@ -222,6 +222,11 @@ export default function CodaPage() {
   // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
   const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
+  // Debug: daftar SEMUA table/view di doc yang lagi aktif — dipakai buat
+  // ketauan kalau table yang ketemu itu "view" (filter permanen beda dari
+  // base table-nya), biar bisa dicocokin mana yang punya baris lengkap.
+  const [allTables, setAllTables] = useState<CodaTableItem[] | null>(null)
+  const [allTablesLoading, setAllTablesLoading] = useState(false)
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -244,6 +249,18 @@ export default function CodaPage() {
       setErrorByTab(er => ({ ...er, [tabKey]: e instanceof Error ? e.message : String(e) }))
     }
     setLoading(l => ({ ...l, [tabKey]: false }))
+  }
+
+  async function loadAllTables() {
+    if (!loc) return
+    setAllTablesLoading(true)
+    try {
+      const res = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(loc.docId)}&fresh=1`).then(r => r.json())
+      setAllTables(res.error ? [] : (res.items || []))
+    } catch {
+      setAllTables([])
+    }
+    setAllTablesLoading(false)
   }
 
   const tab = TABS.find(t => t.key === activeTab)!
@@ -346,11 +363,55 @@ export default function CodaPage() {
             </>
           ) : isLoading ? "Mencari table..." : "—"}
         </span>
-        <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
-          style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
-          {isLoading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={12} />} Refresh
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          {loc && (
+            <button onClick={() => { setAllTables(allTables ? null : []); if (!allTables) loadAllTables() }}
+              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit" }}>
+              {allTables ? "Tutup daftar table" : "Lihat semua table"}
+            </button>
+          )}
+          <button onClick={() => loadTab(activeTab, true)} disabled={isLoading}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 11, color: "var(--text2)", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}>
+            {isLoading ? <Loader2 size={12} style={{ animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={12} />} Refresh
+          </button>
+        </div>
       </div>
+
+      {allTables !== null && (
+        <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 8 }}>
+            Semua table/view di doc <strong>{loc?.docName}</strong> — diurutin rowCount terbesar dulu. Yang dipakai tab ini: <strong>{loc?.tableName}</strong> (id: {loc?.tableId}).
+          </div>
+          {allTablesLoading ? (
+            <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p>
+          ) : allTables.length === 0 ? (
+            <p style={{ fontSize: 11, color: "var(--text3)" }}>Gagal ambil daftar table.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)" }}>
+                    <th style={{ padding: "5px 8px" }}>Nama</th>
+                    <th style={{ padding: "5px 8px" }}>Tipe</th>
+                    <th style={{ padding: "5px 8px" }}>rowCount (Coda)</th>
+                    <th style={{ padding: "5px 8px" }}>ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...allTables].sort((a, b) => (b.rowCount || 0) - (a.rowCount || 0)).map(t => (
+                    <tr key={t.id} style={{ borderBottom: "1px solid var(--border)", background: t.id === loc?.tableId ? "#DBEAFE33" : undefined }}>
+                      <td style={{ padding: "5px 8px", fontWeight: t.id === loc?.tableId ? 800 : 400 }}>{t.name}</td>
+                      <td style={{ padding: "5px 8px" }}>{t.tableType || "—"}</td>
+                      <td style={{ padding: "5px 8px" }}>{typeof t.rowCount === "number" ? t.rowCount : "—"}</td>
+                      <td style={{ padding: "5px 8px", color: "var(--text3)", fontFamily: "monospace", fontSize: 10 }}>{t.id}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {error && (
         <div style={{ background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 8, padding: "12px 14px", fontSize: 12, color: "#991B1B", display: "flex", alignItems: "flex-start", gap: 8 }}>
