@@ -418,33 +418,85 @@ function CodaPickerModal({ defaultOnVersion, onClose, onAdd }: {
   const [rowsLoading, setRowsLoading] = useState(false)
 
   const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [shortcutLoading, setShortcutLoading] = useState<string | null>(null)
 
   useEffect(() => {
-    setDocsLoading(true)
-    fetch("/api/superhuman-docs/docs").then(r => r.json()).then(d => {
-      if (d.error) setError(d.error)
-      else setDocs(d.items || [])
-    }).catch(e => setError(String(e))).finally(() => setDocsLoading(false))
+    loadDocs()
   }, [])
 
-  function pickDoc(docId: string) {
-    setSelectedDocId(docId); setTables([]); setSelectedTableId(""); setRows([]); setChecked(new Set()); setError("")
-    if (!docId) return
-    setTablesLoading(true)
-    fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(docId)}`).then(r => r.json()).then(d => {
-      if (d.error) setError(d.error)
-      else setTables(d.items || [])
-    }).catch(e => setError(String(e))).finally(() => setTablesLoading(false))
+  async function loadDocs(): Promise<CodaDocItem[]> {
+    setDocsLoading(true)
+    try {
+      const d = await fetch("/api/superhuman-docs/docs").then(r => r.json())
+      if (d.error) throw new Error(d.error)
+      const items: CodaDocItem[] = d.items || []
+      setDocs(items)
+      return items
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return []
+    } finally {
+      setDocsLoading(false)
+    }
   }
 
-  function pickTable(tableId: string) {
+  async function pickDoc(docId: string): Promise<CodaTableItem[]> {
+    setSelectedDocId(docId); setTables([]); setSelectedTableId(""); setRows([]); setChecked(new Set()); setError("")
+    if (!docId) return []
+    setTablesLoading(true)
+    try {
+      const d = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(docId)}`).then(r => r.json())
+      if (d.error) throw new Error(d.error)
+      const items: CodaTableItem[] = d.items || []
+      setTables(items)
+      return items
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return []
+    } finally {
+      setTablesLoading(false)
+    }
+  }
+
+  async function pickTable(docId: string, tableId: string) {
     setSelectedTableId(tableId); setRows([]); setChecked(new Set()); setError("")
     if (!tableId) return
     setRowsLoading(true)
-    fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(selectedDocId)}&tableId=${encodeURIComponent(tableId)}`).then(r => r.json()).then(d => {
-      if (d.error) setError(d.error)
-      else setRows(d.items || [])
-    }).catch(e => setError(String(e))).finally(() => setRowsLoading(false))
+    try {
+      const d = await fetch(`/api/superhuman-docs/rows?docId=${encodeURIComponent(docId)}&tableId=${encodeURIComponent(tableId)}`).then(r => r.json())
+      if (d.error) throw new Error(d.error)
+      setRows(d.items || [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRowsLoading(false)
+    }
+  }
+
+  // Shortcut "Plan Pilot" / "List Monitoring" — dicari BERDASARKAN NAMA
+  // table (bukan ID yang di-hardcode), soalnya "List Monitoring" nambah
+  // angkanya tiap kali dibikin ulang (List Monitoring 5, nanti 6, 7, dst).
+  // Nyari ke SEMUA Doc yang kebaca token (bukan cuma 1 doc "Monitoring
+  // Pilot") biar tetep ketemu walau posisinya pindah Doc.
+  async function jumpToShortcut(label: string, matcher: (tableName: string) => boolean) {
+    setShortcutLoading(label); setError("")
+    try {
+      const docList = docs.length > 0 ? docs : await loadDocs()
+      for (const d of docList) {
+        const tableList = await pickDoc(d.id)
+        const match = tableList.find(t => matcher(t.name))
+        if (match) {
+          await pickTable(d.id, match.id)
+          setShortcutLoading(null)
+          return
+        }
+      }
+      setSelectedDocId(""); setTables([]); setSelectedTableId("")
+      setError(`Table "${label}" nggak ketemu di Doc manapun yang kebaca token ini`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setShortcutLoading(null)
   }
 
   function toggle(id: string) {
@@ -480,6 +532,23 @@ function CodaPickerModal({ defaultOnVersion, onClose, onAdd }: {
           {error && <div style={{ background: "#FEE2E2", border: "1px solid #FECACA", borderRadius: 8, padding: "8px 12px", fontSize: 11, color: "#991B1B" }}>❌ {error}</div>}
 
           <div>
+            <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)", marginBottom: 4, display: "block" }}>SHORTCUT</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => jumpToShortcut("Plan Pilot", name => name.trim().toLowerCase() === "plan pilot")}
+                disabled={shortcutLoading !== null}
+                style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--accent-muted)", color: "#0891B2", cursor: shortcutLoading ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                {shortcutLoading === "Plan Pilot" && <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} />} 📌 Plan Pilot
+              </button>
+              <button onClick={() => jumpToShortcut("List Monitoring", name => name.trim().toLowerCase().startsWith("list monitoring"))}
+                disabled={shortcutLoading !== null}
+                style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--accent-muted)", color: "#0891B2", cursor: shortcutLoading ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                {shortcutLoading === "List Monitoring" && <Loader2 size={13} style={{ animation: "spin 0.8s linear infinite" }} />} 📌 List Monitoring
+              </button>
+            </div>
+            <p style={{ fontSize: 10, color: "var(--text3)", marginTop: 4 }}>Langsung lompat ke table-nya tanpa perlu cari Doc/Table manual. Atau pilih manual di bawah.</p>
+          </div>
+
+          <div>
             <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)", marginBottom: 4, display: "block" }}>DOC</label>
             {docsLoading ? <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p> : (
               <select value={selectedDocId} onChange={e => pickDoc(e.target.value)} style={inputStyle}>
@@ -493,7 +562,7 @@ function CodaPickerModal({ defaultOnVersion, onClose, onAdd }: {
             <div>
               <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)", marginBottom: 4, display: "block" }}>TABLE</label>
               {tablesLoading ? <p style={{ fontSize: 11, color: "var(--text3)" }}>Memuat...</p> : (
-                <select value={selectedTableId} onChange={e => pickTable(e.target.value)} style={inputStyle}>
+                <select value={selectedTableId} onChange={e => pickTable(selectedDocId, e.target.value)} style={inputStyle}>
                   <option value="">— Pilih Table —</option>
                   {tables.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
