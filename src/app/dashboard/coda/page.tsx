@@ -44,7 +44,13 @@ interface TabDef { key: string; label: string; matcher: (name: string) => boolea
 // jalan walau ada sedikit variasi penamaan di Coda-nya nanti.
 const TABS: TabDef[] = [
   { key: "plan-pilot", label: "Plan Pilot", matcher: n => n.trim().toLowerCase() === "plan pilot" },
-  { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n), richValues: true },
+  // richValues DICABUT — ternyata Doc. Ref./Status Dev itu TEKS biasa
+  // (bukan array terstruktur), rich vs simple nggak ngaruh buat kolom
+  // ini (dikonfirmasi: tetep sama digabung koma walau udah dicoba
+  // rich). Splitting-nya sekarang ditangani manual di AdopTable lewat
+  // splitDocRefText/splitStatusText, jadi nggak perlu ambil resiko
+  // ganti format buat kolom lain (PIC Apps dst) yang udah jalan bener.
+  { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n) },
   { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
 ]
 
@@ -126,12 +132,35 @@ function fmtCell(v: unknown): string {
   }
   return String(v)
 }
-// Dipakai buat "Doc. Ref." + "Status Dev" yang array PARALEL (lihat
-// AdopTable) — nilai tunggal (bukan array) dibungkus jadi array 1
-// elemen biar logic zip-nya seragam.
-function toItemArray(v: unknown): unknown[] {
+// "Doc. Ref." di Coda itu TEKS biasa isinya banyak referensi digabung
+// koma MANUAL oleh orang yang nginput — koma di situ AMBIGU karena
+// judul dokumennya sendiri sering ada koma (mis. "...Kanvas, Gudang
+// Lain, R1, R2" itu SATU judul, bukan 4 item). Dipisah pakai pola KODE
+// dokumen (mis. "P26-XXX-MTX_(PHI)", "I26-400-MTX_(PHI)") sebagai
+// penanda AWAL tiap referensi baru lewat lookahead split — bukan split
+// polos per koma.
+const DOC_REF_SPLIT_RE = /(?=[A-Z]\d{2}-[\w]+-[A-Z]+_\([A-Z]+\))/g
+function splitDocRefText(s: string): string[] {
+  const parts = s.split(DOC_REF_SPLIT_RE).map(p => p.replace(/^[,\s]+|[,\s]+$/g, "")).filter(Boolean)
+  return parts.length > 0 ? parts : [s]
+}
+// Status Dev nilainya dari daftar tetap (OPEN, READY TO PILOT, dst)
+// yang nggak pernah ada koma literal di dalamnya, jadi split polos per
+// koma AMAN buat kolom ini (beda dari Doc. Ref. di atas).
+function splitStatusText(s: string): string[] {
+  return s.split(",").map(x => x.trim()).filter(Boolean)
+}
+function toDocRefArray(v: unknown): unknown[] {
   if (v == null) return []
-  return Array.isArray(v) ? v : [v]
+  if (Array.isArray(v)) return v
+  if (typeof v === "string" && v) return splitDocRefText(v)
+  return [v]
+}
+function toStatusArray(v: unknown): unknown[] {
+  if (v == null) return []
+  if (Array.isArray(v)) return v
+  if (typeof v === "string" && v) return splitStatusText(v)
+  return [v]
 }
 
 // Badge warna buat kolom status (Status Dev, Status Project, dll) —
@@ -270,8 +299,8 @@ function AdopTable({ rows, kpiKey, docRefKey, statusKey, otherCols }: {
         </thead>
         <tbody>
           {sortedRows.map(r => {
-            const docs = docRefKey ? toItemArray(r.values?.[docRefKey]) : []
-            const statuses = statusKey ? toItemArray(r.values?.[statusKey]) : []
+            const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
+            const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
             const n = Math.max(docs.length, statuses.length)
             const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
             return (
