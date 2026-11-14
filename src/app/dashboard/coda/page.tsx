@@ -579,31 +579,15 @@ export default function CodaPage() {
   const columns = collectColumns(rows)
 
   // Khusus tab Plan Pilot: 4 SUB-TAB (sama pola kayak ADOP, bukan lagi 4
-  // panel sejajar+modal expand) — filter ke sub-tab (User Request) yang
-  // aktif dulu, baru dropdown "Plan Pilot" (opsinya dihitung dari baris
-  // sub-tab aktif), tampilin SEMUA baris (nggak dipotong 6 lagi).
+  // panel sejajar+modal expand) — filter ke sub-tab (kolom "User", DIGANTI
+  // dari "User Request" diminta user biar konsisten sama ADOP) yang aktif
+  // dulu, baru dropdown "Plan Pilot" (opsinya dihitung dari baris sub-tab
+  // aktif), tampilin SEMUA baris (nggak dipotong 6 lagi).
   const planPilotActive = PLAN_PILOT_CATEGORIES.find(c => c.key === planPilotSubTab)!
-  const planPilotCategoryRows = activeTab === "plan-pilot" ? rows.filter(r => planPilotActive.match(getFieldValue(r.values, "User Request"))) : []
+  const planPilotCategoryRows = activeTab === "plan-pilot" ? rows.filter(r => planPilotActive.match(getFieldValue(r.values, "User"))) : []
   const planPilotOptions = Array.from(new Set(planPilotCategoryRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
   const planPilotSelected = planPilotFilter[planPilotSubTab] || ""
   const planPilotRows = planPilotSelected ? planPilotCategoryRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotSelected) : planPilotCategoryRows
-
-  // Diagnostik: baris yang User Request-nya BUKAN salah satu dari 4
-  // kategori — biar kelihatan jelas kenapa jumlah per-kategori sedikit
-  // (apakah emang mayoritas data punya User Request lain, atau ada
-  // variasi penulisan yang kelewat kecocokannya, mis. "Phi " vs "PHI").
-  const otherValueCounts = activeTab === "plan-pilot" ? (() => {
-    const counts = new Map<string, number>()
-    for (const r of rows) {
-      const v = getFieldValue(r.values, "User Request").trim()
-      const isCategorized = PLAN_PILOT_CATEGORIES.some(cat => cat.match(v))
-      if (!isCategorized) {
-        const key = v || "(kosong)"
-        counts.set(key, (counts.get(key) || 0) + 1)
-      }
-    }
-    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
-  })() : []
 
   // Khusus tab ADOP: filter ke sub-tab (User) yang aktif dulu, baru dropdown
   // Timeline & ADOP Sprint (opsi dropdown dihitung dari baris sub-tab yang
@@ -650,17 +634,6 @@ export default function CodaPage() {
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
       <MotivationBanner page="docreq" />
-
-      <div style={{ background: "linear-gradient(135deg,#0E4D64,#0891B2)", borderRadius: 14, padding: "18px 22px", position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", right: -30, top: -30, width: 160, height: 160, borderRadius: "50%", background: "rgba(255,255,255,0.04)" }} />
-        <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: "rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>📋</div>
-          <div>
-            <h1 style={{ fontSize: 17, fontWeight: 800, color: "white", marginBottom: 3 }}>CODA</h1>
-            <p style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>Monitoring Plan Pilot, ADOP & semua dokumen — langsung tanpa pilih Doc/Table manual</p>
-          </div>
-        </div>
-      </div>
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 6, borderBottom: "1px solid var(--border)" }}>
@@ -791,7 +764,7 @@ export default function CodaPage() {
                   display: "flex", alignItems: "center", gap: 6,
                 }}>
                 <span style={{ width: 7, height: 7, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
-                {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User Request"))).length})</span>
+                {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User"))).length})</span>
               </button>
             ))}
             {planPilotOptions.length > 0 && (
@@ -802,20 +775,6 @@ export default function CodaPage() {
               </select>
             )}
           </div>
-
-          {otherValueCounts.length > 0 && (
-            <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: 12, padding: "12px 14px" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text3)", marginBottom: 6 }}>
-                {otherValueCounts.reduce((s, [, n]) => s + n, 0)} baris lain dengan &quot;User Request&quot; di luar PHI/HSJ/PGD/MT/SCP:
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {otherValueCounts.slice(0, 15).map(([val, n]) => (
-                  <span key={val} style={{ padding: "3px 9px", borderRadius: 999, fontSize: 10, background: "var(--surface2)", color: "var(--text2)" }}>{val} ({n})</span>
-                ))}
-                {otherValueCounts.length > 15 && <span style={{ fontSize: 10, color: "var(--text3)", alignSelf: "center" }}>+{otherValueCounts.length - 15} nilai lain</span>}
-              </div>
-            </div>
-          )}
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${planPilotActive.color}`, borderRadius: 12, overflow: "hidden" }}>
             <DynamicTable rows={planPilotRows} columns={PREVIEW_COLS} />
