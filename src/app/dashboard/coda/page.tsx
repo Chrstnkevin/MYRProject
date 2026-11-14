@@ -18,6 +18,7 @@ import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } fro
 import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { isoWeekInfo, isoWeekStart, parseYearWeek } from "@/lib/isoWeek"
+import type { DocRow as ReportDocRow, SubdistRow as ReportSubdistRow, PlanPilotReportData } from "@/lib/planPilotExcelTemplate"
 
 interface CodaDocItem { id: string; name: string }
 interface CodaTableItem { id: string; name: string; tableType?: string; rowCount?: number; parentTable?: { id: string; name?: string } }
@@ -689,6 +690,17 @@ export default function CodaPage() {
   // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
   const [planPilotFilter, setPlanPilotFilter] = useState("")
   const [planPilotReportText, setPlanPilotReportText] = useState<string | null>(null)
+  // Popup "Form Release (Excel)" — data di sini SELALU diprefill dari
+  // Coda (lihat openReportExcelModal), tapi semuanya EDITABLE sebelum
+  // di-generate (diminta user: "saya bisa edit valuenya terus klik
+  // generate"). Field yang nggak ada sumbernya di Coda (Kode/Nama
+  // Subdist, tanda tangan) dibiarin kosong buat diisi manual.
+  const [reportModalOpen, setReportModalOpen] = useState(false)
+  const [reportGenerating, setReportGenerating] = useState(false)
+  const [reportReleaseName, setReportReleaseName] = useState("")
+  const [reportSubdist, setReportSubdist] = useState<ReportSubdistRow[]>([])
+  const [reportDocs, setReportDocs] = useState<ReportDocRow[]>([])
+  const [reportSignatures, setReportSignatures] = useState({ mengajukan: "", mengCompile: "", mengetahui: "", menyetujui: "" })
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
   // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
   // user) — array kosong = "semua" (nggak difilter). Perlu di-update
@@ -737,6 +749,52 @@ export default function CodaPage() {
   const planPilotOptions = Array.from(new Set(planPilotAllRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
   const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
   const { found: planPilotFoundCols, missing: planPilotMissingColumns } = activeTab === "plan-pilot" ? resolveColumns(planPilotRows, PLAN_PILOT_PREVIEW_COLS) : { found: [], missing: [] }
+
+  // Prefill popup "Form Release (Excel)" dari baris Plan Pilot yang
+  // lagi difilter — "modul"/"testBy" nebak dari kolom "Application"/
+  // "Testing PIC 1" (nama kolom asli di Coda, dari dropdown filter yang
+  // pernah user tunjukin), "status" default "OK" (sama kayak contoh
+  // Excel asli). SEMUA field ini tetap bisa diedit user di popup
+  // sebelum generate, jadi kalau tebakannya meleset user bisa benerin.
+  function openReportExcelModal() {
+    setReportReleaseName(planPilotFilter)
+    setReportDocs(planPilotRows.map((r, i) => ({
+      no: i + 1,
+      modul: getFieldValue(r.values, "Application"),
+      docName: getFieldValue(r.values, "Doc. Name"),
+      keterangan: "",
+      onVersion: getFieldValue(r.values, "Plan Pilot") || planPilotFilter,
+      reqBy: getFieldValue(r.values, "User"),
+      testBy: getFieldValue(r.values, "Testing PIC 1"),
+      status: "OK",
+    })))
+    setReportSubdist([{ no: 1, kodeSubdist: "", namaSubdist: "", keterangan: "", pilotBy: "" }])
+    setReportSignatures({ mengajukan: "", mengCompile: "", mengetahui: "", menyetujui: "" })
+    setReportModalOpen(true)
+  }
+
+  async function generateReportExcel() {
+    setReportGenerating(true)
+    try {
+      const payload: PlanPilotReportData = { releaseName: reportReleaseName, subdist: reportSubdist, docs: reportDocs, signatures: reportSignatures }
+      const res = await fetch("/api/coda/plan-pilot-report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.error || "Gagal generate Excel")
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `Form_Request_Pilot_${reportReleaseName.replace(/[^\w.-]+/g, "_")}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      setReportModalOpen(false)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e))
+    }
+    setReportGenerating(false)
+  }
 
   // Chart persentase per "Status Dev" (diminta user) — warna bar-nya
   // dicocokin ke statusColor() yang SAMA dipakai buat badge status di
@@ -862,6 +920,11 @@ export default function CodaPage() {
               style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, border: "none", background: planPilotFilter ? "var(--accent)" : "var(--surface2)", cursor: planPilotFilter ? "pointer" : "not-allowed", opacity: planPilotFilter ? 1 : 0.5, fontSize: 12, color: planPilotFilter ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700 }}>
               📋 Buat Report
             </button>
+            <button onClick={openReportExcelModal}
+              disabled={!planPilotFilter || planPilotRows.length === 0}
+              style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, border: "none", background: planPilotFilter ? "#16A34A" : "var(--surface2)", cursor: planPilotFilter ? "pointer" : "not-allowed", opacity: planPilotFilter ? 1 : 0.5, fontSize: 12, color: planPilotFilter ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap" }}>
+              📥 Form Release (Excel)
+            </button>
           </div>
 
           {planPilotMissingColumns.length > 0 && (
@@ -960,6 +1023,116 @@ export default function CodaPage() {
               <button onClick={() => navigator.clipboard.writeText(planPilotReportText)}
                 style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 Copy ke Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {reportModalOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setReportModalOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 1100, maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📥 Form Release (Excel) — validasi dulu sebelum generate</span>
+              <button onClick={() => setReportModalOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px", display: "flex", flexDirection: "column", gap: 16 }}>
+              <div>
+                <label style={{ fontSize: 10, fontWeight: 700, color: "var(--text3)" }}>Nama Release (judul form)</label>
+                <input value={reportReleaseName} onChange={e => setReportReleaseName(e.target.value)}
+                  style={{ display: "block", width: "100%", marginTop: 4, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 12, fontFamily: "inherit", boxSizing: "border-box" }} />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Pilot Implementation (Subdist)</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "var(--text3)", background: "var(--surface2)" }}>
+                        <th style={{ padding: 6 }}>No</th><th style={{ padding: 6 }}>Kode Subdist</th><th style={{ padding: 6 }}>Nama Subdist</th><th style={{ padding: 6 }}>Keterangan</th><th style={{ padding: 6 }}>Pilot By</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportSubdist.map((s, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: 4, textAlign: "center" }}>{s.no}</td>
+                          {(["kodeSubdist", "namaSubdist", "keterangan", "pilotBy"] as const).map(f => (
+                            <td key={f} style={{ padding: 4 }}>
+                              <input value={s[f]} onChange={e => setReportSubdist(arr => arr.map((row, j) => j === i ? { ...row, [f]: e.target.value } : row))}
+                                style={{ width: "100%", padding: "5px 7px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                            </td>
+                          ))}
+                          <td style={{ padding: 4 }}>
+                            <button onClick={() => setReportSubdist(arr => arr.filter((_, j) => j !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626" }}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={() => setReportSubdist(arr => [...arr, { no: arr.length + 1, kodeSubdist: "", namaSubdist: "", keterangan: "", pilotBy: "" }])}
+                  style={{ marginTop: 6, padding: "5px 10px", borderRadius: 6, border: "1px dashed var(--border)", background: "none", cursor: "pointer", fontSize: 10, color: "var(--text3)", fontFamily: "inherit" }}>
+                  + Tambah baris subdist
+                </button>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>List Dokumen ({reportDocs.length})</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "var(--text3)", background: "var(--surface2)" }}>
+                        <th style={{ padding: 6 }}>No</th><th style={{ padding: 6, minWidth: 110 }}>Modul</th><th style={{ padding: 6, minWidth: 260 }}>No. DR/ST Nama Dokumen</th>
+                        <th style={{ padding: 6, minWidth: 100 }}>Keterangan</th><th style={{ padding: 6, minWidth: 110 }}>On Version</th>
+                        <th style={{ padding: 6 }}>Req By</th><th style={{ padding: 6, minWidth: 100 }}>Test By</th><th style={{ padding: 6 }}>Status</th><th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportDocs.map((d, i) => (
+                        <tr key={i}>
+                          <td style={{ padding: 4, textAlign: "center" }}>{d.no}</td>
+                          {(["modul", "docName", "keterangan", "onVersion", "reqBy", "testBy", "status"] as const).map(f => (
+                            <td key={f} style={{ padding: 4 }}>
+                              <input value={d[f]} onChange={e => setReportDocs(arr => arr.map((row, j) => j === i ? { ...row, [f]: e.target.value } : row))}
+                                style={{ width: "100%", padding: "5px 7px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                            </td>
+                          ))}
+                          <td style={{ padding: 4 }}>
+                            <button onClick={() => setReportDocs(arr => arr.filter((_, j) => j !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626" }}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button onClick={() => setReportDocs(arr => [...arr, { no: arr.length + 1, modul: "", docName: "", keterangan: "", onVersion: reportReleaseName, reqBy: "", testBy: "", status: "OK" }])}
+                  style={{ marginTop: 6, padding: "5px 10px", borderRadius: 6, border: "1px dashed var(--border)", background: "none", cursor: "pointer", fontSize: 10, color: "var(--text3)", fontFamily: "inherit" }}>
+                  + Tambah baris dokumen
+                </button>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 6 }}>Tanda Tangan</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 8 }}>
+                  {([["mengajukan", "Mengajukan"], ["mengCompile", "Meng-compile"], ["mengetahui", "Mengetahui"], ["menyetujui", "Menyetujui"]] as const).map(([key, label]) => (
+                    <div key={key}>
+                      <label style={{ fontSize: 10, color: "var(--text3)" }}>{label}</label>
+                      <input value={reportSignatures[key]} onChange={e => setReportSignatures(s => ({ ...s, [key]: e.target.value }))}
+                        style={{ display: "block", width: "100%", marginTop: 3, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", boxSizing: "border-box" }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => setReportModalOpen(false)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface2)", color: "var(--text2)", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
+                Batal
+              </button>
+              <button onClick={generateReportExcel} disabled={reportGenerating || !reportReleaseName}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "#16A34A", color: "white", fontSize: 12, fontWeight: 700, cursor: reportGenerating ? "default" : "pointer", opacity: reportGenerating ? 0.7 : 1, fontFamily: "inherit" }}>
+                {reportGenerating ? "Generating..." : "Generate & Download"}
               </button>
             </div>
           </div>
