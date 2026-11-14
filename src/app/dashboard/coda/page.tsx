@@ -54,19 +54,12 @@ const TABS: TabDef[] = [
   { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
 ]
 
-// Khusus tab "Plan Pilot" — dipecah jadi 4 panel berdasarkan kolom
-// "User Request" (dikonfirmasi user), biar kebaca sekaligus dalam 1 layar
-// tanpa perlu scroll nyari. "HSJ / PGD" digabung jadi 1 panel sesuai
-// permintaan (tetap 4 panel total, bukan 5).
-// Label "HSJ" tapi matching tetep nyakup HSJ & PGD (digabung 1 tab,
-// nggak dipisah) — "SCP" (bukan "SC") soalnya nilai asli di data itu
-// "SCP" persis (ketauan dari panel diagnostik nilai lain dulu).
-const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) => boolean; color: string }[] = [
-  { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI", color: "#DC2626" },
-  { key: "hsj", label: "HSJ", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()), color: "#7C3AED" },
-  { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
-  { key: "scp", label: "SCP", match: v => v.trim().toUpperCase() === "SCP", color: "#16A34A" },
-]
+// Grouping Plan Pilot by "User"/"User Request" DIBUANG — 1 batch
+// "Plan Pilot" (mis. "Pilot Matrix 26.11.02") ternyata bisa nyampur
+// beberapa User sekaligus (PHI + "ALL" dkk, ketauan dari screenshot
+// user), jadi grouping per kategori bikin 1 batch kepecah nggak jelas
+// ke beberapa tab. Sekarang Plan Pilot cuma 1 TABEL isi SEMUA baris,
+// filter manual lewat dropdown "Plan Pilot" yang udah ada.
 // "Plan Pilot" (nama batch pilot-nya, mis. "Pilot Matrix 26.11.02")
 // ditambahin di preview sesuai request user — sebelumnya cuma
 // Doc No/Doc Name/Status Dev, info batch pilot-nya nggak kelihatan.
@@ -495,10 +488,8 @@ export default function CodaPage() {
   const [rowsByTab, setRowsByTab] = useState<Record<string, CodaRowItem[]>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
-  const [planPilotSubTab, setPlanPilotSubTab] = useState(PLAN_PILOT_CATEGORIES[0].key)
-  // Filter dropdown "Plan Pilot" PER sub-tab — key = category key, value
-  // = nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
-  const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
+  // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
+  const [planPilotFilter, setPlanPilotFilter] = useState("")
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
   // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
   // user) — array kosong = "semua" (nggak difilter). Perlu di-update
@@ -578,16 +569,27 @@ export default function CodaPage() {
 
   const columns = collectColumns(rows)
 
-  // Khusus tab Plan Pilot: 4 SUB-TAB (sama pola kayak ADOP, bukan lagi 4
-  // panel sejajar+modal expand) — filter ke sub-tab (kolom "User", DIGANTI
-  // dari "User Request" diminta user biar konsisten sama ADOP) yang aktif
-  // dulu, baru dropdown "Plan Pilot" (opsinya dihitung dari baris sub-tab
-  // aktif), tampilin SEMUA baris (nggak dipotong 6 lagi).
-  const planPilotActive = PLAN_PILOT_CATEGORIES.find(c => c.key === planPilotSubTab)!
-  const planPilotCategoryRows = activeTab === "plan-pilot" ? rows.filter(r => planPilotActive.match(getFieldValue(r.values, "User"))) : []
-  const planPilotOptions = Array.from(new Set(planPilotCategoryRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
-  const planPilotSelected = planPilotFilter[planPilotSubTab] || ""
-  const planPilotRows = planPilotSelected ? planPilotCategoryRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotSelected) : planPilotCategoryRows
+  // Khusus tab Plan Pilot: SATU tabel isi semua baris (grouping by
+  // User/User Request DIBUANG, lihat catatan di PREVIEW_COLS), cuma
+  // difilter dropdown "Plan Pilot" (opsinya dari SEMUA baris).
+  const planPilotAllRows = activeTab === "plan-pilot" ? rows : []
+  const planPilotOptions = Array.from(new Set(planPilotAllRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
+  const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
+
+  // Chart persentase per "Status Dev" (diminta user) — warna bar-nya
+  // dicocokin ke statusColor() yang SAMA dipakai buat badge status di
+  // tabel, biar konsisten (bukan skema warna baru).
+  const statusDevPercent = activeTab === "plan-pilot" ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of planPilotRows) {
+      const v = getFieldValue(r.values, "Status Dev").trim() || "(kosong)"
+      counts.set(v, (counts.get(v) || 0) + 1)
+    }
+    const total = planPilotRows.length || 1
+    return Array.from(counts.entries())
+      .map(([status, n]) => ({ status, n, pct: (n / total) * 100 }))
+      .sort((a, b) => b.n - a.n)
+  })() : []
 
   // Khusus tab ADOP: filter ke sub-tab (User) yang aktif dulu, baru dropdown
   // Timeline & ADOP Sprint (opsi dropdown dihitung dari baris sub-tab yang
@@ -749,34 +751,41 @@ export default function CodaPage() {
       {isLoading ? (
         <p style={{ fontSize: 12, color: "var(--text3)" }}>Memuat data {tab.label}...</p>
       ) : !error && activeTab === "plan-pilot" ? (
-        // Tab Plan Pilot — 4 SUB-TAB (PHI/HSJ/MT/SCP), sama pola kayak
-        // ADOP (sebelumnya 4 panel sejajar + modal expand, diganti
-        // biar konsisten + nampilin SEMUA baris langsung, nggak perlu
-        // expand lagi). Dropdown "Plan Pilot" buat filter per sub-tab.
+        // Tab Plan Pilot — 1 TABEL isi semua baris (grouping by User
+        // dibuang, lihat catatan di PREVIEW_COLS), filter dropdown
+        // "Plan Pilot" + chart persentase Status Dev.
         <>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            {PLAN_PILOT_CATEGORIES.map(c => (
-              <button key={c.key} onClick={() => { setPlanPilotSubTab(c.key) }}
-                style={{
-                  padding: "7px 14px", borderRadius: 999, border: `1px solid ${planPilotSubTab === c.key ? c.color : "var(--border)"}`,
-                  background: planPilotSubTab === c.key ? c.color + "1A" : "var(--surface)", cursor: "pointer",
-                  fontSize: 11, fontWeight: 700, color: planPilotSubTab === c.key ? c.color : "var(--text2)", fontFamily: "inherit",
-                  display: "flex", alignItems: "center", gap: 6,
-                }}>
-                <span style={{ width: 7, height: 7, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
-                {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User"))).length})</span>
-              </button>
-            ))}
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
             {planPilotOptions.length > 0 && (
-              <select value={planPilotSelected} onChange={e => setPlanPilotFilter(f => ({ ...f, [planPilotSubTab]: e.target.value }))}
-                style={{ marginLeft: "auto", padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
-                <option value="">— Semua Plan Pilot ({planPilotCategoryRows.length}) —</option>
+              <select value={planPilotFilter} onChange={e => setPlanPilotFilter(e.target.value)}
+                style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
+                <option value="">— Semua Plan Pilot ({planPilotAllRows.length}) —</option>
                 {planPilotOptions.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             )}
           </div>
 
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${planPilotActive.color}`, borderRadius: 12, overflow: "hidden" }}>
+          {statusDevPercent.length > 0 && (
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Persentase Status Dev ({planPilotRows.length} baris{planPilotFilter ? ` · ${planPilotFilter}` : ""})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {statusDevPercent.map(({ status, n, pct }) => {
+                  const sc = statusColor(status)
+                  return (
+                    <div key={status} style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${status}: ${n} baris (${pct.toFixed(1)}%)`}>
+                      <span style={{ width: 110, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{status}</span>
+                      <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 16, position: "relative" }}>
+                        <div style={{ width: `${Math.max(2, pct)}%`, height: "100%", borderRadius: 4, background: sc.fg }} />
+                      </div>
+                      <span style={{ width: 66, flexShrink: 0, fontSize: 10, fontWeight: 700, color: "var(--text)" }}>{pct.toFixed(1)}% ({n})</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
             <DynamicTable rows={planPilotRows} columns={PREVIEW_COLS} />
           </div>
         </>
