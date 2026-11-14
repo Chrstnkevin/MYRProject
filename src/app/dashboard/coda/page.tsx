@@ -174,6 +174,41 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
   )
 }
 
+// Dropdown multi-pilih (checkbox) — diminta user biar Timeline bisa
+// pilih beberapa sekaligus (mis. 2026.Q4 + 2026.Q4.BE + 2026.X bareng),
+// mirip widget filter Coda sendiri. selected=[] berarti "semua" (filter
+// nggak aktif).
+function MultiSelectDropdown({ label, options, selected, onChange }: { label: string; options: string[]; selected: string[]; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap" }}>
+        {label}: {selected.length === 0 ? "Semua" : `${selected.length} dipilih`}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+          <div style={{ position: "absolute", top: "110%", right: 0, zIndex: 999, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 8, minWidth: 190, maxHeight: 260, overflowY: "auto", boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}>
+            {options.length === 0 && <p style={{ fontSize: 10, color: "var(--text3)", padding: 4 }}>Nggak ada opsi.</p>}
+            {options.map(o => (
+              <label key={o} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 6px", fontSize: 11, color: "var(--text2)", cursor: "pointer", borderRadius: 4 }}>
+                <input type="checkbox" checked={selected.includes(o)}
+                  onChange={() => onChange(selected.includes(o) ? selected.filter(x => x !== o) : [...selected, o])} />
+                {o}
+              </label>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+              <button onClick={() => onChange(options)} style={{ fontSize: 10, color: "#0891B2", background: "none", border: "none", cursor: "pointer", fontWeight: 700 }}>Select all</button>
+              <button onClick={() => onChange([])} style={{ fontSize: 10, color: "var(--text3)", background: "none", border: "none", cursor: "pointer" }}>Clear</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // Doc ID diekstrak dari link yang user kasih:
 // https://docs.superhuman.com/d/_dRt3S4eDoOn/Monitoring-Pilot_su3Vv_nP...
 // — "_d" itu penanda path di URL Coda/Superhuman Docs, BUKAN bagian dari
@@ -244,7 +279,11 @@ export default function CodaPage() {
   // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
   const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
-  const [adopTimelineFilter, setAdopTimelineFilter] = useState("")
+  // Default difokusin ke periode yang lagi berjalan/mendatang (diminta
+  // user) — array kosong = "semua" (nggak difilter). Perlu di-update
+  // manual kalau periode "berjalan" ini udah lewat (mis. ganti ke
+  // 2027.Q1 dkk pas waktunya).
+  const [adopTimelineFilter, setAdopTimelineFilter] = useState<string[]>(["2026.Q4", "2026.Q4.BE", "2026.X"])
   const [adopSprintFilter, setAdopSprintFilter] = useState("")
   // Debug: daftar SEMUA table/view di doc yang lagi aktif — dipakai buat
   // ketauan kalau table yang ketemu itu "view" (filter permanen beda dari
@@ -356,9 +395,12 @@ export default function CodaPage() {
   const adopActive = ADOP_CATEGORIES.find(c => c.key === adopSubTab)!
   const adopCategoryRows = activeTab === "adop" ? rows.filter(r => adopActive.match(getFieldValue(r.values, "User"))) : []
   const adopTimelineOptions = Array.from(new Set(adopCategoryRows.map(r => getFieldValue(r.values, "Timeline")).filter(Boolean))).sort()
-  const adopSprintOptions = Array.from(new Set(adopCategoryRows.map(r => getFieldValue(r.values, "ADOP Sprint")).filter(Boolean))).sort()
-  const adopRows = adopCategoryRows
-    .filter(r => !adopTimelineFilter || getFieldValue(r.values, "Timeline") === adopTimelineFilter)
+  // ADOP Sprint ngikutin pilihan Timeline (diminta user) — opsinya
+  // dihitung dari baris yang UDAH kefilter Timeline duluan, biar nggak
+  // nawarin value ADOP Sprint yang nggak relevan sama Timeline terpilih.
+  const adopRowsAfterTimeline = adopCategoryRows.filter(r => adopTimelineFilter.length === 0 || adopTimelineFilter.includes(getFieldValue(r.values, "Timeline")))
+  const adopSprintOptions = Array.from(new Set(adopRowsAfterTimeline.map(r => getFieldValue(r.values, "ADOP Sprint")).filter(Boolean))).sort()
+  const adopRows = adopRowsAfterTimeline
     .filter(r => !adopSprintFilter || getFieldValue(r.values, "ADOP Sprint") === adopSprintFilter)
     .sort((a, b) => {
       const ka = getFieldValue(a.values, "KPI"), kb = getFieldValue(b.values, "KPI")
@@ -366,17 +408,19 @@ export default function CodaPage() {
       return getFieldValue(a.values, "Request").localeCompare(getFieldValue(b.values, "Request"))
     })
   const { found: adopColumns, missing: adopMissingColumns } = activeTab === "adop" ? resolveColumns(adopRows, ADOP_PREVIEW_COLS) : { found: [], missing: [] }
+  const adopAllColumns = activeTab === "adop" ? collectColumns(adopRows) : []
 
   // Chart "jumlah item per periode Deadline" (diminta user) — dihitung
   // dari adopRows yang UDAH kena semua filter (sub-tab + Timeline + ADOP
   // Sprint), biar chart-nya selalu sinkron sama tabel di bawahnya.
+  // Diurutin BESAR KE KECIL (diminta user), bukan alfabetis.
   const deadlineCounts = activeTab === "adop" ? (() => {
     const counts = new Map<string, number>()
     for (const r of adopRows) {
       const v = getFieldValue(r.values, "Deadline").trim() || "(kosong)"
       counts.set(v, (counts.get(v) || 0) + 1)
     }
-    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
   })() : []
   const deadlineMax = Math.max(1, ...deadlineCounts.map(([, n]) => n))
 
@@ -567,7 +611,7 @@ export default function CodaPage() {
         <>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             {ADOP_CATEGORIES.map(c => (
-              <button key={c.key} onClick={() => { setAdopSubTab(c.key); setAdopTimelineFilter(""); setAdopSprintFilter("") }}
+              <button key={c.key} onClick={() => { setAdopSubTab(c.key); setAdopTimelineFilter(["2026.Q4", "2026.Q4.BE", "2026.X"]); setAdopSprintFilter("") }}
                 style={{
                   padding: "7px 14px", borderRadius: 999, border: `1px solid ${adopSubTab === c.key ? c.color : "var(--border)"}`,
                   background: adopSubTab === c.key ? c.color + "1A" : "var(--surface)", cursor: "pointer",
@@ -580,11 +624,7 @@ export default function CodaPage() {
             ))}
             <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
               {adopTimelineOptions.length > 0 && (
-                <select value={adopTimelineFilter} onChange={e => setAdopTimelineFilter(e.target.value)}
-                  style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
-                  <option value="">— Semua Timeline —</option>
-                  {adopTimelineOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                </select>
+                <MultiSelectDropdown label="Timeline" options={adopTimelineOptions} selected={adopTimelineFilter} onChange={setAdopTimelineFilter} />
               )}
               {adopSprintOptions.length > 0 && (
                 <select value={adopSprintFilter} onChange={e => setAdopSprintFilter(e.target.value)}
@@ -599,22 +639,24 @@ export default function CodaPage() {
           {adopMissingColumns.length > 0 && (
             <p style={{ fontSize: 10, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "6px 10px" }}>
               Kolom nggak ketemu di data: {adopMissingColumns.join(", ")} — kemungkinan nama aslinya beda di table &quot;{loc?.tableName}&quot;.
+              <br />Kolom yang BENERAN ada di data ini: {adopAllColumns.join(", ") || "(nggak ada baris)"}
             </p>
           )}
 
           {deadlineCounts.length > 0 && (
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Jumlah item per Deadline ({adopActive.label}{adopTimelineFilter ? ` · ${adopTimelineFilter}` : ""}{adopSprintFilter ? ` · ${adopSprintFilter}` : ""})</div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Jumlah item per Deadline ({adopActive.label}{adopTimelineFilter.length > 0 ? ` · ${adopTimelineFilter.join(", ")}` : ""}{adopSprintFilter ? ` · ${adopSprintFilter}` : ""})</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {deadlineCounts.map(([period, n]) => (
+                {deadlineCounts.slice(0, 15).map(([period, n]) => (
                   <div key={period} style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${period}: ${n} item`}>
-                    <span style={{ width: 90, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right" }}>{period}</span>
+                    <span style={{ width: 130, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{period}</span>
                     <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 16, position: "relative" }}>
                       <div style={{ width: `${Math.max(4, (n / deadlineMax) * 100)}%`, height: "100%", borderRadius: 4, background: adopActive.color }} />
                     </div>
                     <span style={{ width: 28, flexShrink: 0, fontSize: 10, fontWeight: 700, color: "var(--text)" }}>{n}</span>
                   </div>
                 ))}
+                {deadlineCounts.length > 15 && <p style={{ fontSize: 10, color: "var(--text3)", marginTop: 2 }}>+{deadlineCounts.length - 15} periode lain (nilainya kecil, disembunyiin biar chart nggak kepanjangan)</p>}
               </div>
             </div>
           )}
