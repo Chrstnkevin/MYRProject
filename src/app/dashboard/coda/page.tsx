@@ -76,7 +76,7 @@ const ADOP_CATEGORIES: { key: string; label: string; match: (v: string) => boole
 // TableLocation.viaViewName) yang kolomnya JAUH lebih banyak/generic
 // (dipakai bareng banyak page lain) — makanya dipersempit ke SET kolom
 // yang eksplisit diminta user, bukan nampilin semua kolom yang kebaca.
-const ADOP_PREVIEW_COLS = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "Status Dev", "PIC APPS", "PIC BR", "Request", "Deadline", "Doc Name"]
+const ADOP_PREVIEW_COLS = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "Status Dev", "PIC Apps", "PIC BR", "Request", "Deadline", "Doc. Ref."]
 
 // Cocokin `desired` (nama kolom yang KITA mau, longgar lewat normKey) ke
 // nama kolom ASLI yang beneran ada di `rows` — biar DynamicTable (yang
@@ -95,9 +95,22 @@ function resolveColumns(rows: CodaRowItem[], desired: string[]): { found: string
   return { found, missing }
 }
 
+// Kolom multi-select/person-reference (mis. "Status Dev", "Plan Pilot",
+// "PIC Apps") balik dari Coda bukan string biasa — bisa array (kosong
+// kalau belum keisi) atau objek {name: ...} (kolom orang/row lain).
+// SEBELUMNYA pakai JSON.stringify(v) polos, jadi array kosong muncul
+// literal "[]" di tabel (ketauan dari screenshot user). Array
+// digabung jadi teks biasa, objek diambil `.name`-nya kalau ada.
 function fmtCell(v: unknown): string {
   if (v == null) return "—"
-  if (typeof v === "object") return JSON.stringify(v)
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "—"
+    return v.map(x => (x && typeof x === "object" && "name" in x ? String((x as { name: unknown }).name) : String(x))).join(", ")
+  }
+  if (typeof v === "object") {
+    if ("name" in (v as object)) return String((v as { name: unknown }).name)
+    return JSON.stringify(v)
+  }
   return String(v)
 }
 
@@ -156,15 +169,16 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
             <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
               {columns.map(c => {
                 const raw = r.values?.[c]
-                if (isStatusColumn(c) && raw != null && String(raw).trim() !== "") {
-                  const { bg, fg } = statusColor(String(raw))
+                const rawText = fmtCell(raw)
+                if (isStatusColumn(c) && rawText !== "—") {
+                  const { bg, fg } = statusColor(rawText)
                   return (
                     <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
-                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{fmtCell(raw)}</span>
+                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
                     </td>
                   )
                 }
-                return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{fmtCell(raw)}</td>
+                return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{rawText}</td>
               })}
             </tr>
           ))}
