@@ -27,7 +27,29 @@ export async function callSuperhumanDocsApi<T>(path: string, searchParams?: Reco
     }
   }
   const url = `${SUPERHUMAN_DOCS_BASE_URL}${path}${qs.toString() ? `?${qs.toString()}` : ""}`
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } })
+
+  // SEBELUMNYA: request bisa nyangkut 100+ detik sebelum akhirnya gagal
+  // dengan pesan generik "fetch failed" doang (ketauan pas dites user di
+  // local — di Vercel jalan lancar, tapi di jaringan lokal/kantor kena
+  // timeout/block). Dua perbaikan: (1) timeout eksplisit 15 detik lewat
+  // AbortController biar nggak nunggu lama banget, (2) bungkus fetch
+  // dengan try/catch buat nangkep detail error jaringan (e.cause.code —
+  // ETIMEDOUT/ENOTFOUND/dll) yang sebelumnya ketelen, cuma nyisain "fetch
+  // failed" polos tanpa info apa-apa.
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+  let res: Response
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: controller.signal })
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") {
+      throw new SuperhumanDocsError(`Request ke Superhuman Docs timeout (>15 detik) — kemungkinan jaringan lokal/kantor kamu lambat atau diblokir ke coda.io. Coba cek koneksi internet/VPN/firewall, atau tes lagi dari jaringan lain.`)
+    }
+    const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
+    throw new SuperhumanDocsError(`Gagal konek ke Superhuman Docs: ${e instanceof Error ? e.message : String(e)}${cause ? ` (cause: ${cause})` : ""} — kemungkinan jaringan lokal/kantor kamu nggak bisa jangkau coda.io (firewall/proxy/DNS), coba cek koneksi internet/VPN kamu.`)
+  } finally {
+    clearTimeout(timeout)
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "")
     if (res.status === 401) throw new SuperhumanDocsError("Token Superhuman Docs invalid/expired (HTTP 401) — cek lagi SUPERHUMAN_DOCS_API_TOKEN")
