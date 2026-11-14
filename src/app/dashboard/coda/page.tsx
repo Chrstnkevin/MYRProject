@@ -136,10 +136,13 @@ function fmtCell(v: unknown): string {
 // koma MANUAL oleh orang yang nginput — koma di situ AMBIGU karena
 // judul dokumennya sendiri sering ada koma (mis. "...Kanvas, Gudang
 // Lain, R1, R2" itu SATU judul, bukan 4 item). Dipisah pakai pola KODE
-// dokumen (mis. "P26-XXX-MTX_(PHI)", "I26-400-MTX_(PHI)") sebagai
-// penanda AWAL tiap referensi baru lewat lookahead split — bukan split
-// polos per koma.
-const DOC_REF_SPLIT_RE = /(?=[A-Z]\d{2}-[\w]+-[A-Z]+_\([A-Z]+\))/g
+// dokumen sebagai penanda AWAL tiap referensi baru lewat lookahead
+// split — bukan split polos per koma. Formatnya ternyata beda-beda per
+// tim: PHI diakhiri "_(TEAM)" (mis. "P26-XXX-MTX_(PHI)"), tapi
+// SCP/MT cuma diakhiri "_" doang tanpa kurung (mis.
+// "R26-DDD-AIX_Research Model Baseline") — makanya bagian
+// "\([A-Z]+\)" di akhir dibikin OPSIONAL, bukan wajib.
+const DOC_REF_SPLIT_RE = /(?=[A-Z]\d{2}-[\w]+-[A-Z]+_(?:\([A-Z]+\))?)/g
 function splitDocRefText(s: string): string[] {
   const parts = s.split(DOC_REF_SPLIT_RE).map(p => p.replace(/^[,\s]+|[,\s]+$/g, "")).filter(Boolean)
   return parts.length > 0 ? parts : [s]
@@ -314,13 +317,17 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map(r => {
+          {sortedRows.map((r, rowIdx) => {
             const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
             const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
             const n = Math.max(docs.length, statuses.length)
             const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
+            // Selang-seling per BARIS CODA (bukan per pasangan) — biar
+            // kelihatan jelas batas 1 "blok" (KPI/Request/dst itu 1
+            // nilai buat 1 blok penuh, bukan per pasangan Doc Ref).
+            const rowBg = rowIdx % 2 === 1 ? "var(--surface2)" : undefined
             return (
-              <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+              <tr key={r.id} style={{ borderBottom: "2px solid var(--border)", background: rowBg }}>
                 {slots.map((s, i) => {
                   if (s.type === "docstatus") {
                     return (
@@ -349,12 +356,12 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
                   if (isStatusColumn(s.col) && rawText !== "—") {
                     const { bg, fg } = statusColor(rawText)
                     return (
-                      <td key={i} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                      <td key={i} style={{ padding: "7px 10px", whiteSpace: "nowrap", verticalAlign: "middle" }}>
                         <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
                       </td>
                     )
                   }
-                  return <td key={i} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "top" }}>{rawText}</td>
+                  return <td key={i} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap", verticalAlign: "middle" }}>{rawText}</td>
                 })}
               </tr>
             )
