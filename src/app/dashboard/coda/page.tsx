@@ -333,14 +333,20 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
                     return (
                       <td key={i} colSpan={2} style={{ padding: 0, verticalAlign: "top", minWidth: 320 }}>
                         {n === 0 ? <div style={{ padding: "7px 10px", color: "var(--text3)" }}>—</div> : (
-                          <div style={{ display: "grid", gridTemplateColumns: "3fr 1fr" }}>
+                          // minmax(0, Nfr) WAJIB — "3fr 1fr" polos punya batas
+                          // bawah "auto" (ngikutin ukuran konten), jadi teks
+                          // Doc. Ref. yang panjang/nggak mau wrap bisa maksa
+                          // kolomnya lebih lebar dari jatah & nabrak ke Status
+                          // Dev (ketauan dari screenshot user). minmax(0,..)
+                          // + overflowWrap maksa teks wrap di DALAM jatahnya.
+                          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) minmax(0, 1fr)" }}>
                             {pairs.map((p, j) => {
                               const sc = p.status ? statusColor(p.status) : null
                               const bb = j < n - 1 ? "1px dashed var(--border)" : "none"
                               return (
                                 <Fragment key={j}>
-                                  <div style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)" }}>{p.doc}</div>
-                                  <div style={{ padding: "7px 10px", borderBottom: bb, whiteSpace: "nowrap" }}>
+                                  <div style={{ padding: "7px 10px", color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word", minWidth: 0 }}>{p.doc}</div>
+                                  <div style={{ padding: "7px 10px", borderBottom: bb, whiteSpace: "nowrap", minWidth: 0 }}>
                                     {sc ? <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: sc.bg, color: sc.fg }}>{p.status}</span> : "—"}
                                   </div>
                                 </Fragment>
