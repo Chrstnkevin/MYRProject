@@ -72,33 +72,27 @@ const ADOP_CATEGORIES: { key: string; label: string; match: (v: string) => boole
   { key: "hsj", label: "HSJ", match: v => v.trim().toUpperCase() === "HSJ", color: "#7C3AED" },
   { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT", color: "#0891B2" },
 ]
-// Urutan kolom sprint yang diminta user (Submit->Review->Dev->Test) —
-// raw API Coda ngasih kolom dalam urutan nggak tentu, jadi dipaksa rapi.
-const ADOP_SPRINT_ORDER = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint"]
+// ADOP sekarang baca dari base table "Project Backlog" (lihat
+// TableLocation.viaViewName) yang kolomnya JAUH lebih banyak/generic
+// (dipakai bareng banyak page lain) — makanya dipersempit ke SET kolom
+// yang eksplisit diminta user, bukan nampilin semua kolom yang kebaca.
+const ADOP_PREVIEW_COLS = ["Submit Sprint", "Review Sprint", "Dev Sprint", "Test Sprint", "Status Dev", "PIC APPS", "PIC BR", "Request", "Deadline", "Doc Name"]
 
-// Taruh kolom-kolom di `priority` (yang beneran ADA di `columns`) jadi
-// satu kelompok berurutan persis sesuai urutan `priority`, posisinya di
-// tempat kemunculan PERTAMA salah satu dari mereka di `columns` asli.
-// Kolom lain di luar `priority` tetap di urutan aslinya.
-function reorderColumns(columns: string[], priority: string[]): string[] {
-  const priorityNorm = priority.map(normKey)
-  const isPriority = (c: string) => priorityNorm.includes(normKey(c))
-  const result: string[] = []
-  let inserted = false
-  for (const c of columns) {
-    if (isPriority(c)) {
-      if (!inserted) {
-        for (const p of priority) {
-          const match = columns.find(col => normKey(col) === normKey(p))
-          if (match) result.push(match)
-        }
-        inserted = true
-      }
-      continue
-    }
-    result.push(c)
+// Cocokin `desired` (nama kolom yang KITA mau, longgar lewat normKey) ke
+// nama kolom ASLI yang beneran ada di `rows` — biar DynamicTable (yang
+// butuh key PERSIS, bukan normalized) tetap dapet key yang valid. Kolom
+// yang diminta tapi nggak ketemu di data balik lewat `missing` (buat
+// ditampilin sebagai peringatan, bukan disembunyiin diam-diam).
+function resolveColumns(rows: CodaRowItem[], desired: string[]): { found: string[]; missing: string[] } {
+  const allCols = collectColumns(rows)
+  const found: string[] = []
+  const missing: string[] = []
+  for (const d of desired) {
+    const match = allCols.find(c => normKey(c) === normKey(d))
+    if (match) found.push(match)
+    else missing.push(d)
   }
-  return result
+  return { found, missing }
 }
 
 function fmtCell(v: unknown): string {
@@ -250,6 +244,8 @@ export default function CodaPage() {
   // nilai kolom "Plan Pilot" yang dipilih ("" = semua, nggak difilter).
   const [planPilotFilter, setPlanPilotFilter] = useState<Record<string, string>>({})
   const [adopSubTab, setAdopSubTab] = useState(ADOP_CATEGORIES[0].key)
+  const [adopTimelineFilter, setAdopTimelineFilter] = useState("")
+  const [adopSprintFilter, setAdopSprintFilter] = useState("")
   // Debug: daftar SEMUA table/view di doc yang lagi aktif — dipakai buat
   // ketauan kalau table yang ketemu itu "view" (filter permanen beda dari
   // base table-nya), biar bisa dicocokin mana yang punya baris lengkap.
@@ -353,19 +349,36 @@ export default function CodaPage() {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
   })() : []
 
-  // Khusus tab ADOP: filter ke sub-tab (User) yang aktif, urutin baris
-  // by KPI dulu baru Request, kolom sprint dirapihin urutannya.
+  // Khusus tab ADOP: filter ke sub-tab (User) yang aktif dulu, baru dropdown
+  // Timeline & ADOP Sprint (opsi dropdown dihitung dari baris sub-tab yang
+  // aktif, SEBELUM difilter dropdown, biar opsinya nggak ngilang begitu
+  // salah satu dropdown dipilih). Baris diurutin KPI dulu baru Request.
   const adopActive = ADOP_CATEGORIES.find(c => c.key === adopSubTab)!
-  const adopRows = activeTab === "adop"
-    ? rows
-        .filter(r => adopActive.match(getFieldValue(r.values, "User")))
-        .sort((a, b) => {
-          const ka = getFieldValue(a.values, "KPI"), kb = getFieldValue(b.values, "KPI")
-          if (ka !== kb) return ka.localeCompare(kb)
-          return getFieldValue(a.values, "Request").localeCompare(getFieldValue(b.values, "Request"))
-        })
-    : []
-  const adopColumns = activeTab === "adop" ? reorderColumns(collectColumns(adopRows), ADOP_SPRINT_ORDER) : []
+  const adopCategoryRows = activeTab === "adop" ? rows.filter(r => adopActive.match(getFieldValue(r.values, "User"))) : []
+  const adopTimelineOptions = Array.from(new Set(adopCategoryRows.map(r => getFieldValue(r.values, "Timeline")).filter(Boolean))).sort()
+  const adopSprintOptions = Array.from(new Set(adopCategoryRows.map(r => getFieldValue(r.values, "ADOP Sprint")).filter(Boolean))).sort()
+  const adopRows = adopCategoryRows
+    .filter(r => !adopTimelineFilter || getFieldValue(r.values, "Timeline") === adopTimelineFilter)
+    .filter(r => !adopSprintFilter || getFieldValue(r.values, "ADOP Sprint") === adopSprintFilter)
+    .sort((a, b) => {
+      const ka = getFieldValue(a.values, "KPI"), kb = getFieldValue(b.values, "KPI")
+      if (ka !== kb) return ka.localeCompare(kb)
+      return getFieldValue(a.values, "Request").localeCompare(getFieldValue(b.values, "Request"))
+    })
+  const { found: adopColumns, missing: adopMissingColumns } = activeTab === "adop" ? resolveColumns(adopRows, ADOP_PREVIEW_COLS) : { found: [], missing: [] }
+
+  // Chart "jumlah item per periode Deadline" (diminta user) — dihitung
+  // dari adopRows yang UDAH kena semua filter (sub-tab + Timeline + ADOP
+  // Sprint), biar chart-nya selalu sinkron sama tabel di bawahnya.
+  const deadlineCounts = activeTab === "adop" ? (() => {
+    const counts = new Map<string, number>()
+    for (const r of adopRows) {
+      const v = getFieldValue(r.values, "Deadline").trim() || "(kosong)"
+      counts.set(v, (counts.get(v) || 0) + 1)
+    }
+    return Array.from(counts.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+  })() : []
+  const deadlineMax = Math.max(1, ...deadlineCounts.map(([, n]) => n))
 
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -549,11 +562,12 @@ export default function CodaPage() {
       ) : !error && activeTab === "adop" ? (
         // Tab ADOP — 4 TAB terpisah (User: PHI/SCP/HSJ/MT), beda dari
         // Plan Pilot yang 4 panel sejajar. Baris diurutin KPI->Request,
-        // kolom sprint dirapihin Submit->Review->Dev->Test.
+        // kolom dipersempit ke ADOP_PREVIEW_COLS, + filter Timeline &
+        // ADOP Sprint, + chart jumlah item per periode Deadline.
         <>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             {ADOP_CATEGORIES.map(c => (
-              <button key={c.key} onClick={() => setAdopSubTab(c.key)}
+              <button key={c.key} onClick={() => { setAdopSubTab(c.key); setAdopTimelineFilter(""); setAdopSprintFilter("") }}
                 style={{
                   padding: "7px 14px", borderRadius: 999, border: `1px solid ${adopSubTab === c.key ? c.color : "var(--border)"}`,
                   background: adopSubTab === c.key ? c.color + "1A" : "var(--surface)", cursor: "pointer",
@@ -564,7 +578,47 @@ export default function CodaPage() {
                 {c.label} <span style={{ opacity: 0.8 }}>({rows.filter(r => c.match(getFieldValue(r.values, "User"))).length})</span>
               </button>
             ))}
+            <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+              {adopTimelineOptions.length > 0 && (
+                <select value={adopTimelineFilter} onChange={e => setAdopTimelineFilter(e.target.value)}
+                  style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
+                  <option value="">— Semua Timeline —</option>
+                  {adopTimelineOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              )}
+              {adopSprintOptions.length > 0 && (
+                <select value={adopSprintFilter} onChange={e => setAdopSprintFilter(e.target.value)}
+                  style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: 11, fontFamily: "inherit" }}>
+                  <option value="">— Semua ADOP Sprint —</option>
+                  {adopSprintOptions.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              )}
+            </div>
           </div>
+
+          {adopMissingColumns.length > 0 && (
+            <p style={{ fontSize: 10, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "6px 10px" }}>
+              Kolom nggak ketemu di data: {adopMissingColumns.join(", ")} — kemungkinan nama aslinya beda di table &quot;{loc?.tableName}&quot;.
+            </p>
+          )}
+
+          {deadlineCounts.length > 0 && (
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "var(--text)", marginBottom: 10 }}>Jumlah item per Deadline ({adopActive.label}{adopTimelineFilter ? ` · ${adopTimelineFilter}` : ""}{adopSprintFilter ? ` · ${adopSprintFilter}` : ""})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {deadlineCounts.map(([period, n]) => (
+                  <div key={period} style={{ display: "flex", alignItems: "center", gap: 8 }} title={`${period}: ${n} item`}>
+                    <span style={{ width: 90, flexShrink: 0, fontSize: 10, color: "var(--text2)", textAlign: "right" }}>{period}</span>
+                    <div style={{ flex: 1, background: "var(--surface2)", borderRadius: 4, height: 16, position: "relative" }}>
+                      <div style={{ width: `${Math.max(4, (n / deadlineMax) * 100)}%`, height: "100%", borderRadius: 4, background: adopActive.color }} />
+                    </div>
+                    <span style={{ width: 28, flexShrink: 0, fontSize: 10, fontWeight: 700, color: "var(--text)" }}>{n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
             <DynamicTable rows={adopRows} columns={adopColumns} />
           </div>
