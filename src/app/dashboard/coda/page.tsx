@@ -39,7 +39,12 @@ interface TableLocation { docId: string; docName: string; tableId: string; table
 // richValues: minta rows TANPA valueFormat=simple (lihat catatan di
 // rows/route.ts) — dibutuhin ADOP biar kolom multi-value (Doc. Ref.,
 // Status Dev) tetep array asli, nggak digabung jadi 1 string koma.
-interface TabDef { key: string; label: string; matcher: (name: string) => boolean; richValues?: boolean }
+// pageNameHint: dipakai kalau `matcher` bisa cocok ke LEBIH DARI 1
+// table (mis. "semua-dokumen" cocok ke "List Monitoring 2/4/5/6/7/10/
+// dst") — disambiguasi dengan ngecek page INDUK tiap table kandidat
+// (field `parent.name` dari Coda, cuma kebaca lewat endpoint detail
+// satuan) dan ambil yang page-nya mengandung teks ini (case-insensitive).
+interface TabDef { key: string; label: string; matcher: (name: string) => boolean; richValues?: boolean; pageNameHint?: string }
 
 // Nama table dicocokkan longgar (bukan exact match ketat) biar tetep
 // jalan walau ada sedikit variasi penamaan di Coda-nya nanti.
@@ -52,7 +57,10 @@ const TABS: TabDef[] = [
   // splitDocRefText/splitStatusText, jadi nggak perlu ambil resiko
   // ganti format buat kolom lain (PIC Apps dst) yang udah jalan bener.
   { key: "adop", label: "ADOP", matcher: n => /adop/i.test(n) && /backlog/i.test(n) },
-  { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
+  // "List Monitoring" cocok ke BELASAN table (2/4/5/6/7/10/Afif/APPS/
+  // dst) — pageNameHint "yona" buat disambiguasi, dikonfirmasi user
+  // page-nya namanya "Yona Monitoring Doc".
+  { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring"), pageNameHint: "yona" },
 ]
 
 // Grouping Plan Pilot by "User"/"User Request" DIBUANG — 1 batch
@@ -618,7 +626,34 @@ async function resolveLocation(docId: string, docName: string, match: CodaTableI
   return { docId, docName, tableId: match.id, tableName: match.name, tableType: match.tableType, tableRowCount: match.rowCount }
 }
 
-async function findTable(matcher: (name: string) => boolean, fresh = false): Promise<TableLocation | null> {
+// Fetch parent page suatu table (cuma kebaca lewat endpoint detail
+// satuan, bukan /tables list) — dipakai buat disambiguasi kalau
+// `matcher` cocok ke lebih dari 1 table.
+async function pageNameOfTable(docId: string, tableId: string): Promise<string> {
+  try {
+    const res = await fetch(`/api/superhuman-docs/table-detail?docId=${encodeURIComponent(docId)}&tableId=${encodeURIComponent(tableId)}`).then(r => r.json())
+    return (res?.parent?.name as string | undefined) || ""
+  } catch {
+    return ""
+  }
+}
+
+// Dari SEMUA kandidat yang cocok matcher, pilih satu: kalau cuma 1
+// kandidat ya itu aja (nggak perlu cek apa-apa lagi, hemat request);
+// kalau lebih dari 1, cek page induk tiap kandidat SATU-SATU, ambil
+// yang page-nya mengandung `pageNameHint`. Nggak ketemu yang cocok ->
+// fallback ke kandidat pertama (lebih baik salah satu daripada error).
+async function pickBestMatch(docId: string, candidates: CodaTableItem[], pageNameHint?: string): Promise<CodaTableItem | null> {
+  if (candidates.length === 0) return null
+  if (candidates.length === 1 || !pageNameHint) return candidates[0]
+  for (const c of candidates) {
+    const pageName = await pageNameOfTable(docId, c.id)
+    if (pageName.toLowerCase().includes(pageNameHint.toLowerCase())) return c
+  }
+  return candidates[0]
+}
+
+async function findTable(matcher: (name: string) => boolean, fresh = false, pageNameHint?: string): Promise<TableLocation | null> {
   const f = fresh ? "&fresh=1" : ""
   const docsRes = await fetch(`/api/superhuman-docs/docs${fresh ? "?fresh=1" : ""}`).then(r => r.json())
   if (docsRes.error) throw new Error(docsRes.error)
@@ -628,7 +663,8 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
   if (knownDoc) {
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(knownDoc.id)}${f}`).then(r => r.json())
     if (!tablesRes.error) {
-      const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+      const candidates = ((tablesRes.items || []) as CodaTableItem[]).filter(t => matcher(t.name))
+      const match = await pickBestMatch(knownDoc.id, candidates, pageNameHint)
       if (match) return resolveLocation(knownDoc.id, knownDoc.name, match, fresh)
     }
   }
@@ -637,7 +673,8 @@ async function findTable(matcher: (name: string) => boolean, fresh = false): Pro
     if (d.id === KNOWN_DOC_ID) continue
     const tablesRes = await fetch(`/api/superhuman-docs/tables?docId=${encodeURIComponent(d.id)}${f}`).then(r => r.json())
     if (tablesRes.error) continue
-    const match = ((tablesRes.items || []) as CodaTableItem[]).find(t => matcher(t.name))
+    const candidates = ((tablesRes.items || []) as CodaTableItem[]).filter(t => matcher(t.name))
+    const match = await pickBestMatch(d.id, candidates, pageNameHint)
     if (match) return resolveLocation(d.id, d.name, match, fresh)
   }
   return null
@@ -670,7 +707,7 @@ export default function CodaPage() {
     try {
       let loc = located[tabKey]
       if (!loc || force) {
-        loc = await findTable(tab.matcher, force)
+        loc = await findTable(tab.matcher, force, tab.pageNameHint)
         if (!loc) throw new Error(`Table buat "${tab.label}" nggak ketemu di Doc manapun yang kebaca token ini — cek apakah token SUPERHUMAN_DOCS_API_TOKEN sudah bisa akses doc yang bersangkutan.`)
         setLocated(l => ({ ...l, [tabKey]: loc }))
       }
