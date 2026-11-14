@@ -15,7 +15,7 @@
 // akun Superhuman Docs, bukan kode.
 
 import { useEffect, useState } from "react"
-import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
+import { RefreshCw, AlertCircle, Loader2, Maximize2, X } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 
 interface CodaDocItem { id: string; name: string }
@@ -33,10 +33,66 @@ const TABS: TabDef[] = [
   { key: "semua-dokumen", label: "Semua Dokumen", matcher: n => n.trim().toLowerCase().startsWith("list monitoring") },
 ]
 
+// Khusus tab "Plan Pilot" — dipecah jadi 4 panel berdasarkan kolom
+// "User Request" (dikonfirmasi user), biar kebaca sekaligus dalam 1 layar
+// tanpa perlu scroll nyari. "HSJ / PGD" digabung jadi 1 panel sesuai
+// permintaan (tetap 4 panel total, bukan 5).
+const PLAN_PILOT_CATEGORIES: { key: string; label: string; match: (v: string) => boolean }[] = [
+  { key: "phi", label: "PHI", match: v => v.trim().toUpperCase() === "PHI" },
+  { key: "hsj-pgd", label: "HSJ / PGD", match: v => ["HSJ", "PGD"].includes(v.trim().toUpperCase()) },
+  { key: "mt", label: "MT", match: v => v.trim().toUpperCase() === "MT" },
+  { key: "sc", label: "SC", match: v => v.trim().toUpperCase() === "SC" },
+]
+const PREVIEW_COLS = ["Doc. No.", "Doc. Name", "Status Dev"]
+
 function fmtCell(v: unknown): string {
   if (v == null) return "—"
   if (typeof v === "object") return JSON.stringify(v)
   return String(v)
+}
+
+// Normalisasi nama kolom (buang spasi/titik, lowercase) biar pencarian
+// field nggak kejebak beda format kecil ("Doc. No." vs "Doc No" vs "doc_no").
+function normKey(s: string): string { return s.toLowerCase().replace(/[^a-z0-9]/g, "") }
+function getFieldValue(values: Record<string, unknown>, fieldName: string): string {
+  const target = normKey(fieldName)
+  for (const [k, v] of Object.entries(values)) {
+    if (normKey(k) === target) return v == null ? "" : String(v)
+  }
+  return ""
+}
+
+function collectColumns(rows: CodaRowItem[]): string[] {
+  const columns: string[] = []
+  const seen = new Set<string>()
+  for (const r of rows) {
+    for (const k of Object.keys(r.values || {})) {
+      if (!seen.has(k)) { seen.add(k); columns.push(k) }
+    }
+  }
+  return columns
+}
+
+function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[] }) {
+  if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
+            {columns.map(c => <th key={c} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+              {columns.map(c => <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{fmtCell(r.values?.[c])}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 async function findTable(matcher: (name: string) => boolean): Promise<TableLocation | null> {
@@ -57,6 +113,7 @@ export default function CodaPage() {
   const [rowsByTab, setRowsByTab] = useState<Record<string, CodaRowItem[]>>({})
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [errorByTab, setErrorByTab] = useState<Record<string, string>>({})
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -87,13 +144,15 @@ export default function CodaPage() {
   const isLoading = loading[activeTab]
   const error = errorByTab[activeTab]
 
-  const columns: string[] = []
-  const seen = new Set<string>()
-  for (const r of rows) {
-    for (const k of Object.keys(r.values || {})) {
-      if (!seen.has(k)) { seen.add(k); columns.push(k) }
-    }
-  }
+  const columns = collectColumns(rows)
+
+  // Khusus tab Plan Pilot: pecah rows jadi 4 kategori berdasarkan "User
+  // Request". Dihitung tiap render (bukan state terpisah) biar selalu
+  // sinkron sama rowsByTab tanpa perlu useEffect tambahan.
+  const categorized = activeTab === "plan-pilot"
+    ? PLAN_PILOT_CATEGORIES.map(cat => ({ ...cat, rows: rows.filter(r => cat.match(getFieldValue(r.values, "User Request"))) }))
+    : null
+  const expandedCat = categorized?.find(c => c.key === expandedCategory) || null
 
   return (
     <div style={{ fontFamily: "'Plus Jakarta Sans',sans-serif", display: "flex", flexDirection: "column", gap: 14 }}>
@@ -142,28 +201,47 @@ export default function CodaPage() {
 
       {isLoading ? (
         <p style={{ fontSize: 12, color: "var(--text3)" }}>Memuat data {tab.label}...</p>
+      ) : !error && categorized ? (
+        // Tab Plan Pilot — 4 panel sekaligus dalam 1 layar, masing-masing
+        // bisa di-expand buat lihat full table-nya.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px,1fr))", gap: 12 }}>
+          {categorized.map(cat => (
+            <div key={cat.key} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text)" }}>{cat.label} <span style={{ fontWeight: 600, color: "var(--text3)" }}>({cat.rows.length})</span></span>
+                <button onClick={() => setExpandedCategory(cat.key)} title="Expand"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}>
+                  <Maximize2 size={13} />
+                </button>
+              </div>
+              <DynamicTable rows={cat.rows.slice(0, 6)} columns={PREVIEW_COLS} />
+              {cat.rows.length > 6 && (
+                <button onClick={() => setExpandedCategory(cat.key)}
+                  style={{ width: "100%", padding: "8px", border: "none", borderTop: "1px solid var(--border)", background: "var(--surface2)", cursor: "pointer", fontSize: 10, color: "#0891B2", fontWeight: 700 }}>
+                  Lihat semua {cat.rows.length} baris →
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       ) : !error && (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-          {rows.length === 0 ? (
-            <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                <thead>
-                  <tr style={{ textAlign: "left", color: "var(--text3)", borderBottom: "1px solid var(--border)", background: "var(--surface2)" }}>
-                    {columns.map(c => <th key={c} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map(r => (
-                    <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                      {columns.map(c => <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{fmtCell(r.values?.[c])}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <DynamicTable rows={rows} columns={columns} />
+        </div>
+      )}
+
+      {expandedCat && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setExpandedCategory(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 1100, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>{expandedCat.label} — {expandedCat.rows.length} baris</span>
+              <button onClick={() => setExpandedCategory(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", display: "flex" }}><X size={18} /></button>
             </div>
-          )}
+            <div style={{ overflowY: "auto" }}>
+              <DynamicTable rows={expandedCat.rows} columns={collectColumns(expandedCat.rows)} />
+            </div>
+          </div>
         </div>
       )}
 
