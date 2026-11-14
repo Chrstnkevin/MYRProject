@@ -380,9 +380,22 @@ interface CodaDocItem { id: string; name: string; ownerName?: string }
 interface CodaTableItem { id: string; name: string; rowCount?: number }
 interface CodaRowItem { id: string; name?: string; values: Record<string, unknown> }
 
-function pickByKeyPattern(values: Record<string, unknown>, pattern: RegExp): string {
-  for (const [k, v] of Object.entries(values)) {
-    if (pattern.test(k) && v != null) return String(v)
+// SEBELUMNYA pattern doc_no_nama digabung jadi 1 regex
+// (/doc.*name|nama.*dokumen|doc.*no/i) — ternyata BUG kalau dipakai di
+// tabel "Plan Pilot"/"List Monitoring" (Doc. No. Superhuman Docs): kolom
+// "Doc. No." SELALU muncul di object values SEBELUM "Doc. Name" (ngikutin
+// urutan kolom tabel), dan karena di satu regex alternation nggak ada
+// prioritas antar cabang — yang menang itu KEY MANA YANG KETEMU DULUAN
+// pas looping, bukan cabang regex mana yang "lebih tepat". Akibatnya
+// doc_no_nama ke-isi nomor dokumen doang (mis. "I26-466"), bukan nama
+// lengkapnya. Fix: coba tiap pattern SATU-SATU secara berurutan (array),
+// baru lanjut ke pattern berikutnya kalau nggak ada key yang cocok sama
+// sekali di pattern sebelumnya — ini yang bikin prioritas beneran jalan.
+function pickByKeyPatterns(values: Record<string, unknown>, patterns: RegExp[]): string {
+  for (const pattern of patterns) {
+    for (const [k, v] of Object.entries(values)) {
+      if (pattern.test(k) && v != null) return String(v)
+    }
   }
   return ""
 }
@@ -441,12 +454,12 @@ function CodaPickerModal({ defaultOnVersion, onClose, onAdd }: {
   function confirmAdd() {
     const table = tables.find(t => t.id === selectedTableId)
     const mapped: DocRow[] = rows.filter(r => checked.has(r.id)).map(r => {
-      const docNoNama = pickByKeyPattern(r.values, /doc.*name|nama.*dokumen|doc.*no/i) || r.name || Object.values(r.values)[0] as string || ""
+      const docNoNama = pickByKeyPatterns(r.values, [/doc\.?\s*name/i, /nama.*dokumen/i, /doc\.?\s*no/i]) || r.name || Object.values(r.values)[0] as string || ""
       return {
         id: newId(),
-        modul: pickByKeyPattern(r.values, /^modul$/i),
+        modul: pickByKeyPatterns(r.values, [/modul/i]),
         doc_no_nama: docNoNama,
-        keterangan: pickByKeyPattern(r.values, /keterangan/i),
+        keterangan: pickByKeyPatterns(r.values, [/keterangan/i, /description/i]),
         on_version: defaultOnVersion,
         req_by: "", test_by: "", status: "",
         source_coda_doc_id: selectedDocId, source_coda_table_id: table?.id || selectedTableId, source_coda_row_id: r.id,
@@ -498,7 +511,7 @@ function CodaPickerModal({ defaultOnVersion, onClose, onAdd }: {
               ) : (
                 <div style={{ border: "1px solid var(--border)", borderRadius: 8, maxHeight: 280, overflowY: "auto" }}>
                   {rows.map(r => {
-                    const label = pickByKeyPattern(r.values, /doc.*name|nama.*dokumen/i) || r.name || Object.values(r.values)[0] as string || r.id
+                    const label = pickByKeyPatterns(r.values, [/doc\.?\s*name/i, /nama.*dokumen/i]) || r.name || Object.values(r.values)[0] as string || r.id
                     const isChecked = checked.has(r.id)
                     return (
                       <div key={r.id} onClick={() => toggle(r.id)}
