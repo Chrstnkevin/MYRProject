@@ -773,7 +773,16 @@ export default function CodaPage() {
   // per-baris per-render.
   const [driveFiles, setDriveFiles] = useState<Record<string, DriveFile[]>>({})
   useEffect(() => {
-    fetch("/api/coda/drive-docs").then(r => r.json()).then(d => { if (d.files) setDriveFiles(d.files) }).catch(() => {})
+    fetch("/api/coda/drive-docs")
+      .then(r => r.json())
+      .then(d => {
+        if (d.files) setDriveFiles(d.files)
+        // Diagnostik — kalau GOOGLE_SERVICE_ACCOUNT_KEY belum/salah
+        // setting di hosting, errornya kebaca di sini (console browser),
+        // bukan ditelan diam-diam kayak sebelumnya.
+        else console.error("[CODA] Gagal ambil daftar file Drive:", d.error)
+      })
+      .catch(e => console.error("[CODA] Gagal fetch /api/coda/drive-docs:", e))
   }, [])
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
