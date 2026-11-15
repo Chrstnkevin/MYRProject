@@ -15,9 +15,10 @@
 // akun Superhuman Docs, bukan kode.
 
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react"
-import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
+import { RefreshCw, AlertCircle, Loader2, ExternalLink } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { isoWeekInfo, isoWeekStart, parseYearWeek } from "@/lib/isoWeek"
+import { detectCompanies, findDriveFileForDoc, type DriveFile } from "@/lib/docMatch"
 import type { DocRow as ReportDocRow, SubdistRow as ReportSubdistRow, PlanPilotReportData } from "@/lib/planPilotExcelTemplate"
 
 interface CodaDocItem { id: string; name: string }
@@ -364,7 +365,15 @@ function StatusBarChart({ title, subtitle, data }: { title: string; subtitle?: s
   )
 }
 
-function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[] }) {
+function DynamicTable({ rows, columns, driveLookup, driveLookupCol }: {
+  rows: CodaRowItem[]; columns: string[]
+  // Opsional — cuma dipake Plan Pilot buat nampilin tombol "Lihat
+  // Dokumen" (diminta user, sama kayak ADOP). driveLookup dipanggil per
+  // baris, balikin file Drive yang cocok (atau null kalau nggak ketemu);
+  // ikonnya ditaruh nempel di kolom `driveLookupCol`.
+  driveLookup?: (row: CodaRowItem) => DriveFile | null
+  driveLookupCol?: string
+}) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("asc")
   if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
@@ -379,23 +388,31 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map(r => (
-            <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-              {columns.map(c => {
-                const raw = r.values?.[c]
-                const rawText = fmtCell(raw)
-                if (isStatusColumn(c) && rawText !== "—") {
-                  const { bg, fg } = statusColor(rawText)
+          {sortedRows.map(r => {
+            const driveFile = driveLookup ? driveLookup(r) : null
+            return (
+              <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                {columns.map(c => {
+                  const raw = r.values?.[c]
+                  const rawText = fmtCell(raw)
+                  if (isStatusColumn(c) && rawText !== "—") {
+                    const { bg, fg } = statusColor(rawText)
+                    return (
+                      <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+                      </td>
+                    )
+                  }
                   return (
-                    <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
-                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+                    <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>
+                      {rawText}
+                      {driveLookupCol && normKey(c) === normKey(driveLookupCol) && driveFile && <DriveLinkIcon file={driveFile} />}
                     </td>
                   )
-                }
-                return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{rawText}</td>
-              })}
-            </tr>
-          ))}
+                })}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -418,8 +435,17 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 // docRefKey/statusKey) — dipakai nentuin DI POSISI MANA pasangan
 // Doc.Ref/Status Dev nongol relatif ke kolom lain (mis. biar "Request"
 // bisa ditaruh SEBELUM Doc.Ref, cukup urutin ADOP_PREVIEW_COLS).
-function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
-  rows: CodaRowItem[]; columnOrder: string[]; docRefKey?: string; statusKey?: string
+function DriveLinkIcon({ file }: { file: DriveFile }) {
+  return (
+    <a href={file.webViewLink} target="_blank" rel="noopener noreferrer" title={`Buka di Drive: ${file.name}`}
+      style={{ display: "inline-flex", alignItems: "center", marginLeft: 5, color: "#1D4ED8", verticalAlign: "middle", flexShrink: 0 }}>
+      <ExternalLink size={12} />
+    </a>
+  )
+}
+
+function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
+  rows: CodaRowItem[]; columnOrder: string[]; docRefKey?: string; statusKey?: string; companyFiles: DriveFile[]
 }) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("asc")
@@ -477,7 +503,10 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
           const sc = p.status ? statusColor(p.status) : null
           const bb = j < rec.n - 1 ? "1px dashed var(--border)" : "none"
           bodyCells.push(
-            <div key={`d-${recIdx}-${j}`} style={{ ...cellBase, whiteSpace: "normal", gridColumn: col, gridRow: rowStart + j, color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word" }}>{p.doc}</div>
+            <div key={`d-${recIdx}-${j}`} style={{ ...cellBase, whiteSpace: "normal", gridColumn: col, gridRow: rowStart + j, color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word" }}>
+              {p.doc}
+              {(() => { const f = findDriveFileForDoc(companyFiles, p.doc); return f ? <DriveLinkIcon file={f} /> : null })()}
+            </div>
           )
           bodyCells.push(
             <div key={`s-${recIdx}-${j}`} style={{ ...cellBase, gridColumn: col + 1, gridRow: rowStart + j, borderBottom: bb }}>
@@ -730,6 +759,15 @@ export default function CodaPage() {
   // 2027.Q1 dkk pas waktunya).
   const [adopTimelineFilter, setAdopTimelineFilter] = useState<string[]>(["2026.Q4", "2026.Q4.BE", "2026.X"])
   const [adopSprintFilter, setAdopSprintFilter] = useState("")
+  // Daftar file Drive per perusahaan (PHI/HSJ/SCP/MT) — dipakai buat
+  // tombol "Lihat Dokumen" di ADOP & Plan Pilot (diminta user: muncul
+  // CUMA kalau filenya ketemu). Di-fetch 1x aja pas halaman dibuka
+  // (di-cache 10 menit di server, lihat src/lib/googleDrive.ts), bukan
+  // per-baris per-render.
+  const [driveFiles, setDriveFiles] = useState<Record<string, DriveFile[]>>({})
+  useEffect(() => {
+    fetch("/api/coda/drive-docs").then(r => r.json()).then(d => { if (d.files) setDriveFiles(d.files) }).catch(() => {})
+  }, [])
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -770,6 +808,19 @@ export default function CodaPage() {
   const planPilotAllRows = activeTab === "plan-pilot" ? rows : []
   const planPilotOptions = Array.from(new Set(planPilotAllRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
   const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
+  // Tombol "Lihat Dokumen" Plan Pilot (sama kayak ADOP, diminta user) —
+  // beda dari ADOP, 1 batch Plan Pilot bisa nyampur beberapa User
+  // sekaligus ("PHI + ALL" dkk), jadi SEMUA perusahaan yang disebut di
+  // "User Request" dicoba, bukan exact-match 1 nilai.
+  const planPilotDriveLookup = (row: CodaRowItem): DriveFile | null => {
+    const userField = getFieldValue(row.values, "User Request") || getFieldValue(row.values, "User")
+    const docText = `${getFieldValue(row.values, "Doc. No.")} ${getFieldValue(row.values, "Doc. Name")}`
+    for (const c of detectCompanies(userField)) {
+      const match = findDriveFileForDoc(driveFiles[c] || [], docText)
+      if (match) return match
+    }
+    return null
+  }
   const { found: planPilotFoundCols, missing: planPilotMissingColumns } = activeTab === "plan-pilot" ? resolveColumns(planPilotRows, PLAN_PILOT_PREVIEW_COLS) : { found: [], missing: [] }
 
   // Prefill popup "Form Release (Excel)" dari baris Plan Pilot yang
@@ -958,7 +1009,7 @@ export default function CodaPage() {
           <StatusBarChart title={`Breakdown Status Dev${planPilotFilter ? ` — ${planPilotFilter}` : ""}`} subtitle={`${planPilotRows.length} baris`} data={statusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-            <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} />
+            <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} driveLookup={planPilotDriveLookup} driveLookupCol="Doc. No." />
           </div>
         </>
       ) : !error && activeTab === "adop" ? (
@@ -1022,7 +1073,7 @@ export default function CodaPage() {
           <StatusBarChart title={`Breakdown Status Dev (${adopActive.label})`} subtitle={`${adopRows.length} baris`} data={adopStatusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
-            <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} />
+            <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} companyFiles={driveFiles[adopActive.key.toUpperCase()] || []} />
           </div>
         </>
       ) : !error && (
