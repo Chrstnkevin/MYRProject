@@ -477,8 +477,15 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
     const n = Math.max(1, docs.length, statuses.length)
     const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
     // Masih "aktif" (belum semua doc-nya DONE/RELEASE/PILOT) — reminder
-    // telat cuma relevan buat baris yang masih ada kerjaan jalan.
-    const hasPending = pairs.some(p => p.status && !isDoneStatusText(p.status))
+    // telat cuma relevan buat baris yang masih ada kerjaan jalan. PENTING:
+    // kalau Doc. Ref.-nya KOSONG (docs.length === 0, nggak ada 1 pun doc
+    // yang ke-track), itu BUKAN berarti "udah selesai semua" — nggak ada
+    // yang bisa dicek, jadi default-nya tetep dianggap pending (biar
+    // reminder sprint tetep nyala). Ketauan dari bug: baris tanpa Doc.
+    // Ref. sama sekali nggak pernah dapet reminder apapun walau sprint-nya
+    // udah deket/lewat, padahal sprint-nya sendiri tetep berjalan di
+    // level baris (independen dari ada/nggaknya sub-item Doc. Ref.).
+    const hasPending = docs.length === 0 || pairs.some(p => p.status && !isDoneStatusText(p.status))
     return { r, n, pairs, hasPending }
   })
 
@@ -538,7 +545,7 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
           content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
         }
         bodyCells.push(
-          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center", borderRight: "1px solid var(--border)" }}>{content}</div>
         )
       }
     })
@@ -766,7 +773,16 @@ export default function CodaPage() {
   // per-baris per-render.
   const [driveFiles, setDriveFiles] = useState<Record<string, DriveFile[]>>({})
   useEffect(() => {
-    fetch("/api/coda/drive-docs").then(r => r.json()).then(d => { if (d.files) setDriveFiles(d.files) }).catch(() => {})
+    fetch("/api/coda/drive-docs")
+      .then(r => r.json())
+      .then(d => {
+        if (d.files) setDriveFiles(d.files)
+        // Diagnostik — kalau GOOGLE_SERVICE_ACCOUNT_KEY belum/salah
+        // setting di hosting, errornya kebaca di sini (console browser),
+        // bukan ditelan diam-diam kayak sebelumnya.
+        else console.error("[CODA] Gagal ambil daftar file Drive:", d.error)
+      })
+      .catch(e => console.error("[CODA] Gagal fetch /api/coda/drive-docs:", e))
   }, [])
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
