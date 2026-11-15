@@ -24,10 +24,27 @@ function base64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
 }
 
+// Paste JSON mentah ke env var hosting rawan corrupt (newline di dalam
+// private_key kadang ke-mangle pas disimpen lewat form UI) — makanya
+// terima 2 format: JSON polos (coba dulu), atau base64 dari JSON itu
+// (jauh lebih aman buat disimpen sebagai env var, cuma karakter
+// alfanumerik+/=, nggak ada newline/quote yang bisa rusak).
+function parseServiceAccountKey(raw: string): { client_email: string; private_key: string } {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    try {
+      return JSON.parse(Buffer.from(raw, "base64").toString("utf8"))
+    } catch {
+      throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY bukan JSON atau base64-JSON yang valid — kemungkinan ke-corrupt pas di-paste ke env var")
+    }
+  }
+}
+
 async function getAccessToken(): Promise<string> {
   const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_KEY
   if (!keyJson) throw new Error("GOOGLE_SERVICE_ACCOUNT_KEY belum di-set")
-  const sa = JSON.parse(keyJson) as { client_email: string; private_key: string }
+  const sa = parseServiceAccountKey(keyJson)
   const now = Math.floor(Date.now() / 1000)
   const header = { alg: "RS256", typ: "JWT" }
   const claim = {

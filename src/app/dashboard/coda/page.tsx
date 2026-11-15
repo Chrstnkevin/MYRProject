@@ -545,7 +545,7 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
           content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
         }
         bodyCells.push(
-          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center", borderRight: "1px solid var(--border)" }}>{content}</div>
         )
       }
     })
