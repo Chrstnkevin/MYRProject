@@ -61,8 +61,11 @@ export default function UserManagementPage() {
     // Error query SEBELUMNYA ditelan diam-diam — kalau tabel profiles
     // nggak ketemu (mis. migration-nya belum di-run ke database), ini
     // nongol sebagai "Semua User (0)" tanpa petunjuk apapun kenapa.
-    if (profsErr) console.error("[UserManagement] Gagal load profiles:", profsErr)
-    if (permsErr) console.error("[UserManagement] Gagal load user_permissions:", permsErr)
+    // Di-log sebagai STRING (bukan object mentah) soalnya overlay error
+    // Next.js kadang nge-render PostgrestError sebagai "{}" kosong
+    // walau isinya sebenernya ada (message/code/details/hint).
+    if (profsErr) console.error(`[UserManagement] Gagal load profiles: ${profsErr.message} | code=${profsErr.code} | details=${profsErr.details} | hint=${profsErr.hint}`)
+    if (permsErr) console.error(`[UserManagement] Gagal load user_permissions: ${permsErr.message} | code=${permsErr.code} | details=${permsErr.details} | hint=${permsErr.hint}`)
     setProfiles((profs as Profile[]) || [])
     const map = new Map<string, Set<string>>()
     ;(perms || []).forEach((p: { user_id: string; feature_key: string }) => {
