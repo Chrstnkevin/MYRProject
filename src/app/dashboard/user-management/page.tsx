@@ -54,10 +54,15 @@ export default function UserManagementPage() {
 
   async function loadAll() {
     setLoading(true)
-    const [{ data: profs }, { data: perms }] = await Promise.all([
+    const [{ data: profs, error: profsErr }, { data: perms, error: permsErr }] = await Promise.all([
       supabase.from("profiles").select("id,email,full_name,status,is_admin,created_at").order("created_at", { ascending: false }),
       supabase.from("user_permissions").select("user_id,feature_key"),
     ])
+    // Error query SEBELUMNYA ditelan diam-diam — kalau tabel profiles
+    // nggak ketemu (mis. migration-nya belum di-run ke database), ini
+    // nongol sebagai "Semua User (0)" tanpa petunjuk apapun kenapa.
+    if (profsErr) console.error("[UserManagement] Gagal load profiles:", profsErr)
+    if (permsErr) console.error("[UserManagement] Gagal load user_permissions:", permsErr)
     setProfiles((profs as Profile[]) || [])
     const map = new Map<string, Set<string>>()
     ;(perms || []).forEach((p: { user_id: string; feature_key: string }) => {
