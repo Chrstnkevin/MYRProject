@@ -478,14 +478,16 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
     const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
     // Masih "aktif" (belum semua doc-nya DONE/RELEASE/PILOT) — reminder
     // telat cuma relevan buat baris yang masih ada kerjaan jalan. PENTING:
-    // kalau Doc. Ref.-nya KOSONG (docs.length === 0, nggak ada 1 pun doc
-    // yang ke-track), itu BUKAN berarti "udah selesai semua" — nggak ada
-    // yang bisa dicek, jadi default-nya tetep dianggap pending (biar
-    // reminder sprint tetep nyala). Ketauan dari bug: baris tanpa Doc.
-    // Ref. sama sekali nggak pernah dapet reminder apapun walau sprint-nya
-    // udah deket/lewat, padahal sprint-nya sendiri tetep berjalan di
-    // level baris (independen dari ada/nggaknya sub-item Doc. Ref.).
-    const hasPending = docs.length === 0 || pairs.some(p => p.status && !isDoneStatusText(p.status))
+    // kalau Doc. Ref.-nya KOSONG, itu BUKAN berarti "udah selesai semua"
+    // — nggak ada yang bisa dicek, jadi default-nya tetep dianggap
+    // pending (biar reminder sprint tetep nyala). Dicek dari `pairs`
+    // (bukan docs.length mentah) soalnya toDocRefArray() buat value
+    // string KOSONG ("", bukan null) balikin ["", ] (panjang 1, bukan
+    // 0) — ketauan dari bug lanjutan: baris yang Doc. Ref.-nya kosong
+    // string (bukan null/undefined) MASIH aja nggak dapet reminder
+    // walau fix docs.length===0 sebelumnya udah dipasang.
+    const hasRealDoc = pairs.some(p => p.doc !== "—")
+    const hasPending = !hasRealDoc || pairs.some(p => p.status && !isDoneStatusText(p.status))
     return { r, n, pairs, hasPending }
   })
 

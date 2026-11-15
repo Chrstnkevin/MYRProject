@@ -2,7 +2,7 @@
 // Coda (ADOP "Doc. Ref." / Plan Pilot "Doc. No.") ke file di Google Drive
 // — dipakai bareng src/lib/googleDrive.ts (yang server-only, manggil Drive
 // API beneran) buat fitur tombol "Lihat Dokumen" di CODA.
-export interface DriveFile { name: string; webViewLink: string }
+export interface DriveFile { name: string; webViewLink: string; modifiedTime?: string }
 
 // Kode dokumen BR formatnya: 1 huruf + 2 digit tahun + "-" + nomor/"XXX" +
 // "-" + kode modul, mis. "I26-438-MTX", "D26-129-SFA", "T26-XXX-MTX" —
@@ -18,11 +18,22 @@ export function extractDocCode(text: string): string | null {
 
 // Cari file Drive yang nama-nya MENGANDUNG kode dokumen yang sama persis
 // kayak yang di-extract dari teks Coda-nya. null kalau kodenya nggak
-// ke-extract atau nggak ada file yang cocok.
+// ke-extract atau nggak ada file yang cocok. Kalau ada LEBIH DARI 1 file
+// yang cocok (mis. draft lama + final-nya kebetulan nama-nya mirip),
+// dipilih yang `modifiedTime`-nya PALING BARU — asumsinya versi terbaru
+// yang paling relevan, bukan asal ambil urutan pertama dari Drive API
+// (urutan itu nggak dijamin berarti apa-apa).
 export function findDriveFileForDoc(files: DriveFile[], docText: string): DriveFile | null {
   const code = extractDocCode(docText)
   if (!code) return null
-  return files.find(f => f.name.toUpperCase().includes(code)) || null
+  const matches = files.filter(f => f.name.toUpperCase().includes(code))
+  if (matches.length === 0) return null
+  if (matches.length === 1) return matches[0]
+  return matches.reduce((latest, f) => {
+    const a = f.modifiedTime ? Date.parse(f.modifiedTime) : 0
+    const b = latest.modifiedTime ? Date.parse(latest.modifiedTime) : 0
+    return a > b ? f : latest
+  })
 }
 
 // Plan Pilot nggak di-split per-perusahaan kayak ADOP (1 batch "Plan

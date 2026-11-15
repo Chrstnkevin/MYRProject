@@ -74,7 +74,7 @@ async function listFolderFiles(token: string, folderId: string): Promise<DriveFi
   let pageToken: string | undefined
   do {
     const q = encodeURIComponent(`'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'`)
-    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(name,webViewLink)&pageSize=200${pageToken ? `&pageToken=${pageToken}` : ""}`
+    const url = `https://www.googleapis.com/drive/v3/files?q=${q}&fields=nextPageToken,files(name,webViewLink,modifiedTime)&pageSize=200${pageToken ? `&pageToken=${pageToken}` : ""}`
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     const data = await res.json()
     if (!res.ok) throw new Error("Gagal list folder Drive: " + (data.error?.message || res.status))
