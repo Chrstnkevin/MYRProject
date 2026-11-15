@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   Upload, FileText, Sparkles, Loader2, Check, X, MessageSquarePlus,
   Download, AlertTriangle, Trash2, RotateCcw, MessagesSquare, Send, PanelRightOpen,
@@ -89,10 +89,13 @@ function renderFindingText(text: string) {
 
 // ── Highlight di preview: cari teks target di dalam text node (TreeWalker,
 // nggak nyentuh atribut/tag sama sekali), split node-nya, bungkus match-nya
-// pakai <mark>. Dipanggil ulang tiap findings/userComments berubah — makanya
-// SELALU unwrap mark lama dulu sebelum apply ulang, biar idempotent & nggak
-// numpuk mark bersarang berkali-kali.
+// pakai <mark> + nempelin badge 💬 kecil persis sesudahnya (jejak/tanda
+// biar keliatan jelas sepintas mana yang udah ada comment-nya, bukan cuma
+// ngandelin warna highlight doang). Dipanggil ulang tiap findings/
+// userComments berubah — makanya SELALU unwrap mark+badge lama dulu
+// sebelum apply ulang, biar idempotent & nggak numpuk mark bersarang.
 function unwrapMarks(root: HTMLElement) {
+  root.querySelectorAll("[data-review-badge]").forEach(badge => badge.remove())
   root.querySelectorAll("mark[data-review-mark]").forEach(mark => {
     const parent = mark.parentNode
     if (!parent) return
@@ -124,6 +127,18 @@ function highlightOne(root: HTMLElement, text: string, bg: string, border: strin
     mark.addEventListener("click", onClick)
     matchNode.parentNode?.insertBefore(mark, matchNode)
     mark.appendChild(matchNode)
+
+    const badge = document.createElement("span")
+    badge.setAttribute("data-review-badge", "1")
+    badge.textContent = "💬"
+    badge.title = "Lihat komentar"
+    badge.style.fontSize = "10px"
+    badge.style.verticalAlign = "super"
+    badge.style.marginLeft = "1px"
+    badge.style.cursor = "pointer"
+    badge.style.userSelect = "none"
+    badge.addEventListener("click", onClick)
+    mark.after(badge)
     return
   }
 }
@@ -152,6 +167,16 @@ export default function ReviewDocumentPage() {
   const previewRef = useRef<HTMLDivElement>(null)
   const previewWrapRef = useRef<HTMLDivElement>(null)
   const chatEndRef = useRef<HTMLDivElement>(null)
+  // Objek dangerouslySetInnerHTML HARUS di-memo — kalau bikin object
+  // literal baru `{ __html: html }` tiap render (meski isi stringnya
+  // SAMA), React nge-reset innerHTML preview-nya tiap kali component ini
+  // re-render karena state LAIN (sama sekali nggak terkait teks dokumen),
+  // yang ngancurin+bikin ulang semua text node di dalamnya — ini kebukti
+  // (lewat isolasi manual) jadi AKAR penyebab bug "select kalimat malah
+  // jadi dari atas dokumen": selection/Range yang lagi aktif nunjuk ke
+  // text node LAMA yang baru aja dihapus React, browser-nya reset ke
+  // posisi default pas itu kejadian.
+  const previewHtml = useMemo(() => ({ __html: html }), [html])
 
   useEffect(() => {
     (async () => {
@@ -471,7 +496,7 @@ export default function ReviewDocumentPage() {
                   minHeight: "500px", borderRadius: "2px", fontSize: "13.5px", lineHeight: 1.75,
                   color: "#1a1a1a", boxShadow: "0 1px 2px rgba(0,0,0,0.06), 0 10px 28px rgba(0,0,0,0.08)",
                 }}
-                dangerouslySetInnerHTML={{ __html: html }}
+                dangerouslySetInnerHTML={previewHtml}
               />
 
               {selection && (
