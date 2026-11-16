@@ -27,7 +27,19 @@ export default function RegisterPage() {
     const { data, error: signUpErr } = await supabase.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { full_name: fullName.trim() } },
+      options: {
+        data: { full_name: fullName.trim() },
+        // WAJIB di-set eksplisit di sini — kalau nggak, link konfirmasi
+        // di email Supabase default-nya ngarah ke "Site URL" yang
+        // di-setting di dashboard Supabase (Authentication > URL
+        // Configuration), yang sering ketinggalan di localhost:3000
+        // (default project baru) walau app-nya udah di-deploy. Dampaknya
+        // user yang daftar diarahkan ke localhost yang nggak nyambung
+        // (dilaporin user). window.location.origin otomatis ngikut
+        // domain tempat form ini dibuka (production ATAU local), jadi
+        // selalu bener di environment manapun.
+        emailRedirectTo: `${window.location.origin}/login`,
+      },
     })
 
     if (signUpErr) { setError(signUpErr.message); setLoading(false); return }
