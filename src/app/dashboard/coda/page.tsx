@@ -136,6 +136,41 @@ function buildReportText(batchName: string, rows: CodaRowItem[]): string {
   return lines.join("\n")
 }
 
+// Report WA buat ADOP (diminta user, format "Project {Request}:" + bullet
+// "·" per doc, dikasih ✅ kalau status-nya udah selesai) — beda dari
+// buildReportText() di atas: di-group per "Request" (nama project-nya),
+// bukan per Status Dev, dan tiap BARIS Coda bisa punya BANYAK pasangan
+// Doc. Ref./Status Dev sekaligus (parallel array, sama kayak AdopTable),
+// jadi semua pasangan dari SEMUA baris yang Request-nya sama digabung
+// jadi 1 list. Pakai rows yang UDAH kefilter (sub-tab company + Timeline
+// + Sprint filter yang lagi aktif), biar report-nya sesuai apa yang
+// kelihatan di layar.
+function buildAdopReportText(rows: CodaRowItem[], docRefKey?: string, statusKey?: string): string {
+  const order: string[] = []
+  const groups = new Map<string, string[]>()
+  for (const r of rows) {
+    const project = getFieldValue(r.values, "Request").trim() || "(Tanpa Nama Project)"
+    const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
+    const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
+    const n = Math.max(1, docs.length, statuses.length)
+    if (!groups.has(project)) { groups.set(project, []); order.push(project) }
+    for (let i = 0; i < n; i++) {
+      const doc = cellItemText(docs[i])
+      const status = cellItemText(statuses[i])
+      if (!doc && !status) continue
+      const check = status && isDoneStatusText(status) ? " ✅" : ""
+      groups.get(project)!.push(`${doc || "(tanpa dokumen)"} ${status}${check}`.trim())
+    }
+  }
+  const lines: string[] = []
+  order.forEach((project, idx) => {
+    if (idx > 0) lines.push("")
+    lines.push(`Project ${project}:`)
+    for (const item of groups.get(project)!) lines.push(`· ${item}`)
+  })
+  return lines.join("\n")
+}
+
 // Kolom multi-select/person-reference (mis. "Status Dev", "Plan Pilot",
 // "PIC Apps") balik dari Coda bukan string biasa — bisa array (kosong
 // kalau belum keisi) atau objek {name: ...} (kolom orang/row lain).
@@ -750,6 +785,7 @@ export default function CodaPage() {
   // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
   const [planPilotFilter, setPlanPilotFilter] = useState("")
   const [planPilotReportText, setPlanPilotReportText] = useState<string | null>(null)
+  const [adopReportText, setAdopReportText] = useState<string | null>(null)
   // Popup "Form Release (Excel)" — data di sini SELALU diprefill dari
   // Coda (lihat openReportExcelModal), tapi semuanya EDITABLE sebelum
   // di-generate (diminta user: "saya bisa edit valuenya terus klik
@@ -1060,6 +1096,11 @@ export default function CodaPage() {
                   {adopSprintOptions.map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
               )}
+              <button onClick={() => setAdopReportText(buildAdopReportText(adopRows, adopDocRefKey, adopStatusDevKey))}
+                disabled={adopRows.length === 0}
+                style={{ flexShrink: 0, padding: "7px 14px", borderRadius: 8, border: "none", background: adopRows.length > 0 ? "var(--accent)" : "var(--surface2)", cursor: adopRows.length > 0 ? "pointer" : "not-allowed", opacity: adopRows.length > 0 ? 1 : 0.5, fontSize: 11, color: adopRows.length > 0 ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap" }}>
+                📋 Buat Report
+              </button>
             </div>
           </div>
 
@@ -1112,6 +1153,26 @@ export default function CodaPage() {
               style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
             <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
               <button onClick={() => navigator.clipboard.writeText(planPilotReportText)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Copy ke Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adopReportText !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setAdopReportText(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📋 Report ADOP ({adopActive.label})</span>
+              <button onClick={() => setAdopReportText(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <textarea readOnly value={adopReportText}
+              style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => navigator.clipboard.writeText(adopReportText)}
                 style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 Copy ke Clipboard
               </button>
