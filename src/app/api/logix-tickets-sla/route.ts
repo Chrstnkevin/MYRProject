@@ -1,33 +1,12 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { cookieHeader, describeFetchError, fetchWithRetry, loginToLogix, LOGIX_BASE } from "@/lib/logixAuth"
 
 // Sumber data SLA/timing respon tiket (Response TAS, Time BR, Time Solved,
 // dst) — endpoint TERPISAH dari /api/logix-tickets (yang pakai
 // /ticketing/json), skema kolomnya beda total. URL & nama field di bawah
 // dikonfirmasi dari capture DevTools user langsung (Network tab pas buka
 // halaman "Log Respons" di Logix), BUKAN tebakan.
-
-const LOGIX_BASE = "https://phi.logix.my.id"
-
-function readSetCookies(res: Response): string[] {
-  const h = res.headers as unknown as { getSetCookie?: () => string[] }
-  if (typeof h.getSetCookie === "function") return h.getSetCookie()
-  const raw = res.headers.get("set-cookie")
-  return raw ? [raw] : []
-}
-
-function mergeCookies(jar: Map<string, string>, setCookies: string[]) {
-  for (const c of setCookies) {
-    const pair = c.split(";")[0]
-    const eq = pair.indexOf("=")
-    if (eq === -1) continue
-    jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim())
-  }
-}
-
-function cookieHeader(jar: Map<string, string>): string {
-  return Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join("; ")
-}
 
 // Urutan field ini SAMA PERSIS dengan urutan key di object data yang
 // dibalikin /ticketing/json1 (dikonfirmasi dari capture response JSON user).
@@ -74,27 +53,13 @@ export async function GET() {
   }
 
   try {
-    const jar = new Map<string, string>()
-
-    const loginPageRes = await fetch(`${LOGIX_BASE}/LogAuth`, { redirect: "manual" })
-    mergeCookies(jar, readSetCookies(loginPageRes))
-
-    const loginRes = await fetch(`${LOGIX_BASE}/LogAuth`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        ...(jar.size ? { Cookie: cookieHeader(jar) } : {}),
-      },
-      body: new URLSearchParams({ email: cred.email, password: cred.password, token: "" }).toString(),
-      redirect: "manual",
-    })
-    mergeCookies(jar, readSetCookies(loginRes))
+    const jar = await loginToLogix(cred.email, cred.password)
 
     if (!jar.has("ci_session")) {
       return NextResponse.json({ error: 'Login Logix gagal — cek email/password di "Kelola Kredensial".' }, { status: 401 })
     }
 
-    const slaRes = await fetch(`${LOGIX_BASE}/ticketing/json1`, {
+    const slaRes = await fetchWithRetry(`${LOGIX_BASE}/ticketing/json1`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -125,10 +90,6 @@ export async function GET() {
 
     return NextResponse.json(json)
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
-    return NextResponse.json({
-      error: `Gagal konek ke Logix: ${msg}${cause ? ` (cause: ${cause})` : ""}`,
-    }, { status: 500 })
+    return NextResponse.json({ error: describeFetchError(e) }, { status: 500 })
   }
 }
