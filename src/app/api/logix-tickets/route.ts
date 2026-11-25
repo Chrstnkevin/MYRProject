@@ -1,33 +1,12 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { cookieHeader, describeFetchError, fetchWithRetry, loginToLogix, LOGIX_BASE } from "@/lib/logixAuth"
 
 // Logix (phi.logix.my.id) pakai sesi cookie HttpOnly (ci_session) — beda
 // dari Ficom yang pakai token di header Authorization dan bisa dipanggil
 // langsung dari browser. Cookie HttpOnly tidak bisa dibaca/dibawa lintas
 // origin oleh JS browser, jadi login & pegang sesinya HARUS di sini
 // (server Next.js kita), bukan di client. Browser cuma manggil route ini.
-
-const LOGIX_BASE = "https://phi.logix.my.id"
-
-function readSetCookies(res: Response): string[] {
-  const h = res.headers as unknown as { getSetCookie?: () => string[] }
-  if (typeof h.getSetCookie === "function") return h.getSetCookie()
-  const raw = res.headers.get("set-cookie")
-  return raw ? [raw] : []
-}
-
-function mergeCookies(jar: Map<string, string>, setCookies: string[]) {
-  for (const c of setCookies) {
-    const pair = c.split(";")[0]
-    const eq = pair.indexOf("=")
-    if (eq === -1) continue
-    jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim())
-  }
-}
-
-function cookieHeader(jar: Map<string, string>): string {
-  return Array.from(jar.entries()).map(([k, v]) => `${k}=${v}`).join("; ")
-}
 
 // Urutan field ini SAMA PERSIS dengan urutan key di object data yang
 // dibalikin /ticketing/json1. Dua percobaan sebelumnya:
@@ -86,29 +65,13 @@ export async function GET() {
   }
 
   try {
-    const jar = new Map<string, string>()
-
-    // GET halaman login dulu, jaga-jaga kalau ada cookie (mis. CSRF) yang
-    // harus sudah ada sebelum submit form — sama seperti browser beneran.
-    const loginPageRes = await fetch(`${LOGIX_BASE}/LogAuth`, { redirect: "manual" })
-    mergeCookies(jar, readSetCookies(loginPageRes))
-
-    const loginRes = await fetch(`${LOGIX_BASE}/LogAuth`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        ...(jar.size ? { Cookie: cookieHeader(jar) } : {}),
-      },
-      body: new URLSearchParams({ email: cred.email, password: cred.password, token: "" }).toString(),
-      redirect: "manual",
-    })
-    mergeCookies(jar, readSetCookies(loginRes))
+    const jar = await loginToLogix(cred.email, cred.password)
 
     if (!jar.has("ci_session")) {
       return NextResponse.json({ error: 'Login Logix gagal — cek email/password di "Kelola Kredensial".' }, { status: 401 })
     }
 
-    const ticketRes = await fetch(`${LOGIX_BASE}/ticketing/json`, {
+    const ticketRes = await fetchWithRetry(`${LOGIX_BASE}/ticketing/json`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -119,7 +82,7 @@ export async function GET() {
       body: dataTablesBody(),
     })
 
-        const text = await ticketRes.text()
+    const text = await ticketRes.text()
     let json: unknown
     try {
       json = JSON.parse(text)
@@ -141,16 +104,8 @@ export async function GET() {
       }
     }
 
-        return NextResponse.json(json)
+    return NextResponse.json(json)
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    // "fetch failed" dari undici itu cuma pesan pembungkus — alasan aslinya
-    // (DNS gagal, koneksi ditolak, timeout, sertifikat SSL, dst) ada di
-    // e.cause. Tanpa ini kita cuma lihat "fetch failed" doang dan nggak
-    // tahu kenapa.
-    const cause = e instanceof Error && e.cause ? String((e.cause as { message?: string; code?: string }).code || e.cause) : undefined
-    return NextResponse.json({
-      error: `Gagal konek ke Logix: ${msg}${cause ? ` (cause: ${cause})` : ""}`,
-    }, { status: 500 })
+    return NextResponse.json({ error: describeFetchError(e) }, { status: 500 })
   }
 }
