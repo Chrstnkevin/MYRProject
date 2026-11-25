@@ -8,7 +8,7 @@ import {
   X, Sparkles, LogOut, Database, ClipboardList, FolderOpen,
   ChevronDown, ChevronRight, ImageIcon, UploadCloud, Globe,
   BarChart3, TrendingUp, Users, Server, HardDrive, RefreshCcw,
-    Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket, GitCompare, DollarSign, RefreshCw
+    Cloud, KeyRound, Radio, Pencil, BookOpen, Monitor, HeartHandshake, Activity, Ticket, GitCompare, DollarSign, RefreshCw, ShieldAlert
 } from "lucide-react"
 import { supabase } from "@/lib/supabase"
 import { featureKeyFromPath } from "@/lib/features"
@@ -125,6 +125,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const isUtilisasiActive     = NAV_UTILISASI.some(n => pathname.startsWith(n.path))
   const isMasterActive        = NAV_MASTER.some(n => pathname.startsWith(n.path))
   const isDokumenActive       = NAV_DOKUMEN.some(n => pathname.startsWith(n.path))
+  const isAdminNavActive      = NAV_ADMIN.some(n => pathname.startsWith(n.path))
 
   const [productivityOpen,  setProductivityOpen]  = useState(isProductivityActive)
   const [supportLokalOpen,  setSupportLokalOpen]  = useState(isSupportLokalActive)
@@ -134,6 +135,7 @@ export default function Sidebar({ isOpen, onClose }: Props) {
   const [utilisasiOpen,     setUtilisasiOpen]     = useState(isUtilisasiActive)
   const [masterOpen,        setMasterOpen]        = useState(isMasterActive)
   const [dokumenOpen,       setDokumenOpen]       = useState(isDokumenActive)
+  const [adminNavOpen,      setAdminNavOpen]      = useState(isAdminNavActive)
 
   const today   = new Date()
   const dayName = today.toLocaleDateString("id-ID", { weekday: "long" })
@@ -322,26 +324,6 @@ export default function Sidebar({ isOpen, onClose }: Props) {
             )
           })}
 
-          {/* User Management — admin-only */}
-          {isAdmin && NAV_ADMIN.map(({ icon: Icon, label, path, desc, badge, badgeColor }) => {
-            const active = isActive(path)
-            return (
-              <Link key={path} href={path} onClick={closeIfMobile}
-                style={{ display: "flex", alignItems: "center", gap: "12px", padding: "10px 12px", borderRadius: "var(--radius-sm)", border: "none", cursor: "pointer", width: "100%", textAlign: "left", transition: "all 0.15s", textDecoration: "none", background: active ? "var(--accent-muted)" : "transparent", fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
-                <div style={{ width: "34px", height: "34px", borderRadius: "9px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--accent)" : "var(--surface3)", transition: "all 0.15s" }}>
-                  <Icon size={16} color={active ? "white" : "var(--text3)"} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span style={{ fontSize: "13px", fontWeight: active ? 700 : 500, color: active ? "var(--accent)" : "var(--text)" }}>{label}</span>
-                    <span style={{ fontSize: "9px", fontWeight: 700, background: badgeColor, color: "white", padding: "1px 7px", borderRadius: "99px" }}>{badge}</span>
-                  </div>
-                  <div style={{ fontSize: "11px", color: "var(--text3)" }}>{desc}</div>
-                </div>
-              </Link>
-            )
-          })}
-
           {/* ── Productivity ── */}
           <div style={{ marginTop: "4px" }}>
             <GroupHeader
@@ -485,6 +467,25 @@ export default function Sidebar({ isOpen, onClose }: Props) {
               {NAV_DOKUMEN.filter(item => canAccess(item.path)).map(item => <NestedBtn key={item.path} {...item} />)}
             </NestedContainer>
           </div>
+
+          {/* ── Admin (User Management & Log Aktivitas) — digrup & ditaruh
+              paling bawah (diminta user), admin-only ── */}
+          {isAdmin && (
+            <div style={{ marginTop: "4px" }}>
+              <GroupHeader
+                icon={ShieldAlert}
+                label="Admin"
+                desc="User Management & Log Aktivitas"
+                isActive={isAdminNavActive}
+                isOpen={adminNavOpen}
+                onToggle={() => setAdminNavOpen(v => !v)}
+                accentColor="#7C3AED"
+              />
+              <NestedContainer open={adminNavOpen} lineColor="rgba(124,58,237,0.3)">
+                {NAV_ADMIN.map(item => <NestedBtn key={item.path} {...item} />)}
+              </NestedContainer>
+            </div>
+          )}
         </nav>
 
         {/* Bottom */}

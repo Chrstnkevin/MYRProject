@@ -15,9 +15,10 @@
 // akun Superhuman Docs, bukan kode.
 
 import { Fragment, useEffect, useState, type CSSProperties, type ReactNode } from "react"
-import { RefreshCw, AlertCircle, Loader2 } from "lucide-react"
+import { RefreshCw, AlertCircle, Loader2, ExternalLink } from "lucide-react"
 import MotivationBanner from "@/components/layout/MotivationBanner"
 import { isoWeekInfo, isoWeekStart, parseYearWeek } from "@/lib/isoWeek"
+import { detectCompanies, findDriveFileForDoc, type DriveFile } from "@/lib/docMatch"
 import type { DocRow as ReportDocRow, SubdistRow as ReportSubdistRow, PlanPilotReportData } from "@/lib/planPilotExcelTemplate"
 
 interface CodaDocItem { id: string; name: string }
@@ -135,6 +136,41 @@ function buildReportText(batchName: string, rows: CodaRowItem[]): string {
   return lines.join("\n")
 }
 
+// Report WA buat ADOP (diminta user, format "Project {Request}:" + bullet
+// "·" per doc, dikasih ✅ kalau status-nya udah selesai) — beda dari
+// buildReportText() di atas: di-group per "Request" (nama project-nya),
+// bukan per Status Dev, dan tiap BARIS Coda bisa punya BANYAK pasangan
+// Doc. Ref./Status Dev sekaligus (parallel array, sama kayak AdopTable),
+// jadi semua pasangan dari SEMUA baris yang Request-nya sama digabung
+// jadi 1 list. Pakai rows yang UDAH kefilter (sub-tab company + Timeline
+// + Sprint filter yang lagi aktif), biar report-nya sesuai apa yang
+// kelihatan di layar.
+function buildAdopReportText(rows: CodaRowItem[], docRefKey?: string, statusKey?: string): string {
+  const order: string[] = []
+  const groups = new Map<string, string[]>()
+  for (const r of rows) {
+    const project = getFieldValue(r.values, "Request").trim() || "(Tanpa Nama Project)"
+    const docs = docRefKey ? toDocRefArray(r.values?.[docRefKey]) : []
+    const statuses = statusKey ? toStatusArray(r.values?.[statusKey]) : []
+    const n = Math.max(1, docs.length, statuses.length)
+    if (!groups.has(project)) { groups.set(project, []); order.push(project) }
+    for (let i = 0; i < n; i++) {
+      const doc = cellItemText(docs[i])
+      const status = cellItemText(statuses[i])
+      if (!doc && !status) continue
+      const check = status && isDoneStatusText(status) ? " ✅" : ""
+      groups.get(project)!.push(`${doc || "(tanpa dokumen)"} ${status}${check}`.trim())
+    }
+  }
+  const lines: string[] = []
+  order.forEach((project, idx) => {
+    if (idx > 0) lines.push("")
+    lines.push(`Project ${project}:`)
+    for (const item of groups.get(project)!) lines.push(`· ${item}`)
+  })
+  return lines.join("\n")
+}
+
 // Kolom multi-select/person-reference (mis. "Status Dev", "Plan Pilot",
 // "PIC Apps") balik dari Coda bukan string biasa — bisa array (kosong
 // kalau belum keisi) atau objek {name: ...} (kolom orang/row lain).
@@ -228,9 +264,11 @@ function isSprintColumn(c: string): boolean {
 }
 // "overdue" = minggunya udah LEWAT (merah) — "due-soon" = masih
 // minggu INI juga (mepet, belum lewat) tapi dikasih warna beda
-// (oranye) biar kebedain, diminta user. Selain itu (masih beberapa
-// minggu lagi) dianggap aman, null.
-function sprintOverdueInfo(value: string): { status: "overdue" | "due-soon"; weekEndLabel: string } | null {
+// (oranye) biar kebedain, diminta user. "upcoming" = minggu DEPAN
+// (masih 1 minggu lagi, tapi udah deket — "mepet", diminta user biar
+// ada peringatan juga sebelum due-soon). Selain itu (masih 2+ minggu
+// lagi) dianggap aman, null.
+function sprintOverdueInfo(value: string): { status: "overdue" | "due-soon" | "upcoming"; weekEndLabel: string } | null {
   const yw = parseYearWeek(value)
   if (!yw) return null
   const start = isoWeekStart(yw.year, yw.week)
@@ -241,7 +279,13 @@ function sprintOverdueInfo(value: string): { status: "overdue" | "due-soon"; wee
   const now = new Date()
   if (now > weekEnd) return { status: "overdue", weekEndLabel }
   const cur = isoWeekInfo(now)
-  if (cur.year === yw.year && cur.week === yw.week) return { status: "due-soon", weekEndLabel }
+  const curStart = isoWeekStart(cur.year, cur.week)
+  // Selisih minggu dihitung dari jarak hari antar awal-minggu (bukan
+  // bandingin {year,week} langsung) biar aman nyebrang pergantian
+  // tahun (mis. minggu 52 2026 ke minggu 1 2027).
+  const weeksAhead = Math.round((start.getTime() - curStart.getTime()) / (7 * 86400000))
+  if (weeksAhead <= 0) return { status: "due-soon", weekEndLabel }
+  if (weeksAhead === 1) return { status: "upcoming", weekEndLabel }
   return null
 }
 
@@ -356,7 +400,15 @@ function StatusBarChart({ title, subtitle, data }: { title: string; subtitle?: s
   )
 }
 
-function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[] }) {
+function DynamicTable({ rows, columns, driveLookup, driveLookupCol }: {
+  rows: CodaRowItem[]; columns: string[]
+  // Opsional — cuma dipake Plan Pilot buat nampilin tombol "Lihat
+  // Dokumen" (diminta user, sama kayak ADOP). driveLookup dipanggil per
+  // baris, balikin file Drive yang cocok (atau null kalau nggak ketemu);
+  // ikonnya ditaruh nempel di kolom `driveLookupCol`.
+  driveLookup?: (row: CodaRowItem) => DriveFile | null
+  driveLookupCol?: string
+}) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("asc")
   if (rows.length === 0) return <p style={{ fontSize: 12, color: "var(--text3)", padding: 20 }}>Nggak ada data.</p>
@@ -371,23 +423,31 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
           </tr>
         </thead>
         <tbody>
-          {sortedRows.map(r => (
-            <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-              {columns.map(c => {
-                const raw = r.values?.[c]
-                const rawText = fmtCell(raw)
-                if (isStatusColumn(c) && rawText !== "—") {
-                  const { bg, fg } = statusColor(rawText)
+          {sortedRows.map(r => {
+            const driveFile = driveLookup ? driveLookup(r) : null
+            return (
+              <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                {columns.map(c => {
+                  const raw = r.values?.[c]
+                  const rawText = fmtCell(raw)
+                  if (isStatusColumn(c) && rawText !== "—") {
+                    const { bg, fg } = statusColor(rawText)
+                    return (
+                      <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+                      </td>
+                    )
+                  }
                   return (
-                    <td key={c} style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
-                      <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
+                    <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>
+                      {rawText}
+                      {driveLookupCol && normKey(c) === normKey(driveLookupCol) && driveFile && <DriveLinkIcon file={driveFile} />}
                     </td>
                   )
-                }
-                return <td key={c} style={{ padding: "7px 10px", color: "var(--text2)", whiteSpace: "nowrap" }}>{rawText}</td>
-              })}
-            </tr>
-          ))}
+                })}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -410,8 +470,17 @@ function DynamicTable({ rows, columns }: { rows: CodaRowItem[]; columns: string[
 // docRefKey/statusKey) — dipakai nentuin DI POSISI MANA pasangan
 // Doc.Ref/Status Dev nongol relatif ke kolom lain (mis. biar "Request"
 // bisa ditaruh SEBELUM Doc.Ref, cukup urutin ADOP_PREVIEW_COLS).
-function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
-  rows: CodaRowItem[]; columnOrder: string[]; docRefKey?: string; statusKey?: string
+function DriveLinkIcon({ file }: { file: DriveFile }) {
+  return (
+    <a href={file.webViewLink} target="_blank" rel="noopener noreferrer" title={`Buka di Drive: ${file.name}`}
+      style={{ display: "inline-flex", alignItems: "center", marginLeft: 5, color: "#1D4ED8", verticalAlign: "middle", flexShrink: 0 }}>
+      <ExternalLink size={12} />
+    </a>
+  )
+}
+
+function AdopTable({ rows, columnOrder, docRefKey, statusKey, companyFiles }: {
+  rows: CodaRowItem[]; columnOrder: string[]; docRefKey?: string; statusKey?: string; companyFiles: DriveFile[]
 }) {
   const [sortCol, setSortCol] = useState<string | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("asc")
@@ -443,8 +512,17 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
     const n = Math.max(1, docs.length, statuses.length)
     const pairs = Array.from({ length: n }, (_, i) => ({ doc: cellItemText(docs[i]) || "—", status: cellItemText(statuses[i]) }))
     // Masih "aktif" (belum semua doc-nya DONE/RELEASE/PILOT) — reminder
-    // telat cuma relevan buat baris yang masih ada kerjaan jalan.
-    const hasPending = pairs.some(p => p.status && !isDoneStatusText(p.status))
+    // telat cuma relevan buat baris yang masih ada kerjaan jalan. PENTING:
+    // kalau Doc. Ref.-nya KOSONG, itu BUKAN berarti "udah selesai semua"
+    // — nggak ada yang bisa dicek, jadi default-nya tetep dianggap
+    // pending (biar reminder sprint tetep nyala). Dicek dari `pairs`
+    // (bukan docs.length mentah) soalnya toDocRefArray() buat value
+    // string KOSONG ("", bukan null) balikin ["", ] (panjang 1, bukan
+    // 0) — ketauan dari bug lanjutan: baris yang Doc. Ref.-nya kosong
+    // string (bukan null/undefined) MASIH aja nggak dapet reminder
+    // walau fix docs.length===0 sebelumnya udah dipasang.
+    const hasRealDoc = pairs.some(p => p.doc !== "—")
+    const hasPending = !hasRealDoc || pairs.some(p => p.status && !isDoneStatusText(p.status))
     return { r, n, pairs, hasPending }
   })
 
@@ -469,7 +547,10 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
           const sc = p.status ? statusColor(p.status) : null
           const bb = j < rec.n - 1 ? "1px dashed var(--border)" : "none"
           bodyCells.push(
-            <div key={`d-${recIdx}-${j}`} style={{ ...cellBase, whiteSpace: "normal", gridColumn: col, gridRow: rowStart + j, color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word" }}>{p.doc}</div>
+            <div key={`d-${recIdx}-${j}`} style={{ ...cellBase, whiteSpace: "normal", gridColumn: col, gridRow: rowStart + j, color: "var(--text2)", borderBottom: bb, borderRight: "1px solid var(--border)", overflowWrap: "break-word" }}>
+              {p.doc}
+              {(() => { const f = findDriveFileForDoc(companyFiles, p.doc); return f ? <DriveLinkIcon file={f} /> : null })()}
+            </div>
           )
           bodyCells.push(
             <div key={`s-${recIdx}-${j}`} style={{ ...cellBase, gridColumn: col + 1, gridRow: rowStart + j, borderBottom: bb }}>
@@ -493,12 +574,15 @@ function AdopTable({ rows, columnOrder, docRefKey, statusKey }: {
         } else if (overdueInfo?.status === "due-soon") {
           content = <span title={`Harus kelar ${overdueInfo.weekEndLabel} — minggu ini!`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#92400E", fontWeight: 700 }}>⏰ {rawText}</span>
           cellStyle = { background: "#FEF3C7" }
+        } else if (overdueInfo?.status === "upcoming") {
+          content = <span title={`Harus kelar ${overdueInfo.weekEndLabel} — minggu depan, mulai disiapin`} style={{ display: "flex", alignItems: "center", gap: 4, color: "#1E40AF", fontWeight: 700 }}>🔔 {rawText}</span>
+          cellStyle = { background: "#DBEAFE" }
         } else if (isStatusColumn(s.col) && rawText !== "—") {
           const { bg, fg } = statusColor(rawText)
           content = <span style={{ padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{rawText}</span>
         }
         bodyCells.push(
-          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center" }}>{content}</div>
+          <div key={`p-${recIdx}-${slotIdx}`} style={{ ...cellBase, ...cellStyle, gridColumn: col, gridRow: `${rowStart} / span ${rec.n}`, color: "var(--text2)", display: "flex", alignItems: "center", borderRight: "1px solid var(--border)" }}>{content}</div>
         )
       }
     })
@@ -701,6 +785,7 @@ export default function CodaPage() {
   // Filter dropdown "Plan Pilot" — "" = semua, nggak difilter.
   const [planPilotFilter, setPlanPilotFilter] = useState("")
   const [planPilotReportText, setPlanPilotReportText] = useState<string | null>(null)
+  const [adopReportText, setAdopReportText] = useState<string | null>(null)
   // Popup "Form Release (Excel)" — data di sini SELALU diprefill dari
   // Coda (lihat openReportExcelModal), tapi semuanya EDITABLE sebelum
   // di-generate (diminta user: "saya bisa edit valuenya terus klik
@@ -719,6 +804,24 @@ export default function CodaPage() {
   // 2027.Q1 dkk pas waktunya).
   const [adopTimelineFilter, setAdopTimelineFilter] = useState<string[]>(["2026.Q4", "2026.Q4.BE", "2026.X"])
   const [adopSprintFilter, setAdopSprintFilter] = useState("")
+  // Daftar file Drive per perusahaan (PHI/HSJ/SCP/MT) — dipakai buat
+  // tombol "Lihat Dokumen" di ADOP & Plan Pilot (diminta user: muncul
+  // CUMA kalau filenya ketemu). Di-fetch 1x aja pas halaman dibuka
+  // (di-cache 10 menit di server, lihat src/lib/googleDrive.ts), bukan
+  // per-baris per-render.
+  const [driveFiles, setDriveFiles] = useState<Record<string, DriveFile[]>>({})
+  useEffect(() => {
+    fetch("/api/coda/drive-docs")
+      .then(r => r.json())
+      .then(d => {
+        if (d.files) setDriveFiles(d.files)
+        // Diagnostik — kalau GOOGLE_SERVICE_ACCOUNT_KEY belum/salah
+        // setting di hosting, errornya kebaca di sini (console browser),
+        // bukan ditelan diam-diam kayak sebelumnya.
+        else console.error("[CODA] Gagal ambil daftar file Drive:", d.error)
+      })
+      .catch(e => console.error("[CODA] Gagal fetch /api/coda/drive-docs:", e))
+  }, [])
 
   useEffect(() => { loadTab(activeTab) }, [activeTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -759,6 +862,19 @@ export default function CodaPage() {
   const planPilotAllRows = activeTab === "plan-pilot" ? rows : []
   const planPilotOptions = Array.from(new Set(planPilotAllRows.map(r => getFieldValue(r.values, "Plan Pilot")).filter(Boolean))).sort()
   const planPilotRows = planPilotFilter ? planPilotAllRows.filter(r => getFieldValue(r.values, "Plan Pilot") === planPilotFilter) : planPilotAllRows
+  // Tombol "Lihat Dokumen" Plan Pilot (sama kayak ADOP, diminta user) —
+  // beda dari ADOP, 1 batch Plan Pilot bisa nyampur beberapa User
+  // sekaligus ("PHI + ALL" dkk), jadi SEMUA perusahaan yang disebut di
+  // "User Request" dicoba, bukan exact-match 1 nilai.
+  const planPilotDriveLookup = (row: CodaRowItem): DriveFile | null => {
+    const userField = getFieldValue(row.values, "User Request") || getFieldValue(row.values, "User")
+    const docText = `${getFieldValue(row.values, "Doc. No.")} ${getFieldValue(row.values, "Doc. Name")}`
+    for (const c of detectCompanies(userField)) {
+      const match = findDriveFileForDoc(driveFiles[c] || [], docText)
+      if (match) return match
+    }
+    return null
+  }
   const { found: planPilotFoundCols, missing: planPilotMissingColumns } = activeTab === "plan-pilot" ? resolveColumns(planPilotRows, PLAN_PILOT_PREVIEW_COLS) : { found: [], missing: [] }
 
   // Prefill popup "Form Release (Excel)" dari baris Plan Pilot yang
@@ -947,7 +1063,7 @@ export default function CodaPage() {
           <StatusBarChart title={`Breakdown Status Dev${planPilotFilter ? ` — ${planPilotFilter}` : ""}`} subtitle={`${planPilotRows.length} baris`} data={statusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
-            <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} />
+            <DynamicTable rows={planPilotRows} columns={planPilotFoundCols} driveLookup={planPilotDriveLookup} driveLookupCol="Doc. No." />
           </div>
         </>
       ) : !error && activeTab === "adop" ? (
@@ -980,6 +1096,11 @@ export default function CodaPage() {
                   {adopSprintOptions.map(v => <option key={v} value={v}>{v}</option>)}
                 </select>
               )}
+              <button onClick={() => setAdopReportText(buildAdopReportText(adopRows, adopDocRefKey, adopStatusDevKey))}
+                disabled={adopRows.length === 0}
+                style={{ flexShrink: 0, padding: "7px 14px", borderRadius: 8, border: "none", background: adopRows.length > 0 ? "var(--accent)" : "var(--surface2)", cursor: adopRows.length > 0 ? "pointer" : "not-allowed", opacity: adopRows.length > 0 ? 1 : 0.5, fontSize: 11, color: adopRows.length > 0 ? "white" : "var(--text3)", fontFamily: "inherit", fontWeight: 700, whiteSpace: "nowrap" }}>
+                📋 Buat Report
+              </button>
             </div>
           </div>
 
@@ -1011,7 +1132,7 @@ export default function CodaPage() {
           <StatusBarChart title={`Breakdown Status Dev (${adopActive.label})`} subtitle={`${adopRows.length} baris`} data={adopStatusDevPercent} />
 
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderTop: `3px solid ${adopActive.color}`, borderRadius: 12, overflow: "hidden" }}>
-            <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} />
+            <AdopTable rows={adopRows} columnOrder={adopFoundCols} docRefKey={adopDocRefKey} statusKey={adopStatusDevKey} companyFiles={driveFiles[adopActive.key.toUpperCase()] || []} />
           </div>
         </>
       ) : !error && (
@@ -1032,6 +1153,26 @@ export default function CodaPage() {
               style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
             <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
               <button onClick={() => navigator.clipboard.writeText(planPilotReportText)}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                Copy ke Clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adopReportText !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}
+          onClick={() => setAdopReportText(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: 14, width: "100%", maxWidth: 560, maxHeight: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "var(--text)" }}>📋 Report ADOP ({adopActive.label})</span>
+              <button onClick={() => setAdopReportText(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", fontSize: 18 }}>✕</button>
+            </div>
+            <textarea readOnly value={adopReportText}
+              style={{ flex: 1, padding: "14px 18px", fontSize: 12, color: "var(--text)", background: "var(--surface)", border: "none", outline: "none", resize: "none", fontFamily: "inherit", lineHeight: 1.6, minHeight: 240 }} />
+            <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => navigator.clipboard.writeText(adopReportText)}
                 style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                 Copy ke Clipboard
               </button>
