@@ -2,6 +2,10 @@ import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { cookieHeader, describeFetchError, fetchWithRetry, loginToLogix, LOGIX_BASE } from "@/lib/logixAuth"
 
+// Lihat catatan preferredRegion di /api/logix-tickets/route.ts — fix yang
+// sama diterapkan di sini karena server Logix yang di-hit identik.
+export const preferredRegion = "sin1"
+
 // Sumber data SLA/timing respon tiket (Response TAS, Time BR, Time Solved,
 // dst) — endpoint TERPISAH dari /api/logix-tickets (yang pakai
 // /ticketing/json), skema kolomnya beda total. URL & nama field di bawah
