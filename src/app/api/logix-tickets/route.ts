@@ -2,6 +2,14 @@ import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { cookieHeader, describeFetchError, fetchWithRetry, loginToLogix, LOGIX_BASE } from "@/lib/logixAuth"
 
+// Server Logix di-reset koneksinya (ECONNRESET) cuma di Vercel, bukan di
+// local — terbukti dari test user (local berhasil 168 tiket, Vercel selalu
+// ECONNRESET). Ini ciri khas firewall/hosting yang blokir IP datacenter
+// asing. Region default Vercel ada di US; pindah ke Singapore (paling
+// dekat yang tersedia ke Indonesia) buat dicoba dulu sebelum solusi yang
+// lebih berat (proxy/relay lewat IP yang di-whitelist).
+export const preferredRegion = "sin1"
+
 // Logix (phi.logix.my.id) pakai sesi cookie HttpOnly (ci_session) — beda
 // dari Ficom yang pakai token di header Authorization dan bisa dipanggil
 // langsung dari browser. Cookie HttpOnly tidak bisa dibaca/dibawa lintas
