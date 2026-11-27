@@ -258,10 +258,30 @@ export default function LogixTicketsPage() {
   const [credError, setCredError] = useState("")
   const [credSuccess, setCredSuccess] = useState("")
 
+  // Firewall hosting Logix blokir SEBAGIAN IP egress Vercel, bukan semua —
+  // terbukti dari user: kadang berhasil, kadang ECONNRESET lagi. Tiap
+  // invocation serverless baru punya peluang dapat IP egress berbeda
+  // (cold start lain), jadi request ULANG (bukan cuma retry fetch di
+  // dalam satu invocation, yang sudah ditangani di logixAuth.ts) adalah
+  // mitigasi paling praktis sebelum solusi permanen (proxy lewat IP yang
+  // sudah di-whitelist Logix).
+  const fetchLogixWithRetry = async (url: string, maxAttempts = 3): Promise<Response> => {
+    let res: Response
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      res = await fetch(url)
+      if (res.ok) return res
+      const json: { error?: string } | null = await res.clone().json().catch(() => null)
+      const retryable = typeof json?.error === "string" && /ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed/i.test(json.error)
+      if (!retryable || attempt === maxAttempts) return res
+      await new Promise(r => setTimeout(r, 700 * attempt))
+    }
+    return res!
+  }
+
   const fetchTickets = async () => {
     setLoading(true); setError(""); setRawError("")
     try {
-      const res = await fetch("/api/logix-tickets")
+      const res = await fetchLogixWithRetry("/api/logix-tickets")
       const json = await res.json()
       if (!res.ok) {
         setError(json.error || `HTTP ${res.status}`)
@@ -285,7 +305,7 @@ export default function LogixTicketsPage() {
   const fetchSlaTickets = async () => {
     setSlaLoading(true); setSlaError("")
     try {
-      const res = await fetch("/api/logix-tickets-sla")
+      const res = await fetchLogixWithRetry("/api/logix-tickets-sla")
       const text = await res.text()
       let json: { data?: SlaTicket[]; error?: string }
       try { json = JSON.parse(text) } catch {
